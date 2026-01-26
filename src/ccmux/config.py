@@ -23,6 +23,9 @@ class Config:
             int(uid.strip()) for uid in allowed_users_str.split(",") if uid.strip()
         }
 
+        # Tmux session name
+        self.tmux_session_name = os.getenv("TMUX_SESSION_NAME", "ccmux")
+
         # State file for persisting user subscriptions
         self.state_file = Path.home() / ".ccmux" / "state.json"
 

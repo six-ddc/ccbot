@@ -12,6 +12,7 @@ from dataclasses import dataclass, field
 from pathlib import Path
 
 from .config import config
+from .tmux_manager import TmuxWindow, tmux_manager
 
 logger = logging.getLogger(__name__)
 
@@ -48,6 +49,9 @@ class SessionManager:
     # user_id -> set of subscribed session_ids
     subscriptions: dict[int, set[str]] = field(default_factory=dict)
 
+    # user_id -> currently active session_id for sending messages
+    active_sessions: dict[int, str] = field(default_factory=dict)
+
     def __post_init__(self) -> None:
         """Load state from file on initialization."""
         self._load_state()
@@ -58,6 +62,9 @@ class SessionManager:
         state = {
             "subscriptions": {
                 str(k): list(v) for k, v in self.subscriptions.items()
+            },
+            "active_sessions": {
+                str(k): v for k, v in self.active_sessions.items()
             },
         }
         config.state_file.write_text(json.dumps(state, indent=2))
@@ -71,12 +78,17 @@ class SessionManager:
                     int(k): set(v)
                     for k, v in state.get("subscriptions", {}).items()
                 }
+                self.active_sessions = {
+                    int(k): v
+                    for k, v in state.get("active_sessions", {}).items()
+                }
             except (json.JSONDecodeError, ValueError) as e:
                 logger.warning(f"Failed to load state: {e}")
                 self.subscriptions = {}
+                self.active_sessions = {}
 
-    def list_active_sessions(self) -> list[ClaudeSession]:
-        """List all active Claude Code sessions.
+    def list_all_sessions(self) -> list[ClaudeSession]:
+        """List all Claude Code sessions (including those without tmux).
 
         Scans all projects in ~/.claude/projects/ and returns
         session information sorted by modification time (newest first).
@@ -118,9 +130,39 @@ class SessionManager:
         sessions.sort(key=lambda s: s.modified, reverse=True)
         return sessions
 
+    def list_active_sessions(self) -> list[ClaudeSession]:
+        """List only sessions that have an active tmux terminal.
+
+        Returns sessions that can be interacted with (have matching tmux window).
+        """
+        all_sessions = self.list_all_sessions()
+
+        # Get all tmux windows and their cwds
+        windows = tmux_manager.list_windows()
+        window_cwds = set()
+        for w in windows:
+            try:
+                normalized = str(Path(w.cwd).resolve())
+                window_cwds.add(normalized)
+            except (OSError, ValueError):
+                window_cwds.add(w.cwd)
+
+        # Filter to only sessions with matching tmux window
+        managed_sessions = []
+        for session in all_sessions:
+            try:
+                normalized_path = str(Path(session.project_path).resolve())
+            except (OSError, ValueError):
+                normalized_path = session.project_path
+
+            if normalized_path in window_cwds:
+                managed_sessions.append(session)
+
+        return managed_sessions
+
     def get_session(self, session_id: str) -> ClaudeSession | None:
-        """Get a specific session by ID."""
-        for session in self.list_active_sessions():
+        """Get a specific session by ID (searches all sessions)."""
+        for session in self.list_all_sessions():
             if session.session_id == session_id:
                 return session
         return None
@@ -160,9 +202,9 @@ class SessionManager:
         return session_id in self.subscriptions.get(user_id, set())
 
     def get_subscribed_sessions(self, user_id: int) -> list[ClaudeSession]:
-        """Get all sessions a user is subscribed to."""
+        """Get all sessions a user is subscribed to (including those without tmux)."""
         subscribed_ids = self.subscriptions.get(user_id, set())
-        all_sessions = self.list_active_sessions()
+        all_sessions = self.list_all_sessions()
         return [s for s in all_sessions if s.session_id in subscribed_ids]
 
     def get_subscribers(self, session_id: str) -> list[int]:
@@ -178,7 +220,7 @@ class SessionManager:
 
         Returns the number of stale subscriptions removed.
         """
-        active_ids = {s.session_id for s in self.list_active_sessions()}
+        active_ids = {s.session_id for s in self.list_all_sessions()}
         removed = 0
 
         for user_id in list(self.subscriptions.keys()):
@@ -192,6 +234,87 @@ class SessionManager:
             logger.info(f"Cleaned up {removed} stale subscriptions")
 
         return removed
+
+    # Active session management (for sending messages)
+
+    def set_active_session(self, user_id: int, session_id: str) -> bool:
+        """Set the active session for a user.
+
+        The active session is used for sending messages.
+        Returns True if the session exists, False otherwise.
+        """
+        session = self.get_session(session_id)
+        if not session:
+            return False
+
+        self.active_sessions[user_id] = session_id
+        self._save_state()
+        return True
+
+    def get_active_session(self, user_id: int) -> ClaudeSession | None:
+        """Get the user's active session."""
+        session_id = self.active_sessions.get(user_id)
+        if not session_id:
+            return None
+        return self.get_session(session_id)
+
+    def clear_active_session(self, user_id: int) -> None:
+        """Clear the user's active session."""
+        if user_id in self.active_sessions:
+            del self.active_sessions[user_id]
+            self._save_state()
+
+    # Tmux integration
+
+    def find_tmux_window(self, session: ClaudeSession) -> TmuxWindow | None:
+        """Find a tmux window matching the session's project path.
+
+        Args:
+            session: The Claude session to find a terminal for
+
+        Returns:
+            TmuxWindow if found, None otherwise
+        """
+        return tmux_manager.find_window_by_cwd(session.project_path)
+
+    def has_active_terminal(self, session: ClaudeSession) -> bool:
+        """Check if a session has an active tmux terminal."""
+        return self.find_tmux_window(session) is not None
+
+    def send_to_session(self, session: ClaudeSession, text: str) -> tuple[bool, str]:
+        """Send text to a session via tmux.
+
+        Args:
+            session: The Claude session to send to
+            text: Text to send
+
+        Returns:
+            Tuple of (success, message)
+        """
+        window = self.find_tmux_window(session)
+        if not window:
+            return False, "No active terminal for this session"
+
+        success = tmux_manager.send_keys(window.window_id, text)
+        if success:
+            return True, f"Sent to {session.project_name}"
+        return False, "Failed to send message"
+
+    def send_to_active_session(self, user_id: int, text: str) -> tuple[bool, str]:
+        """Send text to the user's active session.
+
+        Args:
+            user_id: The user ID
+            text: Text to send
+
+        Returns:
+            Tuple of (success, message)
+        """
+        session = self.get_active_session(user_id)
+        if not session:
+            return False, "No active session selected"
+
+        return self.send_to_session(session, text)
 
 
 session_manager = SessionManager()
