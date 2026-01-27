@@ -712,6 +712,10 @@ async def forward_command_handler(update: Update, context: ContextTypes.DEFAULT_
         await update.message.reply_text(
             f"⚡ [{project_name}] Sent: {cc_slash}"
         )
+        # If /clear command was sent, clear the session association
+        # so we can detect the new session after first message
+        if cc_slash.strip().lower() == "/clear":
+            session_manager.clear_window_session(active_wname)
     else:
         await update.message.reply_text(f"❌ {message}")
 

@@ -281,6 +281,9 @@ class SessionMonitor:
                             local_cmd_entries.append((entry, cmd))
                             last_cmd_name = ""
 
+                # Track the last msg_id we see for this session
+                last_seen_msg_id: str | None = None
+
                 for _, entry in best_per_msg_id.items():
                     message = entry.get("message", {})
                     msg_id = message.get("id") if isinstance(message, dict) else None
@@ -304,6 +307,8 @@ class SessionMonitor:
                         content_type=content_type,
                     ))
                     tracked.last_message_uuid = msg_uuid
+                    if msg_id:
+                        last_seen_msg_id = msg_id
 
                 # Emit local command stdout as messages
                 for entry, cmd_name in local_cmd_entries:
@@ -328,11 +333,27 @@ class SessionMonitor:
                 tracked.project_path = session_info.project_path
                 self.state.update_session(tracked)
 
+                # Update last_msg_id in session manager for windows using this session
+                if last_seen_msg_id:
+                    self._update_window_last_msg_id(
+                        session_info.session_id, last_seen_msg_id
+                    )
+
             except OSError as e:
                 logger.debug(f"Error processing session {session_info.session_id}: {e}")
 
         self.state.save_if_dirty()
         return new_messages
+
+    def _update_window_last_msg_id(self, session_id: str, msg_id: str) -> None:
+        """Update last_msg_id for any window using this session."""
+        # Import here to avoid circular import
+        from .session import session_manager
+
+        for window_name, window_state in session_manager.window_states.items():
+            if window_state.session_id == session_id:
+                if window_state.last_msg_id != msg_id:
+                    session_manager.update_last_msg_id(window_name, msg_id)
 
     def _count_lines(self, file_path: Path) -> int:
         try:
@@ -341,11 +362,31 @@ class SessionMonitor:
         except OSError:
             return 0
 
+    def _try_detect_pending_sessions(self) -> None:
+        """Try to detect and associate sessions for windows with pending text.
+
+        This is called during the monitor loop to detect new sessions
+        after a user sends their first message.
+        """
+        # Import here to avoid circular import
+        from .session import session_manager
+
+        for window_name, window_state in session_manager.window_states.items():
+            if window_state.pending_text and not window_state.session_id:
+                detected = session_manager.try_detect_session(window_name)
+                if detected:
+                    logger.info(
+                        f"Detected session {detected.session_id} for window {window_name}"
+                    )
+
     async def _monitor_loop(self) -> None:
         logger.info(f"Session monitor started, polling every {self.poll_interval}s")
 
         while self._running:
             try:
+                # Try to detect new sessions for windows with pending text
+                self._try_detect_pending_sessions()
+
                 new_messages = await self.check_for_updates()
 
                 for msg in new_messages:
