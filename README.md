@@ -33,17 +33,18 @@ Telegram Bot for monitoring and interacting with Claude Code sessions running in
 │  Claude Sessions    │◄─────────►│    Tmux Windows     │
 │  ~/.claude/projects │  matched  │    (by cwd)         │
 │  - sessions-index   │   by      │                     │
-│  - *.jsonl files    │ projectPath│  claude running in │
+│  - *.jsonl files    │ session_id│  claude running in │
 └─────────────────────┘           │  each window        │
                                   └─────────────────────┘
 ```
 
 **Key design decisions:**
-- **State anchored to tmux window names** — `state.json` stores `{user_id: window_name}`. Window names are stable; project path is resolved dynamically from tmux cwd.
+- **State anchored to tmux window names** — `state.json` stores `{user_id: window_name}` and `{window_name: window_state}`. Window names are stable.
+- **Persistent session association** — Each window stores its associated `session_id`, `last_msg_id`, and `pending_text` for session detection.
+- **New session detection** — When a new session is created or after `/clear`, the session is detected by matching the user's first message against recent JSONL files.
+- **Message ID tracking** — `last_msg_id` enables correct message polling after session switches.
 - Only sessions with matching tmux windows are displayed (enables bidirectional communication)
-- Sessions matched by comparing `projectPath` with tmux window's current working directory
-- When multiple sessions share the same project path, sent message tracking disambiguates
-- Notifications sent only to users whose active window matches the message's project path
+- Notifications sent only to users whose active window matches the message's session
 
 ## Installation
 
@@ -187,7 +188,7 @@ Window names must start with the prefix `cc:` to be recognized.
 
 | Path | Description |
 |---|---|
-| `~/.ccmux/state.json` | Active window selections (`{user_id: window_name}`) |
+| `~/.ccmux/state.json` | Active window selections and window states (`{user_id: window_name}`, `{window_name: {session_id, last_msg_id, pending_text}}`) |
 | `~/.ccmux/monitor_state.json` | Monitor state (prevents duplicate notifications) |
 | `~/.claude/projects/` | Claude Code session data (read-only) |
 

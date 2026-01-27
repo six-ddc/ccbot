@@ -23,8 +23,14 @@ from .transcript_parser import TranscriptParser
 
 logger = logging.getLogger(__name__)
 
-# How many recent JSONL files to check when detecting new sessions
+# How many recent JSONL files to check when detecting new sessions.
+# A higher number increases detection reliability but also increases file I/O.
+# 5 is typically sufficient since new sessions are usually among the most recent files.
 NEW_SESSION_CHECK_COUNT = 5
+
+# How many recent user messages to check in each JSONL file when matching.
+# This limits the search scope for efficiency while still being reliable.
+RECENT_MESSAGES_CHECK_COUNT = 5
 
 
 @dataclass
@@ -227,8 +233,8 @@ def _find_session_by_user_message(
 
     for jsonl_file, _ in candidates[:NEW_SESSION_CHECK_COUNT]:
         user_msgs = _read_user_messages_from_jsonl(jsonl_file)
-        # Check if user_text matches any message (check last few for efficiency)
-        for msg in user_msgs[-5:]:
+        # Check if user_text matches any recent message
+        for msg in user_msgs[-RECENT_MESSAGES_CHECK_COUNT:]:
             if msg.strip() == user_text.strip():
                 session_id = jsonl_file.stem
                 logger.info(
