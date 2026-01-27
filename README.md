@@ -5,23 +5,23 @@ Telegram Bot for monitoring and interacting with Claude Code sessions.
 ## Features
 
 - **Monitor Claude Code sessions** - Automatically detects sessions from `~/.claude/projects/` that have active tmux windows
-- **Subscribe to notifications** - Get Telegram notifications when Claude responds
+- **Real-time notifications** - Get Telegram notifications when Claude responds (for your active window)
 - **Send messages** - Forward text to Claude Code via tmux keystrokes
 - **Create new sessions** - Start new Claude Code sessions directly from Telegram
-- **Session management** - Browse, subscribe, and select sessions through persistent bottom menu
-- **Persistent state** - Subscriptions and active session survive restarts
+- **Message history** - Browse conversation history with pagination (◀ Older / Newer ▶)
+- **Persistent state** - Active window selection survives restarts
 
 ## Architecture
 
 ```
-┌─────────────────────────────────────────────────────────────────┐
-│                         Telegram Bot                             │
-│  - Browse Claude sessions (only those with tmux windows)        │
-│  - Subscribe/unsubscribe to sessions                            │
-│  - Select active session for sending                            │
-│  - Send text messages to Claude Code                            │
-│  - Create new sessions (tmux window + claude command)           │
-└─────────────────────────────────────────────────────────────────┘
+┌───────────────────────────────────────────────────────────────┐
+│                       Telegram Bot                            │
+│  - Browse Claude sessions (only those with tmux windows)      │
+│  - Select active window for sending                           │
+│  - Send text messages to Claude Code                          │
+│  - View message history with pagination                       │
+│  - Create new sessions (tmux window + claude command)         │
+└───────────────────────────────────────────────────────────────┘
          │                                    │
          │ Monitor (polling JSONL)            │ Send (tmux keys)
          ▼                                    ▼
@@ -35,9 +35,11 @@ Telegram Bot for monitoring and interacting with Claude Code sessions.
 ```
 
 **Key design decisions:**
-- Only sessions with matching tmux windows are displayed (allows bidirectional communication)
-- Sessions are matched by comparing `projectPath` from Claude session with tmux window's working directory
+- **State anchored to tmux window names** — `state.json` stores `{user_id: window_name}`. Window names are stable; cwd (project path) is resolved dynamically from tmux at runtime.
+- Only sessions with matching tmux windows are displayed (enables bidirectional communication)
+- Sessions are matched by comparing `projectPath` from Claude session index with tmux window's current working directory
 - New sessions are created by opening a tmux window and running `claude` command
+- Notifications are sent only to users whose active window's cwd matches the message's project path
 
 ## Installation
 
@@ -84,7 +86,6 @@ Use `/start` to see Claude Code sessions running in tmux:
 🤖 Claude Code Monitor
 
 📊 3 sessions in tmux
-🔔 2 subscribed
 📤 Active: [ccmux]
 
 Tap a session to select it.
@@ -93,12 +94,10 @@ Send text to forward to active session.
 
 **Bottom Menu (Persistent Keyboard):**
 
-The bottom menu uses a 4-row structure:
-
 ```
 ┌─────────────────────────────────────────────┐
-│ 📤🔔 [ccmux] CCMux Telegram Bot...          │  ← Row 1: Session
-│ 🔔 [resume] Resume Builder Project...       │  ← Row 2: Session
+│ 📤 [ccmux] CCMux Telegram Bot...            │  ← Row 1: Session
+│ [resume] Resume Builder Project...          │  ← Row 2: Session
 │ [tickflow] Task Management System...        │  ← Row 3: Session
 │   ⬅️    1/2    ➡️           ➕ New          │  ← Row 4: Nav + New
 └─────────────────────────────────────────────┘
@@ -109,21 +108,43 @@ The bottom menu uses a 4-row structure:
 
 **Session Icons:**
 - 📤 Active for sending (your messages go here)
-- 🔔 Subscribed (you receive notifications)
 
 **Note:** Only sessions with active tmux terminals are shown. Claude Code sessions outside tmux are not managed.
 
 **Actions:**
-1. **Tap a session** - Select it as active and see details
-2. **Subscribe/Unsubscribe** - Toggle notifications via inline buttons
-3. **Send text** - Any message goes to your active session
+1. **Tap a session** - Select it as active; shows recent 5 messages
+2. **Browse history** - Use ◀ Older / Newer ▶ inline buttons to page through messages
+3. **Send text** - Any message goes to your active session via tmux
 4. **➕ New** - Create a new Claude Code session in a specified directory
+
+### Message History
+
+When you select a session, the bot shows the most recent 5 messages:
+
+```
+📋 [project-name] Messages (6-10 of 42)
+
+👤 fix the login bug
+
+🤖 I'll look into the login bug...
+
+👤 also check the session timeout
+
+🤖 Found the issue - the session...
+
+👤 great, deploy it
+
+[◀ Older]    [2/9]    [Newer ▶]
+```
+
+- Messages are displayed with 👤 (user) and 🤖 (assistant) icons
+- Use inline buttons to navigate through history pages
+- Messages are edited in-place (no message spam)
 
 ### Commands
 
-- `/start` - Browse sessions and manage subscriptions
-- `/list` - Show subscribed sessions
-- `/cancel` - Cancel current operation (e.g., new session creation)
+- `/start` - Browse sessions and manage active window
+- `/cancel` - Cancel current operation (e.g., directory browser)
 
 ### Sending Messages
 
@@ -134,7 +155,7 @@ The bottom menu uses a 4-row structure:
 ### Creating New Sessions
 
 1. Tap **➕ New** in the bottom menu
-2. Enter the directory path (e.g., `~/Code/my-project`)
+2. Browse and select a directory using the inline directory browser
 3. A new tmux window will be created and `claude` command will start automatically
 
 The new session will appear in the bottom menu once Claude Code initializes.
@@ -147,7 +168,7 @@ For the bot to send messages, Claude Code must be running in a tmux window.
 
 1. Start the bot with `/start`
 2. Tap **➕ New** in the bottom menu
-3. Enter the project directory path
+3. Select the project directory
 4. The bot creates a tmux window and starts `claude` automatically
 
 ### Option 2: Create Manually
@@ -157,31 +178,29 @@ For the bot to send messages, Claude Code must be running in a tmux window.
 tmux attach -t ccmux
 
 # Create a new window and navigate to your project
-tmux new-window -n myproject
+tmux new-window -n cc:myproject
 cd ~/Code/myproject
 claude
 
 # Detach with Ctrl+b d
 ```
 
-**Note:** The bot automatically creates/uses a tmux session named `ccmux` (configurable via `TMUX_SESSION_NAME`).
-
-The bot matches Claude sessions to tmux windows by comparing:
-- Claude session's `projectPath` (from `~/.claude/projects/`)
-- Tmux window's current working directory
+**Note:** Window names must start with the configured prefix (default `cc:`) to be recognized by the bot. The bot automatically creates/uses a tmux session named `ccmux` (configurable via `TMUX_SESSION_NAME`).
 
 ## Data Storage
 
-- `~/.ccmux/state.json` - User subscriptions and active sessions
+- `~/.ccmux/state.json` - Active window selections (`{user_id: window_name}`)
 - `~/.ccmux/monitor_state.json` - Session monitoring state (prevents duplicate notifications)
 - `~/.claude/projects/` - Claude Code session data (read-only)
 
 ## How It Works
 
 1. **Session Discovery**: Scans `~/.claude/projects/*/sessions-index.json` to find all Claude sessions
-2. **Monitoring**: Polls session JSONL files for new assistant messages
-3. **Notifications**: When a new message is detected, notifies subscribed users
-4. **Sending**: Matches Claude sessions to tmux windows by `projectPath` and sends keystrokes
+2. **Window Matching**: Matches sessions to tmux windows by comparing `projectPath` with window cwd
+3. **Monitoring**: Polls session JSONL files for new assistant messages
+4. **Notifications**: When a new message is detected, resolves each user's active `window_name → cwd`, notifies if cwd matches
+5. **Sending**: Sends keystrokes to the user's active tmux window
+6. **History**: Reads JSONL transcript files, extracts user/assistant messages, displays with pagination
 
 ## File Structure
 
@@ -189,11 +208,11 @@ The bot matches Claude sessions to tmux windows by comparing:
 src/ccmux/
 ├── main.py              # Entry point (tmux session init + bot start)
 ├── config.py            # Configuration from environment
-├── bot.py               # Telegram bot handlers (menu, callbacks, text)
-├── session.py           # Claude session management + subscriptions
+├── bot.py               # Telegram bot handlers (menu, callbacks, history)
+├── session.py           # Session management + message history
 ├── session_monitor.py   # Session file monitoring (polling JSONL)
 ├── monitor_state.py     # Monitor state persistence
 ├── transcript_parser.py # JSONL parsing for Claude sessions
 ├── telegram_sender.py   # Message sending utilities
-└── tmux_manager.py      # Tmux window management (list, send, create)
+└── tmux_manager.py      # Tmux window management (list, find, send, create)
 ```

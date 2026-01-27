@@ -1,7 +1,8 @@
 """Session monitoring service for Claude Code sessions.
 
-Polls Claude Code session files and detects new assistant messages
-for notification.
+Polls Claude Code session files and detects new assistant messages.
+Emits both intermediate (streaming) and complete messages to enable
+real-time Telegram updates.
 """
 
 from __future__ import annotations
@@ -15,6 +16,7 @@ from typing import Callable, Awaitable
 
 from .config import config
 from .monitor_state import MonitorState, TrackedSession
+from .tmux_manager import tmux_manager
 from .transcript_parser import TranscriptParser
 
 logger = logging.getLogger(__name__)
@@ -38,33 +40,26 @@ class NewMessage:
     project_path: str
     text: str
     uuid: str | None
+    is_complete: bool  # True when stop_reason is set (final message)
+    msg_id: str | None = None  # API message ID (same across streaming chunks)
+    content_type: str = "text"  # "text" or "thinking"
 
 
 class SessionMonitor:
     """Monitors Claude Code sessions for new assistant messages.
 
-    Scans the Claude projects directory, tracks session files,
-    and detects new assistant messages by polling file changes.
+    Reads new JSONL lines immediately on mtime change (no stability wait),
+    emitting both intermediate and complete assistant messages.
     """
 
     def __init__(
         self,
         projects_path: Path | None = None,
         poll_interval: float | None = None,
-        stable_wait: float | None = None,
         state_file: Path | None = None,
     ):
-        """Initialize the session monitor.
-
-        Args:
-            projects_path: Path to Claude projects directory (~/.claude/projects)
-            poll_interval: Seconds between polling cycles
-            stable_wait: Seconds to wait for file stability before processing
-            state_file: Path to state file for persistence
-        """
         self.projects_path = projects_path or config.claude_projects_path
         self.poll_interval = poll_interval or config.monitor_poll_interval
-        self.stable_wait = stable_wait or config.monitor_stable_wait
 
         self.state = MonitorState(
             state_file=state_file or config.monitor_state_file
@@ -75,29 +70,30 @@ class SessionMonitor:
         self._task: asyncio.Task | None = None
         self._message_callback: Callable[[NewMessage], Awaitable[None]] | None = None
 
-        # Track file mtimes for stability detection
-        self._last_mtimes: dict[str, float] = {}
-
     def set_message_callback(
         self, callback: Callable[[NewMessage], Awaitable[None]]
     ) -> None:
-        """Set callback for new message notifications.
-
-        Args:
-            callback: Async function to call with new messages
-        """
         self._message_callback = callback
 
-    def scan_projects(self) -> list[SessionInfo]:
-        """Scan all projects and return active session information.
+    def _get_active_cwds(self) -> set[str]:
+        """Get normalized cwds of all active tmux windows."""
+        cwds = set()
+        for w in tmux_manager.list_windows():
+            try:
+                cwds.add(str(Path(w.cwd).resolve()))
+            except (OSError, ValueError):
+                cwds.add(w.cwd)
+        return cwds
 
-        Returns:
-            List of SessionInfo for all active sessions
-        """
+    def scan_projects(self) -> list[SessionInfo]:
+        """Scan projects that have active tmux windows."""
+        active_cwds = self._get_active_cwds()
+        if not active_cwds:
+            return []
+
         sessions = []
 
         if not self.projects_path.exists():
-            logger.warning(f"Projects path does not exist: {self.projects_path}")
             return sessions
 
         for project_dir in self.projects_path.iterdir():
@@ -105,112 +101,136 @@ class SessionMonitor:
                 continue
 
             index_file = project_dir / "sessions-index.json"
-            if not index_file.exists():
-                continue
+            original_path = ""
+            indexed_ids: set[str] = set()
 
-            try:
-                index_data = json.loads(index_file.read_text())
-                entries = index_data.get("entries", [])
-                original_path = index_data.get("originalPath", "")
+            if index_file.exists():
+                try:
+                    index_data = json.loads(index_file.read_text())
+                    entries = index_data.get("entries", [])
+                    original_path = index_data.get("originalPath", "")
 
-                for entry in entries:
-                    session_id = entry.get("sessionId", "")
-                    full_path = entry.get("fullPath", "")
-                    file_mtime = entry.get("fileMtime", 0)
-                    project_path = entry.get("projectPath", original_path)
+                    for entry in entries:
+                        session_id = entry.get("sessionId", "")
+                        full_path = entry.get("fullPath", "")
+                        file_mtime = entry.get("fileMtime", 0)
+                        project_path = entry.get("projectPath", original_path)
 
-                    if session_id and full_path:
+                        if not session_id or not full_path:
+                            continue
+
+                        try:
+                            norm_pp = str(Path(project_path).resolve())
+                        except (OSError, ValueError):
+                            norm_pp = project_path
+                        if norm_pp not in active_cwds:
+                            continue
+
+                        indexed_ids.add(session_id)
                         file_path = Path(full_path)
                         if file_path.exists():
-                            sessions.append(
-                                SessionInfo(
-                                    session_id=session_id,
-                                    file_path=file_path,
-                                    file_mtime=file_mtime,
-                                    project_path=project_path,
-                                )
-                            )
+                            sessions.append(SessionInfo(
+                                session_id=session_id,
+                                file_path=file_path,
+                                file_mtime=file_mtime,
+                                project_path=project_path,
+                            ))
 
-            except (json.JSONDecodeError, OSError) as e:
-                logger.debug(f"Error reading index {index_file}: {e}")
+                except (json.JSONDecodeError, OSError) as e:
+                    logger.debug(f"Error reading index {index_file}: {e}")
+
+            # Pick up un-indexed .jsonl files
+            try:
+                for jsonl_file in project_dir.glob("*.jsonl"):
+                    session_id = jsonl_file.stem
+                    if session_id in indexed_ids:
+                        continue
+
+                    # Determine project_path for this file
+                    file_project_path = original_path
+                    if not file_project_path:
+                        file_project_path = self._read_cwd_from_jsonl(jsonl_file)
+                    if not file_project_path:
+                        dir_name = project_dir.name
+                        if dir_name.startswith("-"):
+                            file_project_path = dir_name.replace("-", "/")
+
+                    try:
+                        norm_fp = str(Path(file_project_path).resolve())
+                    except (OSError, ValueError):
+                        norm_fp = file_project_path
+
+                    if norm_fp not in active_cwds:
+                        continue
+
+                    try:
+                        file_mtime = jsonl_file.stat().st_mtime
+                    except OSError:
+                        continue
+                    sessions.append(SessionInfo(
+                        session_id=session_id,
+                        file_path=jsonl_file,
+                        file_mtime=file_mtime,
+                        project_path=file_project_path,
+                    ))
+            except OSError as e:
+                logger.debug(f"Error scanning jsonl files in {project_dir}: {e}")
 
         return sessions
 
-    def _read_new_lines(
-        self, session: TrackedSession, file_path: Path
-    ) -> list[dict]:
-        """Read new lines from a session file.
-
-        Args:
-            session: Tracked session state
-            file_path: Path to the JSONL file
-
-        Returns:
-            List of parsed JSON objects from new lines
-        """
-        new_entries = []
-
+    @staticmethod
+    def _read_cwd_from_jsonl(file_path: Path) -> str:
+        """Read the cwd field from the first JSONL entry that has one."""
         try:
             with open(file_path, "r", encoding="utf-8") as f:
-                # Skip already processed lines
+                for line in f:
+                    line = line.strip()
+                    if not line:
+                        continue
+                    try:
+                        data = json.loads(line)
+                        cwd = data.get("cwd")
+                        if cwd:
+                            return cwd
+                    except json.JSONDecodeError:
+                        continue
+        except OSError:
+            pass
+        return ""
+
+    def _read_new_lines(self, session: TrackedSession, file_path: Path) -> list[dict]:
+        """Read new lines from a session file."""
+        new_entries = []
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
                 for _ in range(session.last_line_count):
                     f.readline()
-
-                # Read new lines
                 line_count = session.last_line_count
                 for line in f:
                     line_count += 1
                     data = TranscriptParser.parse_line(line)
                     if data:
                         new_entries.append(data)
-
-                # Update line count
                 session.last_line_count = line_count
-
         except OSError as e:
             logger.error(f"Error reading session file {file_path}: {e}")
-
         return new_entries
-
-    def _is_file_stable(self, session_id: str, current_mtime: float) -> bool:
-        """Check if file has been stable (unchanged) for stable_wait period.
-
-        Args:
-            session_id: Session ID to check
-            current_mtime: Current file modification time
-
-        Returns:
-            True if file has been stable
-        """
-        last_mtime = self._last_mtimes.get(session_id, 0)
-
-        if current_mtime != last_mtime:
-            # File changed, update tracked mtime
-            self._last_mtimes[session_id] = current_mtime
-            return False
-
-        # File unchanged since last check
-        return True
 
     async def check_for_updates(self) -> list[NewMessage]:
         """Check all sessions for new assistant messages.
 
-        Returns:
-            List of new messages detected
+        Reads immediately on mtime change. Emits both intermediate
+        (stop_reason=null) and complete messages.
         """
         new_messages = []
         sessions = self.scan_projects()
 
         for session_info in sessions:
             try:
-                # Get actual file mtime
                 actual_mtime = session_info.file_path.stat().st_mtime
-
-                # Get or create tracked session
                 tracked = self.state.get_session(session_info.session_id)
 
                 if tracked is None:
-                    # New session, start tracking from current state
                     tracked = TrackedSession(
                         session_id=session_info.session_id,
                         file_path=str(session_info.file_path),
@@ -222,44 +242,57 @@ class SessionMonitor:
                     logger.info(f"Started tracking session: {session_info.session_id}")
                     continue
 
-                # Check if file has been modified
                 if actual_mtime <= tracked.last_mtime:
                     continue
 
-                # Check file stability
-                if not self._is_file_stable(session_info.session_id, actual_mtime):
-                    logger.debug(
-                        f"Session {session_info.session_id} file changed, "
-                        "waiting for stability"
-                    )
-                    continue
-
-                # File is stable, read new content
+                # Read immediately — no stability wait
                 new_entries = self._read_new_lines(tracked, session_info.file_path)
 
-                # Process assistant messages
+                if new_entries:
+                    logger.debug(
+                        f"Read {len(new_entries)} new entries for "
+                        f"session {session_info.session_id}"
+                    )
+
+                # Claude Code JSONL writes each assistant entry as a
+                # complete message (not streaming chunks), so every
+                # assistant entry is treated as is_complete=True.
+                best_per_msg_id: dict[str, dict] = {}
                 for entry in new_entries:
-                    if TranscriptParser.is_assistant_message(entry):
-                        text = TranscriptParser.extract_assistant_text(entry)
-                        if text:
-                            msg_uuid = TranscriptParser.get_uuid(entry)
+                    if not TranscriptParser.is_assistant_message(entry):
+                        continue
+                    message = entry.get("message", {})
+                    msg_id = message.get("id", "") if isinstance(message, dict) else ""
+                    if msg_id:
+                        best_per_msg_id[msg_id] = entry
+                    else:
+                        uuid = TranscriptParser.get_uuid(entry) or ""
+                        best_per_msg_id[f"_uuid_{uuid}"] = entry
 
-                            # Skip if already processed
-                            if tracked.last_message_uuid == msg_uuid:
-                                continue
+                for _, entry in best_per_msg_id.items():
+                    message = entry.get("message", {})
+                    msg_id = message.get("id") if isinstance(message, dict) else None
 
-                            new_messages.append(
-                                NewMessage(
-                                    session_id=session_info.session_id,
-                                    project_path=session_info.project_path,
-                                    text=text,
-                                    uuid=msg_uuid,
-                                )
-                            )
+                    result = TranscriptParser.extract_assistant_content(entry)
+                    if not result:
+                        continue
+                    text, content_type = result
 
-                            tracked.last_message_uuid = msg_uuid
+                    msg_uuid = TranscriptParser.get_uuid(entry)
+                    if tracked.last_message_uuid == msg_uuid:
+                        continue
 
-                # Update tracked state
+                    new_messages.append(NewMessage(
+                        session_id=session_info.session_id,
+                        project_path=session_info.project_path,
+                        text=text,
+                        uuid=msg_uuid,
+                        is_complete=True,
+                        msg_id=msg_id,
+                        content_type=content_type,
+                    ))
+                    tracked.last_message_uuid = msg_uuid
+
                 tracked.last_mtime = actual_mtime
                 tracked.project_path = session_info.project_path
                 self.state.update_session(tracked)
@@ -267,20 +300,10 @@ class SessionMonitor:
             except OSError as e:
                 logger.debug(f"Error processing session {session_info.session_id}: {e}")
 
-        # Save state if modified
         self.state.save_if_dirty()
-
         return new_messages
 
     def _count_lines(self, file_path: Path) -> int:
-        """Count total lines in a file.
-
-        Args:
-            file_path: Path to file
-
-        Returns:
-            Number of lines
-        """
         try:
             with open(file_path, "r", encoding="utf-8") as f:
                 return sum(1 for _ in f)
@@ -288,21 +311,18 @@ class SessionMonitor:
             return 0
 
     async def _monitor_loop(self) -> None:
-        """Main monitoring loop."""
-        logger.info(
-            f"Session monitor started, polling every {self.poll_interval}s"
-        )
+        logger.info(f"Session monitor started, polling every {self.poll_interval}s")
 
         while self._running:
             try:
                 new_messages = await self.check_for_updates()
 
                 for msg in new_messages:
+                    status = "complete" if msg.is_complete else "streaming"
                     logger.info(
-                        f"New message in session {msg.session_id}: "
-                        f"{msg.text[:100]}..."
+                        f"[{status}] session={msg.session_id}: "
+                        f"{msg.text[:80]}..."
                     )
-
                     if self._message_callback:
                         try:
                             await self._message_callback(msg)
@@ -317,30 +337,16 @@ class SessionMonitor:
         logger.info("Session monitor stopped")
 
     def start(self) -> None:
-        """Start the monitoring loop."""
         if self._running:
             logger.warning("Monitor already running")
             return
-
         self._running = True
         self._task = asyncio.create_task(self._monitor_loop())
 
     def stop(self) -> None:
-        """Stop the monitoring loop."""
         self._running = False
-
         if self._task:
             self._task.cancel()
             self._task = None
-
-        # Final state save
         self.state.save()
         logger.info("Session monitor stopped and state saved")
-
-    async def start_async(self) -> None:
-        """Start monitoring (async version for use with asyncio.create_task)."""
-        self.start()
-
-    async def stop_async(self) -> None:
-        """Stop monitoring (async version)."""
-        self.stop()

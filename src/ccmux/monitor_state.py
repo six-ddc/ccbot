@@ -25,6 +25,8 @@ class TrackedSession:
     last_line_count: int  # Number of lines read
     last_message_uuid: str | None = None  # UUID of last processed message
     project_path: str = ""  # Working directory
+    pending_streaming_uuid: str | None = None  # UUID of last streaming (incomplete) msg
+    pending_streaming_mtime: float = 0.0  # mtime when pending streaming was set
 
     def to_dict(self) -> dict[str, Any]:
         """Convert to dict for JSON serialization."""
@@ -40,6 +42,8 @@ class TrackedSession:
             last_line_count=data.get("last_line_count", 0),
             last_message_uuid=data.get("last_message_uuid"),
             project_path=data.get("project_path", ""),
+            pending_streaming_uuid=data.get("pending_streaming_uuid"),
+            pending_streaming_mtime=data.get("pending_streaming_mtime", 0.0),
         )
 
 

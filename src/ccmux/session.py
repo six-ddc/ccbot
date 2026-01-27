@@ -1,7 +1,11 @@
 """Claude Code session management.
 
-Manages user subscriptions to Claude Code sessions and provides
-access to active session information.
+Manages active sessions and provides access to session information.
+
+State is anchored to tmux window names (stable), not project paths (cwd, volatile).
+Each window also tracks recently sent messages (via bot) to disambiguate
+which Claude session belongs to a given window when multiple sessions share
+the same project directory.
 """
 
 from __future__ import annotations
@@ -13,8 +17,12 @@ from pathlib import Path
 
 from .config import config
 from .tmux_manager import TmuxWindow, tmux_manager
+from .transcript_parser import TranscriptParser
 
 logger = logging.getLogger(__name__)
+
+# How many sent messages to keep per window for session matching
+SENT_MESSAGES_MAX = 5
 
 
 @dataclass
@@ -31,69 +39,137 @@ class ClaudeSession:
 
     @property
     def short_summary(self) -> str:
-        """Get a shortened summary for display."""
         if len(self.summary) > 30:
             return self.summary[:27] + "..."
         return self.summary
 
     @property
     def project_name(self) -> str:
-        """Get the project directory name."""
         return Path(self.project_path).name
+
+
+def _read_cwd_from_jsonl(file_path: str | Path) -> str:
+    """Read the cwd field from the first entry that has one."""
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                    cwd = data.get("cwd")
+                    if cwd:
+                        return cwd
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        pass
+    return ""
+
+
+def _read_summary_from_jsonl(file_path: str | Path) -> str:
+    """Read the latest summary entry from a JSONL file."""
+    summary = ""
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                line = line.strip()
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                    if data.get("type") == "summary":
+                        s = data.get("summary", "")
+                        if s:
+                            summary = s
+                except json.JSONDecodeError:
+                    continue
+    except OSError:
+        pass
+    return summary
+
+
+def _normalize_path(path: str) -> str:
+    try:
+        return str(Path(path).resolve())
+    except (OSError, ValueError):
+        return path
+
+
+def _read_user_messages_from_jsonl(file_path: str | Path) -> list[str]:
+    """Read all user message texts from a JSONL file, ordered chronologically."""
+    messages: list[str] = []
+    try:
+        with open(file_path, "r", encoding="utf-8") as f:
+            for line in f:
+                data = TranscriptParser.parse_line(line)
+                if not data:
+                    continue
+                if TranscriptParser.is_user_message(data):
+                    parsed = TranscriptParser.parse_message(data)
+                    if parsed and parsed.text.strip():
+                        messages.append(parsed.text.strip())
+    except OSError as e:
+        logger.debug(f"Error reading {file_path}: {e}")
+    return messages
 
 
 @dataclass
 class SessionManager:
-    """Manages user subscriptions to Claude Code sessions."""
+    """Manages active sessions for Claude Code.
 
-    # user_id -> set of subscribed session_ids
-    subscriptions: dict[int, set[str]] = field(default_factory=dict)
+    active_sessions: user_id -> tmux window_name
+    window_sent_messages: window_name -> list of recently sent message texts
+        (recorded when user sends via bot, used to match window to Claude session)
+    """
 
-    # user_id -> currently active session_id for sending messages
     active_sessions: dict[int, str] = field(default_factory=dict)
+    window_sent_messages: dict[str, list[str]] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
-        """Load state from file on initialization."""
         self._load_state()
 
     def _save_state(self) -> None:
-        """Save subscription state to file."""
         config.state_file.parent.mkdir(parents=True, exist_ok=True)
         state = {
-            "subscriptions": {
-                str(k): list(v) for k, v in self.subscriptions.items()
-            },
             "active_sessions": {
                 str(k): v for k, v in self.active_sessions.items()
             },
+            "window_sent_messages": self.window_sent_messages,
         }
         config.state_file.write_text(json.dumps(state, indent=2))
 
     def _load_state(self) -> None:
-        """Load subscription state from file."""
         if config.state_file.exists():
             try:
                 state = json.loads(config.state_file.read_text())
-                self.subscriptions = {
-                    int(k): set(v)
-                    for k, v in state.get("subscriptions", {}).items()
-                }
                 self.active_sessions = {
                     int(k): v
                     for k, v in state.get("active_sessions", {}).items()
                 }
+                self.window_sent_messages = state.get("window_sent_messages", {})
             except (json.JSONDecodeError, ValueError) as e:
                 logger.warning(f"Failed to load state: {e}")
-                self.subscriptions = {}
                 self.active_sessions = {}
+                self.window_sent_messages = {}
+
+    # --- Sent message tracking ---
+
+    def record_sent_message(self, window_name: str, text: str) -> None:
+        """Record a message sent to a window (for session matching)."""
+        msgs = self.window_sent_messages.setdefault(window_name, [])
+        msgs.append(text.strip())
+        # Keep only the last N
+        if len(msgs) > SENT_MESSAGES_MAX:
+            self.window_sent_messages[window_name] = msgs[-SENT_MESSAGES_MAX:]
+        self._save_state()
+
+    # --- Session index scanning ---
 
     def list_all_sessions(self) -> list[ClaudeSession]:
-        """List all Claude Code sessions (including those without tmux).
-
-        Scans all projects in ~/.claude/projects/ and returns
-        session information sorted by modification time (newest first).
-        """
-        sessions = []
+        """List all Claude Code sessions sorted by modification time (newest first)."""
+        sessions: list[ClaudeSession] = []
 
         if not config.claude_projects_path.exists():
             return sessions
@@ -108,12 +184,16 @@ class SessionManager:
 
             try:
                 index_data = json.loads(index_file.read_text())
-                entries = index_data.get("entries", [])
-
-                for entry in entries:
+                for entry in index_data.get("entries", []):
+                    full_path = entry.get("fullPath", "")
+                    jsonl_summary = _read_summary_from_jsonl(full_path) if full_path else ""
+                    if not jsonl_summary and full_path:
+                        msgs = _read_user_messages_from_jsonl(full_path)
+                        jsonl_summary = msgs[-1][:50] if msgs else ""
+                    summary = jsonl_summary or entry.get("summary", "Untitled")
                     session = ClaudeSession(
                         session_id=entry.get("sessionId", ""),
-                        summary=entry.get("summary", "Untitled"),
+                        summary=summary,
                         project_path=entry.get("projectPath", ""),
                         first_prompt=entry.get("firstPrompt", ""),
                         message_count=entry.get("messageCount", 0),
@@ -122,199 +202,290 @@ class SessionManager:
                     )
                     if session.session_id:
                         sessions.append(session)
-
             except (json.JSONDecodeError, OSError) as e:
                 logger.debug(f"Error reading index {index_file}: {e}")
 
-        # Sort by modification time, newest first
+        # Also pick up JSONL files not yet in any index
+        for project_dir in config.claude_projects_path.iterdir():
+            if not project_dir.is_dir():
+                continue
+            indexed_ids = {s.session_id for s in sessions}
+            index_file = project_dir / "sessions-index.json"
+            original_path = ""
+            if index_file.exists():
+                try:
+                    original_path = json.loads(index_file.read_text()).get("originalPath", "")
+                except (json.JSONDecodeError, OSError):
+                    pass
+
+            try:
+                for jsonl_file in project_dir.glob("*.jsonl"):
+                    sid = jsonl_file.stem
+                    if sid in indexed_ids:
+                        continue
+                    project_path = original_path
+                    if not project_path:
+                        project_path = _read_cwd_from_jsonl(jsonl_file)
+                    if not project_path:
+                        dir_name = project_dir.name
+                        if dir_name.startswith("-"):
+                            project_path = dir_name.replace("-", "/")
+                    user_msgs = _read_user_messages_from_jsonl(jsonl_file)
+                    first_prompt = user_msgs[0] if user_msgs else ""
+                    last_prompt = user_msgs[-1] if user_msgs else ""
+                    summary = (
+                        _read_summary_from_jsonl(jsonl_file)
+                        or last_prompt[:50]
+                        or "(new session)"
+                    )
+                    sessions.append(ClaudeSession(
+                        session_id=sid,
+                        summary=summary,
+                        project_path=project_path,
+                        first_prompt=first_prompt,
+                        message_count=len(user_msgs),
+                        modified="",
+                        file_path=str(jsonl_file),
+                    ))
+            except OSError:
+                pass
+
         sessions.sort(key=lambda s: s.modified, reverse=True)
         return sessions
 
     def list_active_sessions(self) -> list[ClaudeSession]:
-        """List only sessions that have an active tmux terminal.
-
-        Returns sessions that can be interacted with (have matching tmux window).
-        """
+        """List sessions that have an active tmux window (deduplicated by cwd)."""
         all_sessions = self.list_all_sessions()
 
-        # Get all tmux windows and their cwds
         windows = tmux_manager.list_windows()
-        window_cwds = set()
+        window_cwds: set[str] = set()
         for w in windows:
-            try:
-                normalized = str(Path(w.cwd).resolve())
-                window_cwds.add(normalized)
-            except (OSError, ValueError):
-                window_cwds.add(w.cwd)
+            window_cwds.add(_normalize_path(w.cwd))
 
-        # Filter to only sessions with matching tmux window
-        managed_sessions = []
+        seen_paths: set[str] = set()
+        result: list[ClaudeSession] = []
+
         for session in all_sessions:
-            try:
-                normalized_path = str(Path(session.project_path).resolve())
-            except (OSError, ValueError):
-                normalized_path = session.project_path
+            normalized = _normalize_path(session.project_path)
+            if normalized in window_cwds and normalized not in seen_paths:
+                seen_paths.add(normalized)
+                result.append(session)
 
-            if normalized_path in window_cwds:
-                managed_sessions.append(session)
+        # Placeholder for tmux windows with no session record
+        for w in windows:
+            normalized = _normalize_path(w.cwd)
+            if normalized not in seen_paths:
+                seen_paths.add(normalized)
+                result.append(ClaudeSession(
+                    session_id=f"tmux-{w.window_id}",
+                    summary="New session (no messages yet)",
+                    project_path=normalized,
+                    first_prompt="",
+                    message_count=0,
+                    modified="",
+                    file_path="",
+                ))
 
-        return managed_sessions
+        return result
 
-    def get_session(self, session_id: str) -> ClaudeSession | None:
-        """Get a specific session by ID (searches all sessions)."""
-        for session in self.list_all_sessions():
-            if session.session_id == session_id:
-                return session
-        return None
+    # --- Window → Session resolution ---
 
-    def subscribe(self, user_id: int, session_id: str) -> bool:
-        """Subscribe a user to a session.
+    def resolve_session_for_window(self, window_name: str) -> ClaudeSession | None:
+        """Resolve a tmux window to the best matching Claude session.
 
-        Returns True if newly subscribed, False if already subscribed.
+        Steps:
+        1. Resolve window_name → cwd via tmux
+        2. Find all sessions whose project_path matches cwd
+        3. If only one, return it
+        4. If multiple, use recorded sent messages to disambiguate:
+           read tail of each session's JSONL, find the one whose recent
+           user messages best match our recorded sent messages
+        5. Fallback to newest session
         """
-        if user_id not in self.subscriptions:
-            self.subscriptions[user_id] = set()
+        window = tmux_manager.find_window_by_name(window_name)
+        if not window:
+            return None
 
-        if session_id in self.subscriptions[user_id]:
-            return False
+        cwd = _normalize_path(window.cwd)
 
-        self.subscriptions[user_id].add(session_id)
-        self._save_state()
-        return True
-
-    def unsubscribe(self, user_id: int, session_id: str) -> bool:
-        """Unsubscribe a user from a session.
-
-        Returns True if unsubscribed, False if wasn't subscribed.
-        """
-        if user_id not in self.subscriptions:
-            return False
-
-        if session_id not in self.subscriptions[user_id]:
-            return False
-
-        self.subscriptions[user_id].remove(session_id)
-        self._save_state()
-        return True
-
-    def is_subscribed(self, user_id: int, session_id: str) -> bool:
-        """Check if a user is subscribed to a session."""
-        return session_id in self.subscriptions.get(user_id, set())
-
-    def get_subscribed_sessions(self, user_id: int) -> list[ClaudeSession]:
-        """Get all sessions a user is subscribed to (including those without tmux)."""
-        subscribed_ids = self.subscriptions.get(user_id, set())
-        all_sessions = self.list_all_sessions()
-        return [s for s in all_sessions if s.session_id in subscribed_ids]
-
-    def get_subscribers(self, session_id: str) -> list[int]:
-        """Get all user IDs subscribed to a session."""
-        return [
-            user_id
-            for user_id, session_ids in self.subscriptions.items()
-            if session_id in session_ids
+        # Find all sessions for this cwd
+        candidates = [
+            s for s in self.list_all_sessions()
+            if _normalize_path(s.project_path) == cwd and s.file_path
         ]
 
-    def cleanup_stale_subscriptions(self) -> int:
-        """Remove subscriptions to sessions that no longer exist.
-
-        Returns the number of stale subscriptions removed.
-        """
-        active_ids = {s.session_id for s in self.list_all_sessions()}
-        removed = 0
-
-        for user_id in list(self.subscriptions.keys()):
-            stale = self.subscriptions[user_id] - active_ids
-            if stale:
-                self.subscriptions[user_id] -= stale
-                removed += len(stale)
-
-        if removed > 0:
-            self._save_state()
-            logger.info(f"Cleaned up {removed} stale subscriptions")
-
-        return removed
-
-    # Active session management (for sending messages)
-
-    def set_active_session(self, user_id: int, session_id: str) -> bool:
-        """Set the active session for a user.
-
-        The active session is used for sending messages.
-        Returns True if the session exists, False otherwise.
-        """
-        session = self.get_session(session_id)
-        if not session:
-            return False
-
-        self.active_sessions[user_id] = session_id
-        self._save_state()
-        return True
-
-    def get_active_session(self, user_id: int) -> ClaudeSession | None:
-        """Get the user's active session."""
-        session_id = self.active_sessions.get(user_id)
-        if not session_id:
+        if not candidates:
             return None
-        return self.get_session(session_id)
+        if len(candidates) == 1:
+            return candidates[0]
+
+        # Multiple sessions — use sent messages to disambiguate
+        sent = self.window_sent_messages.get(window_name, [])
+        if not sent:
+            # No sent messages recorded, return newest
+            return candidates[0]
+
+        best_session = candidates[0]
+        best_score = -1
+
+        for session in candidates:
+            user_msgs = _read_user_messages_from_jsonl(session.file_path)
+            if not user_msgs:
+                continue
+
+            # Score: count how many of our sent messages appear in the
+            # tail of this session's user messages (order-preserving match)
+            score = _match_score(sent, user_msgs)
+            if score > best_score:
+                best_score = score
+                best_session = session
+
+        logger.info(
+            f"resolve_session_for_window({window_name}): "
+            f"cwd={cwd}, candidates={len(candidates)}, "
+            f"best={best_session.session_id}, score={best_score}"
+        )
+        return best_session
+
+    # --- Active session (by window_name) ---
+
+    def set_active_window(self, user_id: int, window_name: str) -> None:
+        logger.info(f"set_active_window: user_id={user_id}, window_name={window_name}")
+        self.active_sessions[user_id] = window_name
+        self._save_state()
+
+    def get_active_window_name(self, user_id: int) -> str | None:
+        return self.active_sessions.get(user_id)
+
+    def get_active_window(self, user_id: int) -> TmuxWindow | None:
+        name = self.get_active_window_name(user_id)
+        if not name:
+            return None
+        return tmux_manager.find_window_by_name(name)
+
+    def get_active_cwd(self, user_id: int) -> str | None:
+        window = self.get_active_window(user_id)
+        if window:
+            return _normalize_path(window.cwd)
+        return None
 
     def clear_active_session(self, user_id: int) -> None:
-        """Clear the user's active session."""
         if user_id in self.active_sessions:
             del self.active_sessions[user_id]
             self._save_state()
 
-    # Tmux integration
+    # --- Tmux helpers ---
 
-    def find_tmux_window(self, session: ClaudeSession) -> TmuxWindow | None:
-        """Find a tmux window matching the session's project path.
+    def find_window_for_project(self, project_path: str) -> TmuxWindow | None:
+        return tmux_manager.find_window_by_cwd(project_path)
 
-        Args:
-            session: The Claude session to find a terminal for
+    def has_active_terminal(self, project_path: str) -> bool:
+        return self.find_window_for_project(project_path) is not None
 
-        Returns:
-            TmuxWindow if found, None otherwise
-        """
-        return tmux_manager.find_window_by_cwd(session.project_path)
-
-    def has_active_terminal(self, session: ClaudeSession) -> bool:
-        """Check if a session has an active tmux terminal."""
-        return self.find_tmux_window(session) is not None
-
-    def send_to_session(self, session: ClaudeSession, text: str) -> tuple[bool, str]:
-        """Send text to a session via tmux.
-
-        Args:
-            session: The Claude session to send to
-            text: Text to send
-
-        Returns:
-            Tuple of (success, message)
-        """
-        window = self.find_tmux_window(session)
+    def send_to_window(self, window_name: str, text: str) -> tuple[bool, str]:
+        """Send text to a tmux window by name and record for matching."""
+        window = tmux_manager.find_window_by_name(window_name)
         if not window:
-            return False, "No active terminal for this session"
-
+            return False, "Window not found (may have been closed)"
         success = tmux_manager.send_keys(window.window_id, text)
         if success:
-            return True, f"Sent to {session.project_name}"
-        return False, "Failed to send message"
+            self.record_sent_message(window_name, text)
+            return True, f"Sent to {window_name}"
+        return False, "Failed to send keys"
 
     def send_to_active_session(self, user_id: int, text: str) -> tuple[bool, str]:
-        """Send text to the user's active session.
-
-        Args:
-            user_id: The user ID
-            text: Text to send
-
-        Returns:
-            Tuple of (success, message)
-        """
-        session = self.get_active_session(user_id)
-        if not session:
+        name = self.get_active_window_name(user_id)
+        if not name:
             return False, "No active session selected"
+        return self.send_to_window(name, text)
 
-        return self.send_to_session(session, text)
+    # --- Message history ---
+
+    def get_recent_messages(
+        self, window_name: str, count: int = 5, offset: int = 0
+    ) -> tuple[list[dict], int]:
+        """Get recent user/assistant messages for a window's session.
+
+        Resolves window → session, then reads the JSONL.
+        Returns (messages, total_count).
+        """
+        session = self.resolve_session_for_window(window_name)
+        if not session or not session.file_path:
+            return [], 0
+
+        file_path = Path(session.file_path)
+        if not file_path.exists():
+            return [], 0
+
+        all_messages: list[dict] = []
+        last_cmd_name: str | None = None
+        try:
+            with open(file_path, "r", encoding="utf-8") as f:
+                for line in f:
+                    data = TranscriptParser.parse_line(line)
+                    if not data:
+                        continue
+                    parsed = TranscriptParser.parse_message(data)
+                    if not parsed:
+                        continue
+                    # Track command name from invocation message
+                    if parsed.message_type == "local_command_invoke":
+                        last_cmd_name = parsed.tool_name
+                        continue
+                    # Local command stdout → render as bot reply
+                    if parsed.message_type == "local_command":
+                        cmd = parsed.tool_name or last_cmd_name or ""
+                        prefix = f"❯ {cmd}\n  ⎿  " if cmd else "  ⎿  "
+                        all_messages.append({
+                            "role": "assistant",
+                            "text": f"{prefix}{parsed.text}",
+                        })
+                        last_cmd_name = None
+                        continue
+                    last_cmd_name = None
+                    if parsed.role in ("user", "assistant") and parsed.text.strip():
+                        all_messages.append({
+                            "role": parsed.role,
+                            "text": parsed.text,
+                        })
+        except OSError as e:
+            logger.error(f"Error reading session file {file_path}: {e}")
+            return [], 0
+
+        total = len(all_messages)
+        if total == 0:
+            return [], 0
+
+        end_idx = total - offset
+        start_idx = max(0, end_idx - count)
+        if end_idx <= 0:
+            return [], total
+
+        return all_messages[start_idx:end_idx], total
+
+
+def _match_score(sent: list[str], user_msgs: list[str]) -> int:
+    """Score how well sent messages match the tail of user_msgs.
+
+    Counts how many sent messages appear in user_msgs (searching from the end),
+    preserving order.
+    """
+    if not sent or not user_msgs:
+        return 0
+
+    score = 0
+    # Search from the end of user_msgs
+    search_start = len(user_msgs) - 1
+
+    for sent_text in reversed(sent):
+        # Look for this sent text in user_msgs, going backwards
+        for i in range(search_start, -1, -1):
+            if user_msgs[i].strip() == sent_text:
+                score += 1
+                search_start = i - 1
+                break
+
+    return score
 
 
 session_manager = SessionManager()

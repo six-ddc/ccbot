@@ -1,16 +1,20 @@
 """Telegram bot handlers for Claude Code session monitoring."""
 
 import logging
+import math
+from dataclasses import dataclass
 from pathlib import Path
 
 from telegram import (
     Bot,
+    BotCommand,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
     KeyboardButton,
     ReplyKeyboardMarkup,
     Update,
 )
+from telegram.constants import ChatAction
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -21,7 +25,7 @@ from telegram.ext import (
 )
 
 from .config import config
-from .session import ClaudeSession, session_manager
+from .session import session_manager
 from .session_monitor import NewMessage, SessionMonitor
 from .telegram_sender import split_message
 from .tmux_manager import tmux_manager
@@ -31,19 +35,36 @@ logger = logging.getLogger(__name__)
 # Session monitor instance
 session_monitor: SessionMonitor | None = None
 
-# Callback data prefixes for inline keyboard
-CB_SUBSCRIBE = "sub:"
-CB_UNSUBSCRIBE = "unsub:"
-CB_SELECT = "sel:"
-CB_REFRESH = "refresh"
-CB_INLINE_PAGE = "ipage:"
+# Callback data prefixes
+CB_HISTORY_PREV = "hp:"  # history page older
+CB_HISTORY_NEXT = "hn:"  # history page newer
 
 # Directory browser callback prefixes
-CB_DIR_SELECT = "db:sel:"    # Select subdirectory
-CB_DIR_UP = "db:up"          # Go to parent directory
-CB_DIR_CONFIRM = "db:confirm"  # Confirm selection
-CB_DIR_CANCEL = "db:cancel"   # Cancel
-CB_DIR_PAGE = "db:page:"      # Pagination
+CB_DIR_SELECT = "db:sel:"
+CB_DIR_UP = "db:up"
+CB_DIR_CONFIRM = "db:confirm"
+CB_DIR_CANCEL = "db:cancel"
+CB_DIR_PAGE = "db:page:"
+
+# Session action callback prefixes
+CB_SESSION_HISTORY = "sa:hist:"
+CB_SESSION_REFRESH = "sa:ref:"
+CB_SESSION_KILL = "sa:kill:"
+
+# Claude Code slash commands (no-parameter commands sent to tmux)
+CC_COMMANDS: dict[str, tuple[str, str]] = {
+    # tg_command -> (cc_slash_text, description)
+    "cc_clear": ("/clear", "Clear conversation history"),
+    "cc_compact": ("/compact", "Compact conversation context"),
+    "cc_cost": ("/cost", "Show token/cost usage"),
+    "cc_help": ("/help", "Show Claude Code help"),
+    "cc_review": ("/review", "Code review"),
+    "cc_doctor": ("/doctor", "Diagnose environment"),
+    "cc_memory": ("/memory", "Edit CLAUDE.md"),
+    "cc_init": ("/init", "Init project CLAUDE.md"),
+    "cc_login": ("/login", "Login"),
+    "cc_logout": ("/logout", "Logout"),
+}
 
 # Reply keyboard buttons
 BTN_NEW = "➕ New"
@@ -56,136 +77,157 @@ MENU_SESSIONS_PER_PAGE = 3
 # Directories per page in directory browser
 DIRS_PER_PAGE = 6
 
+# Messages per page in history view
+MSGS_PER_PAGE = 5
+
+# Max chars per message text in history
+MSG_TEXT_MAX = 300
+
 # User state keys
 STATE_KEY = "state"
 STATE_BROWSING_DIRECTORY = "browsing_directory"
 BROWSE_PATH_KEY = "browse_path"
 BROWSE_PAGE_KEY = "browse_page"
 PAGE_KEY = "menu_page"
-ACTIVE_WINDOW_CWD_KEY = "active_window_cwd"  # For windows without a session yet
 
 
 def is_user_allowed(user_id: int | None) -> bool:
-    """Check if user is allowed."""
     return user_id is not None and config.is_user_allowed(user_id)
 
 
-def build_reply_keyboard(user_id: int, page: int = 0) -> ReplyKeyboardMarkup:
-    """Build persistent bottom menu with session buttons.
+def _truncate(text: str, max_len: int = MSG_TEXT_MAX) -> str:
+    if len(text) > max_len:
+        return text[:max_len] + "…"
+    return text
 
-    Layout:
-    - Row 1-3: Session buttons (one per row)
-    - Row 4: Navigation (if needed) + New button
-    """
+
+# --- Reply keyboard (bottom menu) ---
+
+def build_reply_keyboard(user_id: int, page: int = 0) -> ReplyKeyboardMarkup:
+    """Build persistent bottom menu with session buttons."""
     sessions = session_manager.list_active_sessions()
     total_pages = max(1, (len(sessions) + MENU_SESSIONS_PER_PAGE - 1) // MENU_SESSIONS_PER_PAGE)
-
-    # Ensure page is valid
     page = max(0, min(page, total_pages - 1))
 
-    # Get sessions for current page
     start = page * MENU_SESSIONS_PER_PAGE
-    end = start + MENU_SESSIONS_PER_PAGE
-    page_sessions = sessions[start:end]
+    page_sessions = sessions[start:start + MENU_SESSIONS_PER_PAGE]
 
-    # Get active session
-    active = session_manager.get_active_session(user_id)
-    active_id = active.session_id if active else None
+    active_wname = session_manager.get_active_window_name(user_id)
 
     keyboard = []
-
-    # Row 1-3: Session buttons
     for session in page_sessions:
-        is_active = session.session_id == active_id
-        is_subscribed = session_manager.is_subscribed(user_id, session.session_id)
+        # Check if this session's window matches the active one
+        w = session_manager.find_window_for_project(session.project_path)
+        is_active = w is not None and active_wname == w.window_name
 
-        # Build label with icons
-        icons = []
-        if is_active:
-            icons.append("📤")
-        if is_subscribed:
-            icons.append("🔔")
-
-        icon_str = "".join(icons) + " " if icons else ""
-        label = f"{icon_str}[{session.project_name}] {session.short_summary}"
-
-        # Truncate if too long
+        icon = "📤 " if is_active else ""
+        label = f"{icon}[{session.project_name}] {session.short_summary}"
         if len(label) > 40:
             label = label[:37] + "..."
-
         keyboard.append([KeyboardButton(label)])
 
-    # Row 4: Navigation + New
     nav_row = []
     if total_pages > 1:
-        if page > 0:
-            nav_row.append(KeyboardButton(BTN_PREV))
-        else:
-            nav_row.append(KeyboardButton(" "))  # Placeholder
+        nav_row.append(KeyboardButton(BTN_PREV) if page > 0 else KeyboardButton(" "))
         nav_row.append(KeyboardButton(f"{page + 1}/{total_pages}"))
-        if page < total_pages - 1:
-            nav_row.append(KeyboardButton(BTN_NEXT))
-        else:
-            nav_row.append(KeyboardButton(" "))  # Placeholder
-
+        nav_row.append(KeyboardButton(BTN_NEXT) if page < total_pages - 1 else KeyboardButton(" "))
     nav_row.append(KeyboardButton(BTN_NEW))
     keyboard.append(nav_row)
 
     return ReplyKeyboardMarkup(keyboard, resize_keyboard=True, is_persistent=True)
 
 
-def build_session_detail_keyboard(session_id: str, user_id: int) -> InlineKeyboardMarkup:
-    """Build inline keyboard for session details."""
-    is_subscribed = session_manager.is_subscribed(user_id, session_id)
+# --- Message history ---
 
+def _build_history_keyboard(
+    window_name: str, offset: int, total: int
+) -> InlineKeyboardMarkup | None:
+    """Build inline keyboard for history pagination."""
+    total_pages = max(1, math.ceil(total / MSGS_PER_PAGE))
+    current_page = (offset // MSGS_PER_PAGE) + 1
+
+    if total_pages <= 1:
+        return None
+
+    # window_name fits callback data well (short, stable)
     buttons = []
-    if is_subscribed:
+    if current_page < total_pages:
+        new_offset = offset + MSGS_PER_PAGE
         buttons.append(InlineKeyboardButton(
-            "🔕 Unsubscribe",
-            callback_data=f"{CB_UNSUBSCRIBE}{session_id}"
+            "◀ Older",
+            callback_data=f"{CB_HISTORY_PREV}{new_offset}:{window_name}"[:64],
         ))
+
+    buttons.append(InlineKeyboardButton(f"{current_page}/{total_pages}", callback_data="noop"))
+
+    if current_page > 1:
+        new_offset = max(0, offset - MSGS_PER_PAGE)
+        buttons.append(InlineKeyboardButton(
+            "Newer ▶",
+            callback_data=f"{CB_HISTORY_NEXT}{new_offset}:{window_name}"[:64],
+        ))
+
+    return InlineKeyboardMarkup([buttons])
+
+
+async def send_history(
+    target, window_name: str, offset: int = 0, edit: bool = False
+) -> None:
+    """Send or edit message history for a window's session.
+
+    Args:
+        target: Message object (for reply) or CallbackQuery (for edit).
+        window_name: Tmux window name (resolved to session via sent messages).
+        offset: Offset from end (0 = newest).
+        edit: If True, edit existing message instead of sending new one.
+    """
+    messages, total = session_manager.get_recent_messages(
+        window_name, count=MSGS_PER_PAGE, offset=offset,
+    )
+
+    # Resolve project name for display
+    session = session_manager.resolve_session_for_window(window_name)
+    project_name = Path(session.project_path).name if session else window_name
+
+    if total == 0:
+        text = f"📋 [{project_name}] No messages yet."
+        keyboard = None
     else:
-        buttons.append(InlineKeyboardButton(
-            "🔔 Subscribe",
-            callback_data=f"{CB_SUBSCRIBE}{session_id}"
-        ))
+        end_pos = total - offset
+        start_pos = end_pos - len(messages) + 1
+        lines = [f"📋 [{project_name}] Messages ({start_pos}-{end_pos} of {total})\n"]
+        for msg in messages:
+            icon = "👤" if msg["role"] == "user" else "🤖"
+            lines.append(f"{icon} {_truncate(msg['text'])}")
+        text = "\n\n".join(lines)
+        keyboard = _build_history_keyboard(window_name, offset, total)
 
-    return InlineKeyboardMarkup([
-        buttons,
-        [InlineKeyboardButton("🔄 Refresh", callback_data=CB_REFRESH)],
-    ])
+    if edit:
+        await target.edit_message_text(text, reply_markup=keyboard)
+    else:
+        await target.reply_text(text, reply_markup=keyboard)
 
+
+# --- Helpers ---
 
 def get_user_page(context: ContextTypes.DEFAULT_TYPE) -> int:
-    """Get current menu page for user."""
     if context.user_data:
         return context.user_data.get(PAGE_KEY, 0)
     return 0
 
 
 def set_user_page(context: ContextTypes.DEFAULT_TYPE, page: int) -> None:
-    """Set current menu page for user."""
     if context.user_data is not None:
         context.user_data[PAGE_KEY] = page
 
 
-def build_directory_browser(
-    current_path: str,
-    page: int = 0
-) -> tuple[str, InlineKeyboardMarkup]:
-    """Build directory browser message and keyboard.
+# --- Directory browser ---
 
-    Returns:
-        (message text, InlineKeyboardMarkup)
-    """
+def build_directory_browser(current_path: str, page: int = 0) -> tuple[str, InlineKeyboardMarkup]:
     path = Path(current_path).expanduser().resolve()
-
-    # Check if path exists and is a directory
     if not path.exists() or not path.is_dir():
-        # Fall back to browse root dir
         path = config.browse_root_dir
 
-    # Get subdirectory list (excluding hidden directories)
     try:
         subdirs = sorted([
             d.name for d in path.iterdir()
@@ -194,28 +236,19 @@ def build_directory_browser(
     except (PermissionError, OSError):
         subdirs = []
 
-    # Pagination calculation
     total_pages = max(1, (len(subdirs) + DIRS_PER_PAGE - 1) // DIRS_PER_PAGE)
     page = max(0, min(page, total_pages - 1))
     start = page * DIRS_PER_PAGE
     page_dirs = subdirs[start:start + DIRS_PER_PAGE]
 
-    # Build keyboard
     buttons: list[list[InlineKeyboardButton]] = []
-
-    # Subdirectory buttons (2 per row)
     for i in range(0, len(page_dirs), 2):
         row = []
         for name in page_dirs[i:i+2]:
-            # Truncate long directory names
             display = name[:12] + "…" if len(name) > 13 else name
-            row.append(InlineKeyboardButton(
-                f"📁 {display}",
-                callback_data=f"{CB_DIR_SELECT}{name}"
-            ))
+            row.append(InlineKeyboardButton(f"📁 {display}", callback_data=f"{CB_DIR_SELECT}{name}"))
         buttons.append(row)
 
-    # Pagination buttons (if needed)
     if total_pages > 1:
         nav: list[InlineKeyboardButton] = []
         if page > 0:
@@ -225,9 +258,7 @@ def build_directory_browser(
             nav.append(InlineKeyboardButton("▶", callback_data=f"{CB_DIR_PAGE}{page+1}"))
         buttons.append(nav)
 
-    # Action buttons
     action_row: list[InlineKeyboardButton] = []
-    # Only show "Go up" if not at browse root (and not at filesystem root)
     browse_root = config.browse_root_dir.resolve()
     if path != path.parent and path != browse_root:
         action_row.append(InlineKeyboardButton("Up", callback_data=CB_DIR_UP))
@@ -235,7 +266,6 @@ def build_directory_browser(
     action_row.append(InlineKeyboardButton("Cancel", callback_data=CB_DIR_CANCEL))
     buttons.append(action_row)
 
-    # Build message
     display_path = str(path).replace(str(Path.home()), "~")
     if not subdirs:
         text = f"*Select Working Directory*\n\nCurrent: `{display_path}`\n\n_(No subdirectories)_"
@@ -245,29 +275,28 @@ def build_directory_browser(
     return text, InlineKeyboardMarkup(buttons)
 
 
+# --- Command / message handlers ---
+
 async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, user_id: int) -> None:
-    """Send or update the main menu."""
     page = get_user_page(context)
     sessions = session_manager.list_active_sessions()
-    subscribed = session_manager.get_subscribed_sessions(user_id)
-    active = session_manager.get_active_session(user_id)
+    active_wname = session_manager.get_active_window_name(user_id)
 
     lines = [
         "🤖 *Claude Code Monitor*\n",
         f"📊 {len(sessions)} sessions in tmux",
-        f"🔔 {len(subscribed)} subscribed",
     ]
 
-    if active:
-        lines.append(f"📤 Active: [{active.project_name}]")
+    if active_wname:
+        w = tmux_manager.find_window_by_name(active_wname)
+        if w:
+            lines.append(f"📤 Active: [{Path(w.cwd).name}]")
+        else:
+            lines.append(f"📤 Active: {active_wname} (window gone)")
     else:
         lines.append("📤 No active session")
 
-    lines.extend([
-        "",
-        "Tap a session to select it.",
-        "Send text to forward to active session.",
-    ])
+    lines.extend(["", "Tap a session to select it.", "Send text to forward to active session."])
 
     if update.message:
         await update.message.reply_text(
@@ -278,14 +307,12 @@ async def send_main_menu(update: Update, context: ContextTypes.DEFAULT_TYPE, use
 
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /start command."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         if update.message:
             await update.message.reply_text("You are not authorized to use this bot.")
         return
 
-    # Clear any pending state
     if context.user_data:
         context.user_data.pop(STATE_KEY, None)
         context.user_data.pop(BROWSE_PATH_KEY, None)
@@ -295,33 +322,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await send_main_menu(update, context, user.id)
 
 
-async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /list command - show subscribed sessions."""
-    user = update.effective_user
-    if not user or not is_user_allowed(user.id):
-        if update.message:
-            await update.message.reply_text("You are not authorized to use this bot.")
-        return
-
-    subscribed = session_manager.get_subscribed_sessions(user.id)
-
-    if not subscribed:
-        text = "You are not subscribed to any sessions.\nTap a session and subscribe to receive notifications."
-    else:
-        lines = ["🔔 *Subscribed Sessions*\n"]
-        for session in subscribed:
-            has_terminal = session_manager.has_active_terminal(session)
-            status = "🟢" if has_terminal else "⚪"
-            lines.append(f"• {status} [{session.project_name}] {session.short_summary}")
-        lines.append("\n🟢 = in tmux, ⚪ = no terminal")
-        text = "\n".join(lines)
-
-    if update.message:
-        await update.message.reply_text(text, parse_mode="Markdown")
-
-
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle text messages."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         if update.message:
@@ -334,125 +335,105 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     text = update.message.text
     page = get_user_page(context)
 
-    # Ignore text when in directory browsing mode (user should use inline buttons)
+    # Ignore text in directory browsing mode
     if context.user_data and context.user_data.get(STATE_KEY) == STATE_BROWSING_DIRECTORY:
         await update.message.reply_text(
-            "Please use the directory browser above to select a directory, or tap Cancel to exit."
+            "Please use the directory browser above, or tap Cancel."
         )
         return
 
-    # Handle navigation buttons
+    # Navigation
     if text == BTN_PREV:
-        new_page = max(0, page - 1)
-        set_user_page(context, new_page)
+        set_user_page(context, max(0, page - 1))
         await send_main_menu(update, context, user.id)
         return
-
     if text == BTN_NEXT:
         sessions = session_manager.list_active_sessions()
         total_pages = max(1, (len(sessions) + MENU_SESSIONS_PER_PAGE - 1) // MENU_SESSIONS_PER_PAGE)
-        new_page = min(total_pages - 1, page + 1)
-        set_user_page(context, new_page)
+        set_user_page(context, min(total_pages - 1, page + 1))
         await send_main_menu(update, context, user.id)
         return
 
-    # Handle page indicator (do nothing)
+    # Page indicator / placeholder
     if "/" in text and text.replace("/", "").replace(" ", "").isdigit():
         return
-
-    # Handle placeholder
     if text.strip() == "":
         return
 
-    # Handle New button - start directory browser
+    # New button
     if text == BTN_NEW:
         start_path = str(config.browse_root_dir)
         if context.user_data is not None:
             context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
             context.user_data[BROWSE_PATH_KEY] = start_path
             context.user_data[BROWSE_PAGE_KEY] = 0
-
         msg_text, keyboard = build_directory_browser(start_path)
-        await update.message.reply_text(
-            msg_text,
-            reply_markup=keyboard,
-            parse_mode="Markdown",
-        )
+        await update.message.reply_text(msg_text, reply_markup=keyboard, parse_mode="Markdown")
         return
 
-    # Check if text matches a session button
+    # Match session button
     sessions = session_manager.list_active_sessions()
     for session in sessions:
-        # Match by project name in the button text
         if f"[{session.project_name}]" in text:
-            # Select this session and clear any pending window cwd
-            session_manager.set_active_session(user.id, session.session_id)
-            if context.user_data is not None:
-                context.user_data.pop(ACTIVE_WINDOW_CWD_KEY, None)
-            is_subscribed = session_manager.is_subscribed(user.id, session.session_id)
+            # Find the tmux window for this project
+            w = session_manager.find_window_for_project(session.project_path)
+            if w:
+                session_manager.set_active_window(user.id, w.window_name)
 
-            sub_status = "🔔 Subscribed" if is_subscribed else "🔕 Not subscribed"
-
+            window_name = w.window_name if w else ""
             detail_text = (
                 f"📤 *Selected: {session.project_name}*\n\n"
                 f"📝 {session.summary}\n"
                 f"💬 {session.message_count} messages\n\n"
-                f"{sub_status}\n\n"
                 f"Send text to forward to Claude."
             )
-
+            # Inline action buttons for the session
+            action_buttons = InlineKeyboardMarkup([[
+                InlineKeyboardButton("📋 History", callback_data=f"{CB_SESSION_HISTORY}{window_name}"[:64]),
+                InlineKeyboardButton("🔄 Refresh", callback_data=f"{CB_SESSION_REFRESH}{window_name}"[:64]),
+                InlineKeyboardButton("❌ Kill", callback_data=f"{CB_SESSION_KILL}{window_name}"[:64]),
+            ]])
             await update.message.reply_text(
                 detail_text,
-                reply_markup=build_reply_keyboard(user.id, page),
+                reply_markup=action_buttons,
                 parse_mode="Markdown",
             )
+            # Update bottom keyboard
             await update.message.reply_text(
-                "Actions:",
-                reply_markup=build_session_detail_keyboard(session.session_id, user.id),
+                "⌨️",
+                reply_markup=build_reply_keyboard(user.id, page),
             )
             return
 
-    # Otherwise, try to send to active session or active window
-    active = session_manager.get_active_session(user.id)
-
-    if active:
-        # Check if the session has an active terminal before trying to send
-        if not session_manager.has_active_terminal(active):
+    # Forward text to active window
+    active_wname = session_manager.get_active_window_name(user.id)
+    if active_wname:
+        w = tmux_manager.find_window_by_name(active_wname)
+        if not w:
             await update.message.reply_text(
-                f"❌ Session [{active.project_name}] has no active terminal.\n"
-                "The tmux window may have been closed or the directory changed.\n"
-                "Select a different session or create a new one with New."
+                f"❌ Window '{active_wname}' no longer exists.\n"
+                "Select a different session or create a new one."
             )
             return
+
+        # Show typing indicator
+        await update.message.chat.send_action(ChatAction.TYPING)
 
         success, message = session_manager.send_to_active_session(user.id, text)
-
         if success:
-            await update.message.reply_text(f"📤 Sent to [{active.project_name}]")
+            # Send placeholder that will be edited with Claude's response
+            project_name = Path(w.cwd).name
+            placeholder = await update.message.reply_text(
+                f"⏳ [{project_name}] waiting for response..."
+            )
+            _pending_responses[(active_wname, user.id)] = PendingResponse(
+                chat_id=user.id,
+                message_id=placeholder.message_id,
+            )
         else:
             await update.message.reply_text(f"❌ {message}")
         return
 
-    # No active session - check for active window cwd (newly created window)
-    active_cwd = context.user_data.get(ACTIVE_WINDOW_CWD_KEY) if context.user_data else None
-
-    if active_cwd:
-        # Try to send directly to the tmux window by cwd
-        success = tmux_manager.send_keys_by_cwd(active_cwd, text)
-        if success:
-            project_name = Path(active_cwd).name
-            await update.message.reply_text(f"📤 Sent to [{project_name}]")
-        else:
-            await update.message.reply_text(
-                "❌ Window not found. It may have been closed.\n"
-                "Create a new window with New."
-            )
-            # Clear the stale cwd
-            if context.user_data is not None:
-                context.user_data.pop(ACTIVE_WINDOW_CWD_KEY, None)
-        return
-
-    # No active session and no active window
     await update.message.reply_text(
         "❌ No active session selected.\n"
         "Tap a session button to select it, or create a new one with New."
@@ -460,7 +441,6 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle inline keyboard callbacks."""
     query = update.callback_query
     if not query or not query.data:
         return
@@ -472,44 +452,27 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     data = query.data
 
-    if data.startswith(CB_SUBSCRIBE):
-        session_id = data[len(CB_SUBSCRIBE):]
-        session = session_manager.get_session(session_id)
+    # History: older
+    if data.startswith(CB_HISTORY_PREV) or data.startswith(CB_HISTORY_NEXT):
+        prefix_len = len(CB_HISTORY_PREV)  # same length for both
+        rest = data[prefix_len:]
+        offset_str, window_name = rest.split(":", 1)
+        offset = int(offset_str)
 
-        if session:
-            session_manager.subscribe(user.id, session_id)
-            await query.answer(f"Subscribed to {session.short_summary}")
-            await query.edit_message_reply_markup(
-                reply_markup=build_session_detail_keyboard(session_id, user.id)
-            )
+        w = tmux_manager.find_window_by_name(window_name)
+        if w:
+            await send_history(query, window_name, offset=offset, edit=True)
         else:
-            await query.answer("Session not found")
+            await query.edit_message_text("Window no longer exists.")
+        await query.answer("Page updated")
 
-    elif data.startswith(CB_UNSUBSCRIBE):
-        session_id = data[len(CB_UNSUBSCRIBE):]
-        session = session_manager.get_session(session_id)
-
-        if session:
-            session_manager.unsubscribe(user.id, session_id)
-            await query.answer(f"Unsubscribed from {session.short_summary}")
-            await query.edit_message_reply_markup(
-                reply_markup=build_session_detail_keyboard(session_id, user.id)
-            )
-        else:
-            await query.answer("Session not found")
-
-    elif data == CB_REFRESH:
-        await query.answer("Refreshed")
-        await query.delete_message()
-
-    # Directory browser: select subdirectory
+    # Directory browser handlers
     elif data.startswith(CB_DIR_SELECT):
         subdir_name = data[len(CB_DIR_SELECT):]
         default_path = str(config.browse_root_dir)
         current_path = context.user_data.get(BROWSE_PATH_KEY, default_path) if context.user_data else default_path
         new_path = Path(current_path) / subdir_name
 
-        # Validate the new path exists
         if not new_path.exists() or not new_path.is_dir():
             await query.answer("Directory not found", show_alert=True)
             return
@@ -523,14 +486,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await query.edit_message_text(msg_text, reply_markup=keyboard, parse_mode="Markdown")
         await query.answer()
 
-    # Directory browser: go to parent directory
     elif data == CB_DIR_UP:
         default_path = str(config.browse_root_dir)
         current_path = context.user_data.get(BROWSE_PATH_KEY, default_path) if context.user_data else default_path
         current = Path(current_path).resolve()
         parent = current.parent
-
-        # Don't go above browse root
         root = config.browse_root_dir.resolve()
         if not str(parent).startswith(str(root)) and parent != root:
             parent = root
@@ -544,113 +504,271 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await query.edit_message_text(msg_text, reply_markup=keyboard, parse_mode="Markdown")
         await query.answer()
 
-    # Directory browser: pagination
     elif data.startswith(CB_DIR_PAGE):
-        page = int(data[len(CB_DIR_PAGE):])
+        pg = int(data[len(CB_DIR_PAGE):])
         default_path = str(config.browse_root_dir)
         current_path = context.user_data.get(BROWSE_PATH_KEY, default_path) if context.user_data else default_path
         if context.user_data is not None:
-            context.user_data[BROWSE_PAGE_KEY] = page
+            context.user_data[BROWSE_PAGE_KEY] = pg
 
-        msg_text, keyboard = build_directory_browser(current_path, page)
+        msg_text, keyboard = build_directory_browser(current_path, pg)
         await query.edit_message_text(msg_text, reply_markup=keyboard, parse_mode="Markdown")
         await query.answer()
 
-    # Directory browser: confirm selection
     elif data == CB_DIR_CONFIRM:
         default_path = str(config.browse_root_dir)
         selected_path = context.user_data.get(BROWSE_PATH_KEY, default_path) if context.user_data else default_path
 
-        # Clear browsing state
         if context.user_data is not None:
             context.user_data.pop(STATE_KEY, None)
             context.user_data.pop(BROWSE_PATH_KEY, None)
             context.user_data.pop(BROWSE_PAGE_KEY, None)
 
-        # Create new window
         success, message = tmux_manager.create_window(selected_path)
-
         if success:
-            # Clear active session and set active window cwd for direct messaging
-            session_manager.clear_active_session(user.id)
-            if context.user_data is not None:
-                # Store the resolved path for the new window
-                resolved_path = str(Path(selected_path).expanduser().resolve())
-                context.user_data[ACTIVE_WINDOW_CWD_KEY] = resolved_path
+            resolved_path = str(Path(selected_path).expanduser().resolve())
+            # Find the newly created window
+            w = tmux_manager.find_window_by_cwd(resolved_path)
+            if w:
+                session_manager.set_active_window(user.id, w.window_name)
+
             await query.edit_message_text(
-                f"✅ {message}\n\n"
-                "_You can now send messages directly to this window._",
+                f"✅ {message}\n\n_You can now send messages directly to this window._",
                 parse_mode="Markdown",
+            )
+            pg = get_user_page(context)
+            await context.bot.send_message(
+                chat_id=user.id,
+                text="Session list updated.",
+                reply_markup=build_reply_keyboard(user.id, pg),
             )
         else:
-            await query.edit_message_text(
-                f"❌ {message}",
-                parse_mode="Markdown",
-            )
+            await query.edit_message_text(f"❌ {message}", parse_mode="Markdown")
         await query.answer("Created" if success else "Failed")
 
-    # Directory browser: cancel
     elif data == CB_DIR_CANCEL:
         if context.user_data is not None:
             context.user_data.pop(STATE_KEY, None)
             context.user_data.pop(BROWSE_PATH_KEY, None)
             context.user_data.pop(BROWSE_PAGE_KEY, None)
-
         await query.edit_message_text("Cancelled")
         await query.answer("Cancelled")
 
-    # No-op for pagination indicator
+    # Session action: History
+    elif data.startswith(CB_SESSION_HISTORY):
+        window_name = data[len(CB_SESSION_HISTORY):]
+        w = tmux_manager.find_window_by_name(window_name)
+        if w:
+            await send_history(query, window_name, offset=0, edit=True)
+        else:
+            await query.edit_message_text("Window no longer exists.")
+        await query.answer("Loading history")
+
+    # Session action: Refresh
+    elif data.startswith(CB_SESSION_REFRESH):
+        window_name = data[len(CB_SESSION_REFRESH):]
+        session = session_manager.resolve_session_for_window(window_name)
+        if session:
+            project_name = Path(session.project_path).name
+            detail_text = (
+                f"📤 *Selected: {project_name}*\n\n"
+                f"📝 {session.summary}\n"
+                f"💬 {session.message_count} messages\n\n"
+                f"Send text to forward to Claude."
+            )
+            action_buttons = InlineKeyboardMarkup([[
+                InlineKeyboardButton("📋 History", callback_data=f"{CB_SESSION_HISTORY}{window_name}"[:64]),
+                InlineKeyboardButton("🔄 Refresh", callback_data=f"{CB_SESSION_REFRESH}{window_name}"[:64]),
+                InlineKeyboardButton("❌ Kill", callback_data=f"{CB_SESSION_KILL}{window_name}"[:64]),
+            ]])
+            await query.edit_message_text(detail_text, reply_markup=action_buttons, parse_mode="Markdown")
+        else:
+            await query.edit_message_text("Session no longer exists.")
+        await query.answer("Refreshed")
+
+    # Session action: Kill
+    elif data.startswith(CB_SESSION_KILL):
+        window_name = data[len(CB_SESSION_KILL):]
+        w = tmux_manager.find_window_by_name(window_name)
+        if w:
+            tmux_manager.kill_window(w.window_id)
+            # Clear active session if it was this one
+            if user:
+                active_wname = session_manager.get_active_window_name(user.id)
+                if active_wname == window_name:
+                    session_manager.set_active_window(user.id, "")
+            await query.edit_message_text(f"🗑 Session killed.")
+        else:
+            await query.edit_message_text("Window already gone.")
+        await query.answer("Killed")
+
     elif data == "noop":
         await query.answer()
 
 
-async def send_notification(bot: Bot, user_id: int, session: ClaudeSession, text: str) -> None:
-    """Send a notification about Claude response to a user."""
-    max_length = 2000
-    if len(text) > max_length:
-        text = text[:max_length] + "\n\n[... truncated]"
+# --- Streaming response / notifications ---
 
-    header = f"🤖 [{session.project_name}] {session.short_summary}"
-    full_message = f"{header}\n\n{text}"
+@dataclass
+class PendingResponse:
+    """A placeholder Telegram message waiting for Claude's response."""
+    chat_id: int
+    message_id: int
 
-    chunks = split_message(full_message)
-    for chunk in chunks:
-        try:
-            await bot.send_message(chat_id=user_id, text=chunk)
-        except Exception as e:
-            logger.error(f"Failed to send notification to {user_id}: {e}")
+
+# (window_name, user_id) -> PendingResponse
+_pending_responses: dict[tuple[str, int], PendingResponse] = {}
+
+
+def _format_response_prefix(
+    project_path: str, is_complete: bool, content_type: str = "text",
+) -> str:
+    """Return the emoji + project prefix for a response."""
+    project_name = Path(project_path).name
+    if content_type == "thinking":
+        return f"💭 [{project_name}]"
+    if is_complete:
+        return f"🤖 [{project_name}]"
+    return f"⏳ [{project_name}]"
+
+
+def _build_response_parts(
+    project_path: str, text: str, is_complete: bool,
+    content_type: str = "text",
+) -> list[str]:
+    """Build paginated response messages for Telegram.
+
+    Returns a list of message strings, each within Telegram's 4096 char limit.
+    Multi-part messages get a [1/N] suffix.
+    """
+    prefix = _format_response_prefix(project_path, is_complete, content_type)
+
+    # Truncate thinking content to keep it compact
+    if content_type == "thinking" and is_complete:
+        max_thinking = 500
+        if len(text) > max_thinking:
+            text = text[:max_thinking] + "\n\n... (thinking truncated)"
+
+    max_text = 4000 - len(prefix)
+
+    text_chunks = split_message(text, max_length=max_text)
+    total = len(text_chunks)
+
+    if total == 1:
+        return [f"{prefix}\n\n{text_chunks[0]}"]
+
+    parts = []
+    for i, chunk in enumerate(text_chunks, 1):
+        parts.append(f"{prefix}\n\n{chunk}\n\n[{i}/{total}]")
+    return parts
 
 
 async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
-    """Handle a new assistant message from the monitor."""
-    subscribers = session_manager.get_subscribers(msg.session_id)
+    """Handle a new assistant message — edit placeholder or send new message.
 
-    if not subscribers:
-        logger.debug(f"No subscribers for session {msg.session_id}")
+    For streaming: edits the pending placeholder in-place.
+    For complete: finalizes the message (or sends new if no placeholder).
+    """
+    status = "complete" if msg.is_complete else "streaming"
+    logger.info(
+        f"handle_new_message [{status}]: session={msg.session_id}, "
+        f"text_len={len(msg.text)}"
+    )
+
+    # Find users whose active window matches this session
+    active_users: list[tuple[int, str]] = []  # (user_id, window_name)
+    for uid, wname in session_manager.active_sessions.items():
+        resolved = session_manager.resolve_session_for_window(wname)
+        if resolved and resolved.session_id == msg.session_id:
+            active_users.append((uid, wname))
+
+    if not active_users:
+        logger.info(
+            f"No active users for session {msg.session_id}. "
+            f"Active sessions: {dict(session_manager.active_sessions)}"
+        )
+        # Log what each active user resolves to, for debugging
+        for uid, wname in session_manager.active_sessions.items():
+            resolved = session_manager.resolve_session_for_window(wname)
+            resolved_id = resolved.session_id if resolved else None
+            logger.info(
+                f"  user={uid}, window={wname} -> resolved_session={resolved_id}"
+            )
         return
 
-    session = session_manager.get_session(msg.session_id)
-    if not session:
-        logger.warning(f"Session not found: {msg.session_id}")
-        return
+    parts = _build_response_parts(
+        msg.project_path, msg.text, msg.is_complete, msg.content_type,
+    )
 
-    for user_id in subscribers:
-        logger.info(f"Notifying user {user_id} for session {session.short_summary}")
-        await send_notification(bot, user_id, session, msg.text)
+    for user_id, wname in active_users:
+        key = (wname, user_id)
+        pending = _pending_responses.get(key)
+        reply_markup = build_reply_keyboard(user_id, page=0) if msg.is_complete else None
 
+        if pending:
+            if msg.is_complete:
+                # Delete the ⏳ placeholder and send final parts with reply keyboard
+                try:
+                    await bot.delete_message(
+                        chat_id=pending.chat_id,
+                        message_id=pending.message_id,
+                    )
+                except Exception as e:
+                    logger.debug(f"Failed to delete placeholder: {e}")
+                del _pending_responses[key]
+                for i, part in enumerate(parts):
+                    try:
+                        # Attach reply_markup to last part only
+                        markup = reply_markup if i == len(parts) - 1 else None
+                        await bot.send_message(
+                            chat_id=user_id, text=part,
+                            reply_markup=markup,
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to send complete message: {e}")
+            else:
+                # Streaming: edit the placeholder in-place (first part only)
+                try:
+                    await bot.edit_message_text(
+                        chat_id=pending.chat_id,
+                        message_id=pending.message_id,
+                        text=parts[0],
+                    )
+                except Exception as e:
+                    err_msg = str(e).lower()
+                    if "not modified" not in err_msg:
+                        logger.warning(f"Failed to edit pending message: {e}")
+        else:
+            # No placeholder — send new message (unsolicited response)
+            if msg.is_complete:
+                for i, part in enumerate(parts):
+                    try:
+                        markup = reply_markup if i == len(parts) - 1 else None
+                        await bot.send_message(
+                            chat_id=user_id, text=part,
+                            reply_markup=markup,
+                        )
+                    except Exception as e:
+                        logger.error(f"Failed to send notification to {user_id}: {e}")
+
+
+# --- App lifecycle ---
 
 async def post_init(application: Application) -> None:
-    """Initialize bot and start session monitor."""
     global session_monitor
 
     await application.bot.delete_my_commands()
 
-    from telegram import BotCommand
-    await application.bot.set_my_commands([
+    bot_commands = [
         BotCommand("start", "Show session menu"),
-        BotCommand("list", "Show subscribed sessions"),
+        BotCommand("list", "List all sessions"),
+        BotCommand("history", "Message history for active session"),
         BotCommand("cancel", "Cancel current operation"),
-    ])
+    ]
+    # Add Claude Code slash commands
+    for cmd_name, (_, desc) in CC_COMMANDS.items():
+        bot_commands.append(BotCommand(cmd_name, desc))
+
+    await application.bot.set_my_commands(bot_commands)
 
     monitor = SessionMonitor()
 
@@ -660,21 +778,102 @@ async def post_init(application: Application) -> None:
     monitor.set_message_callback(message_callback)
     monitor.start()
     session_monitor = monitor
-
     logger.info("Session monitor started")
 
 
 async def post_shutdown(application: Application) -> None:
-    """Clean up resources on shutdown."""
     global session_monitor
-
     if session_monitor:
         session_monitor.stop()
         logger.info("Session monitor stopped")
 
 
+async def cc_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle Claude Code slash commands — forward them to the active tmux session."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    # Extract command name (e.g. "cc_clear" from "/cc_clear")
+    cmd_text = update.message.text or ""
+    cmd_name = cmd_text.lstrip("/").split("@")[0]  # strip bot mention
+
+    if cmd_name not in CC_COMMANDS:
+        await update.message.reply_text(f"Unknown command: {cmd_name}")
+        return
+
+    cc_slash, description = CC_COMMANDS[cmd_name]
+
+    active_wname = session_manager.get_active_window_name(user.id)
+    if not active_wname:
+        await update.message.reply_text(
+            "❌ No active session. Select a session first."
+        )
+        return
+
+    w = tmux_manager.find_window_by_name(active_wname)
+    if not w:
+        await update.message.reply_text(
+            f"❌ Window '{active_wname}' no longer exists."
+        )
+        return
+
+    await update.message.chat.send_action(ChatAction.TYPING)
+    success, message = session_manager.send_to_active_session(user.id, cc_slash)
+    if success:
+        project_name = Path(w.cwd).name
+        await update.message.reply_text(
+            f"⚡ [{project_name}] Sent: {cc_slash}"
+        )
+    else:
+        await update.message.reply_text(f"❌ {message}")
+
+
+async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """List all active sessions."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    sessions = session_manager.list_active_sessions()
+    if not sessions:
+        await update.message.reply_text("No active sessions.")
+        return
+
+    active_wname = session_manager.get_active_window_name(user.id)
+    lines = [f"📊 {len(sessions)} active sessions:\n"]
+    for s in sessions:
+        w = session_manager.find_window_for_project(s.project_path)
+        icon = "📤" if w and active_wname == w.window_name else "📁"
+        lines.append(f"{icon} [{s.project_name}] {s.short_summary} ({s.message_count} msgs)")
+
+    await update.message.reply_text(
+        "\n".join(lines),
+        reply_markup=build_reply_keyboard(user.id, get_user_page(context)),
+    )
+
+
+async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show message history for the active session."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    active_wname = session_manager.get_active_window_name(user.id)
+    if not active_wname:
+        await update.message.reply_text("❌ No active session. Select one first.")
+        return
+
+    await send_history(update.message, active_wname)
+
+
 async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle /cancel command."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         return
@@ -693,7 +892,6 @@ async def cancel_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
 
 def create_bot() -> Application:
-    """Create and configure the Telegram bot application."""
     application = (
         Application.builder()
         .token(config.telegram_bot_token)
@@ -704,7 +902,10 @@ def create_bot() -> Application:
 
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("list", list_command))
+    application.add_handler(CommandHandler("history", history_command))
     application.add_handler(CommandHandler("cancel", cancel_command))
+    # Claude Code slash commands
+    application.add_handler(CommandHandler(list(CC_COMMANDS.keys()), cc_command_handler))
     application.add_handler(CallbackQueryHandler(callback_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
 

@@ -60,11 +60,15 @@ class TmuxManager:
         if session:
             return session
 
-        # Create new session
-        return self.server.new_session(
+        # Create new session with main window named specifically
+        session = self.server.new_session(
             session_name=self.session_name,
             start_directory=str(Path.home()),
         )
+        # Rename the default window to the main window name
+        if session.windows:
+            session.windows[0].rename_window(config.tmux_main_window_name)
+        return session
 
     def list_windows(self) -> list[TmuxWindow]:
         """List all windows in the session with their working directories.
@@ -79,6 +83,10 @@ class TmuxManager:
             return windows
 
         for window in session.windows:
+            # Only include windows with the Claude session prefix
+            name = window.window_name or ""
+            if not name.startswith(config.tmux_window_prefix):
+                continue
             try:
                 # Get the active pane's current path
                 pane = window.active_pane
@@ -99,6 +107,20 @@ class TmuxManager:
                 logger.debug(f"Error getting window info: {e}")
 
         return windows
+
+    def find_window_by_name(self, window_name: str) -> TmuxWindow | None:
+        """Find a window by its name.
+
+        Args:
+            window_name: The window name to match
+
+        Returns:
+            TmuxWindow if found, None otherwise
+        """
+        for window in self.list_windows():
+            if window.window_name == window_name:
+                return window
+        return None
 
     def find_window_by_cwd(self, target_cwd: str) -> TmuxWindow | None:
         """Find a window by its working directory.
@@ -159,6 +181,21 @@ class TmuxManager:
             logger.error(f"Failed to send keys to window {window_id}: {e}")
             return False
 
+    def kill_window(self, window_id: str) -> bool:
+        """Kill a tmux window by its ID."""
+        session = self.get_session()
+        if not session:
+            return False
+        try:
+            window = session.windows.get(window_id=window_id)
+            if not window:
+                return False
+            window.kill()
+            return True
+        except Exception as e:
+            logger.error(f"Failed to kill window {window_id}: {e}")
+            return False
+
     def send_keys_by_cwd(self, target_cwd: str, text: str, enter: bool = True) -> bool:
         """Send keys to a window matched by working directory.
 
@@ -207,9 +244,11 @@ class TmuxManager:
         if existing:
             return False, f"Window already exists for this directory: {existing.window_name}"
 
-        # Create window name from directory name if not provided
+        # Create window name with prefix
         if not window_name:
-            window_name = path.name
+            window_name = f"{config.tmux_window_prefix}{path.name}"
+        elif not window_name.startswith(config.tmux_window_prefix):
+            window_name = f"{config.tmux_window_prefix}{window_name}"
 
         try:
             # Create new window

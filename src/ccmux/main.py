@@ -11,8 +11,11 @@ def main() -> None:
     """Main entry point."""
     logging.basicConfig(
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
-        level=logging.INFO,
+        level=logging.WARNING,
     )
+    # Set our modules to DEBUG
+    for name in ("ccmux",):
+        logging.getLogger(name).setLevel(logging.DEBUG)
     logger = logging.getLogger(__name__)
 
     logger.info(f"Allowed users: {config.allowed_users}")

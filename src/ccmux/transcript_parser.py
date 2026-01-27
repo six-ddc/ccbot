@@ -7,6 +7,7 @@ Format reference: https://github.com/desis123/claude-code-viewer
 from __future__ import annotations
 
 import json
+import re
 from dataclasses import dataclass
 from typing import Any
 
@@ -136,6 +137,9 @@ class TranscriptParser:
 
         return "\n".join(texts)
 
+    _RE_COMMAND_NAME = re.compile(r"<command-name>(.*?)</command-name>")
+    _RE_LOCAL_STDOUT = re.compile(r"<local-command-stdout>(.*?)</local-command-stdout>", re.DOTALL)
+
     @classmethod
     def parse_message(cls, data: dict) -> ParsedMessage | None:
         """Parse a message entry from the JSONL data.
@@ -160,6 +164,32 @@ class TranscriptParser:
         else:
             text = str(content) if content else ""
 
+        # Detect local command responses in user messages.
+        # These are rendered as bot replies: "❯ /cmd\n  ⎿  output"
+        if msg_type == "user" and text:
+            stdout_match = cls._RE_LOCAL_STDOUT.search(text)
+            if stdout_match:
+                stdout = stdout_match.group(1).strip()
+                cmd_match = cls._RE_COMMAND_NAME.search(text)
+                cmd = cmd_match.group(1) if cmd_match else None
+                return ParsedMessage(
+                    message_type="local_command",
+                    role="assistant",
+                    text=stdout,
+                    tool_name=cmd,  # reuse field for command name
+                    raw=data,
+                )
+            # Pure command invocation (no stdout) — carry command name
+            cmd_match = cls._RE_COMMAND_NAME.search(text)
+            if cmd_match:
+                return ParsedMessage(
+                    message_type="local_command_invoke",
+                    role=None,
+                    text="",
+                    tool_name=cmd_match.group(1),
+                    raw=data,
+                )
+
         return ParsedMessage(
             message_type=msg_type,
             role=role,
@@ -173,6 +203,7 @@ class TranscriptParser:
 
         This is a convenience method for getting just the text
         from an assistant message, suitable for notifications.
+        Filters out "(no content)" placeholder text.
 
         Args:
             data: Parsed JSON dict from a JSONL line
@@ -186,7 +217,53 @@ class TranscriptParser:
         message = data.get("message", {})
         content = message.get("content", [])
 
-        return cls.extract_text_only(content)
+        text = cls.extract_text_only(content)
+        # Filter out "(no content)" placeholder
+        if text and text.strip() == "(no content)":
+            return None
+        return text
+
+    @classmethod
+    def extract_assistant_content(cls, data: dict) -> tuple[str, str] | None:
+        """Extract content and its type from an assistant message.
+
+        Returns:
+            (text, content_type) where content_type is "text" or "thinking",
+            or None if not an assistant message or no content.
+        """
+        if not cls.is_assistant_message(data):
+            return None
+
+        message = data.get("message", {})
+        content = message.get("content", [])
+        if not isinstance(content, list):
+            return None
+
+        # Check what types of content blocks are present
+        has_thinking = False
+        has_text = False
+        thinking_text = ""
+        text_text = ""
+
+        for item in content:
+            if not isinstance(item, dict):
+                continue
+            if item.get("type") == "thinking":
+                t = item.get("thinking", "")
+                if t:
+                    has_thinking = True
+                    thinking_text = t
+            elif item.get("type") == "text":
+                t = item.get("text", "")
+                if t and t.strip() != "(no content)":
+                    has_text = True
+                    text_text = t
+
+        if has_text:
+            return (text_text, "text")
+        if has_thinking:
+            return (thinking_text, "thinking")
+        return None
 
     @staticmethod
     def get_session_id(data: dict) -> str | None:
