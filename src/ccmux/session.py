@@ -3,17 +3,20 @@
 Manages active sessions and provides access to session information.
 
 State is anchored to tmux window names (stable), not project paths (cwd, volatile).
-Each window also tracks recently sent messages (via bot) to disambiguate
-which Claude session belongs to a given window when multiple sessions share
-the same project directory.
+Each window stores:
+  - session_id: The associated Claude session ID (persisted)
+  - last_msg_id: The last processed message ID (for polling new messages)
+  - pending_text: Text sent but not yet matched to a session file
 """
 
 from __future__ import annotations
 
 import json
 import logging
+import os
 from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Any
 
 from .config import config
 from .tmux_manager import TmuxWindow, tmux_manager
@@ -21,8 +24,8 @@ from .transcript_parser import TranscriptParser
 
 logger = logging.getLogger(__name__)
 
-# How many sent messages to keep per window for session matching
-SENT_MESSAGES_MAX = 5
+# How many recent JSONL files to check when detecting new sessions
+NEW_SESSION_CHECK_COUNT = 5
 
 
 @dataclass
