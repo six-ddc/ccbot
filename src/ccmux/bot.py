@@ -1,15 +1,18 @@
 """Telegram bot handlers for Claude Code session monitoring."""
 
+import asyncio
 import io
 import logging
-
+from dataclasses import dataclass, field
 from pathlib import Path
+from typing import Literal
 
 from telegram import (
     Bot,
     BotCommand,
     InlineKeyboardButton,
     InlineKeyboardMarkup,
+    InputMediaDocument,
     ReplyKeyboardRemove,
     Update,
 )
@@ -36,8 +39,302 @@ logger = logging.getLogger(__name__)
 # Session monitor instance
 session_monitor: SessionMonitor | None = None
 
+# Status polling task
+_status_poll_task: asyncio.Task | None = None
+STATUS_POLL_INTERVAL = 1.0  # seconds
+
 # Map (tool_use_id, user_id) -> telegram message_id for editing tool_use messages with results
 _tool_msg_ids: dict[tuple[str, int], int] = {}
+
+# Status message tracking: user_id -> (message_id, window_name, last_text)
+# Note: last_text may be missing in old entries during rolling update
+_status_msg_info: dict[int, tuple[int, str] | tuple[int, str, str]] = {}
+
+# Claude Code spinner characters that indicate status line
+STATUS_SPINNERS = frozenset(["·", "✻", "✽", "✶", "✳", "✢"])
+
+
+# --- Message queue management ---
+
+
+@dataclass
+class MessageTask:
+    """Message task for queue processing."""
+
+    task_type: Literal["content", "status_update", "status_clear"]
+    text: str | None = None
+    window_name: str | None = None
+    # content type fields
+    parts: list[str] = field(default_factory=list)
+    tool_use_id: str | None = None
+    content_type: str = "text"
+    is_complete: bool = True
+
+
+# Per-user message queues and worker tasks
+_message_queues: dict[int, asyncio.Queue[MessageTask]] = {}
+_queue_workers: dict[int, asyncio.Task[None]] = {}
+
+
+def _get_or_create_queue(bot: Bot, user_id: int) -> asyncio.Queue[MessageTask]:
+    """Get or create message queue and worker for a user."""
+    if user_id not in _message_queues:
+        _message_queues[user_id] = asyncio.Queue()
+        # Start worker task for this user
+        _queue_workers[user_id] = asyncio.create_task(
+            _message_queue_worker(bot, user_id)
+        )
+    return _message_queues[user_id]
+
+
+async def _message_queue_worker(bot: Bot, user_id: int) -> None:
+    """Process message tasks for a user sequentially."""
+    queue = _message_queues[user_id]
+    logger.info(f"Message queue worker started for user {user_id}")
+
+    while True:
+        try:
+            task = await queue.get()
+            try:
+                if task.task_type == "content":
+                    await _process_content_task(bot, user_id, task)
+                elif task.task_type == "status_update":
+                    await _process_status_update_task(bot, user_id, task)
+                elif task.task_type == "status_clear":
+                    await _do_clear_status_message(bot, user_id)
+            except Exception as e:
+                logger.error(f"Error processing message task for user {user_id}: {e}")
+            finally:
+                queue.task_done()
+        except asyncio.CancelledError:
+            logger.info(f"Message queue worker cancelled for user {user_id}")
+            break
+        except Exception as e:
+            logger.error(f"Unexpected error in queue worker for user {user_id}: {e}")
+
+
+async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> None:
+    """Process a content message task."""
+    wname = task.window_name or ""
+
+    # 1. Handle tool_result editing (lookup happens here to ensure sequential order)
+    if task.content_type == "tool_result" and task.tool_use_id:
+        _tkey = (task.tool_use_id, user_id)
+        edit_msg_id = _tool_msg_ids.pop(_tkey, None)
+        if edit_msg_id is not None:
+            # Clear status message first (tool_result edits a different message)
+            # Don't remove keyboard - _check_and_send_status will send new status with keyboard
+            await _do_clear_status_message(bot, user_id)
+            text_md = convert_markdown(f"{_format_response_prefix(wname, True)}\n\n{task.text}")
+            try:
+                await bot.edit_message_text(
+                    chat_id=user_id,
+                    message_id=edit_msg_id,
+                    text=text_md,
+                    parse_mode="MarkdownV2",
+                )
+                # After content, check and send status
+                await _check_and_send_status(bot, user_id, wname)
+                return
+            except Exception:
+                try:
+                    await bot.edit_message_text(
+                        chat_id=user_id,
+                        message_id=edit_msg_id,
+                        text=f"{_format_response_prefix(wname, True)}\n\n{task.text}",
+                    )
+                    await _check_and_send_status(bot, user_id, wname)
+                    return
+                except Exception:
+                    logger.debug(f"Failed to edit tool msg {edit_msg_id}, sending new")
+                    # Fall through to send as new message
+
+    # 2. Send content messages, converting status message to first content part
+    first_part = True
+    last_msg_id: int | None = None
+    for part in task.parts:
+        sent = None
+
+        # For first part, try to convert status message to content (edit instead of delete)
+        if first_part:
+            first_part = False
+            converted_msg_id = await _convert_status_to_content(bot, user_id, wname, part)
+            if converted_msg_id is not None:
+                # Status message was edited to show content
+                last_msg_id = converted_msg_id
+                continue
+
+        try:
+            sent = await bot.send_message(
+                chat_id=user_id, text=part, parse_mode="MarkdownV2"
+            )
+        except Exception:
+            try:
+                sent = await bot.send_message(chat_id=user_id, text=part)
+            except Exception as e:
+                logger.error(f"Failed to send message to {user_id}: {e}")
+
+        if sent:
+            last_msg_id = sent.message_id
+
+    # Record tool_use message ID for later editing (use last message sent)
+    if last_msg_id and task.tool_use_id and task.content_type == "tool_use":
+        _tool_msg_ids[(task.tool_use_id, user_id)] = last_msg_id
+
+    # 3. After content, check and send status
+    await _check_and_send_status(bot, user_id, wname)
+
+
+async def _convert_status_to_content(
+    bot: Bot, user_id: int, window_name: str, content_text: str
+) -> int | None:
+    """Convert status message to content message by editing it.
+
+    Returns the message_id if converted successfully, None otherwise.
+    """
+    info = _status_msg_info.pop(user_id, None)
+    if not info:
+        return None
+
+    # Handle both old (2-tuple) and new (3-tuple) format
+    msg_id = info[0]
+    stored_wname = info[1]
+    if stored_wname != window_name:
+        # Different window, just delete the old status
+        try:
+            await bot.delete_message(chat_id=user_id, message_id=msg_id)
+        except Exception:
+            pass
+        return None
+
+    # Edit status message to show content
+    try:
+        await bot.edit_message_text(
+            chat_id=user_id,
+            message_id=msg_id,
+            text=content_text,
+            parse_mode="MarkdownV2",
+        )
+        return msg_id
+    except Exception:
+        try:
+            # Fallback to plain text
+            await bot.edit_message_text(
+                chat_id=user_id,
+                message_id=msg_id,
+                text=content_text,
+            )
+            return msg_id
+        except Exception as e:
+            logger.debug(f"Failed to convert status to content: {e}")
+            # Message might be deleted or too old, caller will send new message
+            return None
+
+
+async def _process_status_update_task(bot: Bot, user_id: int, task: MessageTask) -> None:
+    """Process a status update task."""
+    wname = task.window_name or ""
+    status_text = task.text or ""
+
+    if not status_text:
+        # No status text means clear status
+        await _do_clear_status_message(bot, user_id)
+        return
+
+    # Send typing indicator if Claude is interruptible (working)
+    if "esc to interrupt" in status_text.lower():
+        try:
+            await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
+        except Exception:
+            pass
+
+    current_info = _status_msg_info.get(user_id)
+
+    if current_info:
+        # Handle both old (2-tuple) and new (3-tuple) format for compatibility
+        if len(current_info) == 2:
+            msg_id, stored_wname = current_info
+            last_text = ""
+        else:
+            msg_id, stored_wname, last_text = current_info
+
+        if stored_wname != wname:
+            # Window changed - delete old and send new
+            await _do_clear_status_message(bot, user_id)
+            await _do_send_status_message(bot, user_id, wname, status_text)
+        elif status_text == last_text:
+            # Same content, skip edit
+            pass
+        else:
+            # Same window, text changed - edit in place
+            try:
+                await bot.edit_message_text(
+                    chat_id=user_id,
+                    message_id=msg_id,
+                    text=convert_markdown(status_text),
+                    parse_mode="MarkdownV2",
+                )
+                _status_msg_info[user_id] = (msg_id, wname, status_text)
+            except Exception:
+                try:
+                    await bot.edit_message_text(
+                        chat_id=user_id,
+                        message_id=msg_id,
+                        text=status_text,
+                    )
+                    _status_msg_info[user_id] = (msg_id, wname, status_text)
+                except Exception as e:
+                    logger.debug(f"Failed to edit status message: {e}")
+                    _status_msg_info.pop(user_id, None)
+                    await _do_send_status_message(bot, user_id, wname, status_text)
+    else:
+        # No existing status message, send new
+        await _do_send_status_message(bot, user_id, wname, status_text)
+
+
+async def _do_send_status_message(
+    bot: Bot, user_id: int, window_name: str, text: str
+) -> None:
+    """Send a new status message and track it (internal, called from worker)."""
+    try:
+        sent = await bot.send_message(
+            chat_id=user_id,
+            text=convert_markdown(text),
+            parse_mode="MarkdownV2",
+        )
+        _status_msg_info[user_id] = (sent.message_id, window_name, text)
+    except Exception:
+        try:
+            sent = await bot.send_message(chat_id=user_id, text=text)
+            _status_msg_info[user_id] = (sent.message_id, window_name, text)
+        except Exception as e:
+            logger.error(f"Failed to send status message to {user_id}: {e}")
+
+
+async def _do_clear_status_message(bot: Bot, user_id: int) -> None:
+    """Delete the status message for a user (internal, called from worker)."""
+    info = _status_msg_info.pop(user_id, None)
+    if info:
+        msg_id = info[0]
+        try:
+            await bot.delete_message(chat_id=user_id, message_id=msg_id)
+        except Exception as e:
+            logger.debug(f"Failed to delete status message {msg_id}: {e}")
+
+
+async def _check_and_send_status(bot: Bot, user_id: int, window_name: str) -> None:
+    """Check terminal for status line and send status message if present."""
+    w = tmux_manager.find_window_by_name(window_name)
+    if not w:
+        return
+
+    pane_text = tmux_manager.capture_pane(w.window_id)
+    if not pane_text:
+        return
+
+    status_line = _parse_status_line(pane_text)
+    if status_line:
+        await _do_send_status_message(bot, user_id, window_name, status_line)
 
 # Callback data prefixes
 CB_HISTORY_PREV = "hp:"  # history page older
@@ -55,8 +352,11 @@ CB_SESSION_HISTORY = "sa:hist:"
 CB_SESSION_REFRESH = "sa:ref:"
 CB_SESSION_KILL = "sa:kill:"
 
+# Screenshot callback prefix
+CB_SCREENSHOT_REFRESH = "ss:ref:"
+
 # Bot's own commands — handled locally, NOT forwarded to Claude Code
-BOT_COMMANDS = {"start", "list", "history", "screenshot"}
+BOT_COMMANDS = {"start", "list", "history", "screenshot", "esc"}
 
 # Claude Code commands shown in bot menu (forwarded via tmux)
 CC_COMMANDS: dict[str, str] = {
@@ -345,6 +645,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # Show typing indicator while waiting for Claude's response
         await update.message.chat.send_action(ChatAction.TYPING)
 
+        # Clear status message tracking so next status update sends a new message
+        # (otherwise it would edit the old status message above user's message)
+        _status_msg_info.pop(user.id, None)
+
         success, message = session_manager.send_to_active_session(user.id, text)
         if not success:
             await _safe_reply(update.message, f"❌ {message}")
@@ -502,6 +806,33 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await _safe_edit(query, "Window already gone.")
         await query.answer("Killed")
 
+    # Screenshot: Refresh
+    elif data.startswith(CB_SCREENSHOT_REFRESH):
+        window_name = data[len(CB_SCREENSHOT_REFRESH):]
+        w = tmux_manager.find_window_by_name(window_name)
+        if not w:
+            await query.answer("Window no longer exists", show_alert=True)
+            return
+
+        text = tmux_manager.capture_pane(w.window_id)
+        if not text:
+            await query.answer("Failed to capture pane", show_alert=True)
+            return
+
+        png_bytes = text_to_image(text)
+        refresh_keyboard = InlineKeyboardMarkup([[
+            InlineKeyboardButton("🔄 Refresh", callback_data=f"{CB_SCREENSHOT_REFRESH}{window_name}"[:64]),
+        ]])
+        try:
+            await query.edit_message_media(
+                media=InputMediaDocument(media=io.BytesIO(png_bytes), filename="screenshot.png"),
+                reply_markup=refresh_keyboard,
+            )
+            await query.answer("Refreshed")
+        except Exception as e:
+            logger.error(f"Failed to refresh screenshot: {e}")
+            await query.answer("Failed to refresh", show_alert=True)
+
     # List: select session
     elif data.startswith(CB_LIST_SELECT):
         wname = data[len(CB_LIST_SELECT):]
@@ -536,6 +867,94 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     elif data == "noop":
         await query.answer()
+
+
+# --- Status line polling ---
+
+
+def _parse_status_line(pane_text: str) -> str | None:
+    """Extract the Claude Code status line from terminal output.
+
+    Returns the status text if found, None otherwise.
+    Status lines start with spinner characters: · ✻ ✽ ✶ ✳ ✢
+    """
+    if not pane_text:
+        return None
+
+    # Search from bottom up - status line can be anywhere in last ~15 lines
+    # (there may be separator lines, prompts, etc. below it)
+    lines = pane_text.strip().split("\n")
+    for line in reversed(lines[-15:]):
+        line = line.strip()
+        if not line:
+            continue
+        # Check if line starts with a spinner character
+        first_char = line[0] if line else ""
+        if first_char in STATUS_SPINNERS:
+            return line
+    return None
+
+
+def _enqueue_status_update(bot: Bot, user_id: int, window_name: str, status_text: str | None) -> None:
+    """Enqueue a status update task."""
+    queue = _get_or_create_queue(bot, user_id)
+    if status_text:
+        task = MessageTask(
+            task_type="status_update",
+            text=status_text,
+            window_name=window_name,
+        )
+    else:
+        task = MessageTask(task_type="status_clear")
+    queue.put_nowait(task)
+
+
+async def _update_status_message(bot: Bot, user_id: int, window_name: str) -> None:
+    """Poll terminal and enqueue status update for user's active window."""
+    w = tmux_manager.find_window_by_name(window_name)
+    if not w:
+        # Window gone, enqueue clear
+        _enqueue_status_update(bot, user_id, window_name, None)
+        return
+
+    pane_text = tmux_manager.capture_pane(w.window_id)
+    if not pane_text:
+        # No pane content, enqueue clear
+        _enqueue_status_update(bot, user_id, window_name, None)
+        return
+
+    status_line = _parse_status_line(pane_text)
+    current_info = _status_msg_info.get(user_id)
+
+    if status_line:
+        _enqueue_status_update(bot, user_id, window_name, status_line)
+    elif current_info:
+        # No status line but we have a status message, clear it
+        _enqueue_status_update(bot, user_id, window_name, None)
+
+
+def _enqueue_content_message(
+    bot: Bot,
+    user_id: int,
+    window_name: str,
+    parts: list[str],
+    tool_use_id: str | None = None,
+    content_type: str = "text",
+    is_complete: bool = True,
+    text: str | None = None,
+) -> None:
+    """Enqueue a content message task."""
+    queue = _get_or_create_queue(bot, user_id)
+    task = MessageTask(
+        task_type="content",
+        text=text,
+        window_name=window_name,
+        parts=parts,
+        tool_use_id=tool_use_id,
+        content_type=content_type,
+        is_complete=is_complete,
+    )
+    queue.put_nowait(task)
 
 
 # --- Streaming response / notifications ---
@@ -602,10 +1021,9 @@ def _build_response_parts(
 
 
 async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
-    """Handle a new assistant message — edit placeholder or send new message.
+    """Handle a new assistant message — enqueue for sequential processing.
 
-    For streaming: edits the pending placeholder in-place.
-    For complete: finalizes the message (or sends new if no placeholder).
+    Messages are queued per-user to ensure status messages always appear last.
     """
     status = "complete" if msg.is_complete else "streaming"
     logger.info(
@@ -635,58 +1053,48 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         return
 
     for user_id, wname in active_users:
-        # For tool_result, try to edit the original tool_use message
-        _tkey = (msg.tool_use_id or "", user_id)
-        if msg.content_type == "tool_result" and msg.tool_use_id and _tkey in _tool_msg_ids:
-            tg_msg_id = _tool_msg_ids.pop(_tkey)
-            text_md = convert_markdown(f"{_format_response_prefix(wname, True)}\n\n{msg.text}")
-            try:
-                await bot.edit_message_text(
-                    chat_id=user_id, message_id=tg_msg_id,
-                    text=text_md, parse_mode="MarkdownV2",
-                )
-            except Exception:
-                try:
-                    await bot.edit_message_text(
-                        chat_id=user_id, message_id=tg_msg_id,
-                        text=f"{_format_response_prefix(wname, True)}\n\n{msg.text}",
-                    )
-                except Exception:
-                    logger.debug(f"Failed to edit tool msg {tg_msg_id}, sending new")
-                    # Fallback: send as new message
-                    parts = _build_response_parts(wname, msg.text, True, msg.content_type)
-                    for part in parts:
-                        try:
-                            await bot.send_message(chat_id=user_id, text=part, parse_mode="MarkdownV2")
-                        except Exception:
-                            try:
-                                await bot.send_message(chat_id=user_id, text=part)
-                            except Exception as e:
-                                logger.error(f"Failed to send message to {user_id}: {e}")
-            continue
-
         parts = _build_response_parts(
             wname, msg.text, msg.is_complete, msg.content_type,
         )
+
         if msg.is_complete:
-            for part in parts:
-                try:
-                    sent = await bot.send_message(chat_id=user_id, text=part, parse_mode="MarkdownV2")
-                except Exception:
-                    try:
-                        sent = await bot.send_message(chat_id=user_id, text=part)
-                    except Exception as e:
-                        logger.error(f"Failed to send message to {user_id}: {e}")
-                        sent = None
-                # Record tool_use message ID for later editing
-                if sent and msg.tool_use_id and msg.content_type == "tool_use":
-                    _tool_msg_ids[(msg.tool_use_id, user_id)] = sent.message_id
+            # Enqueue content message task
+            # Note: tool_result editing is handled inside _process_content_task
+            # to ensure sequential processing with tool_use message sending
+            _enqueue_content_message(
+                bot=bot,
+                user_id=user_id,
+                window_name=wname,
+                parts=parts,
+                tool_use_id=msg.tool_use_id,
+                content_type=msg.content_type,
+                is_complete=True,
+                text=msg.text,
+            )
 
 
 # --- App lifecycle ---
 
+
+async def _status_poll_loop(bot: Bot) -> None:
+    """Background task to poll terminal status for all active users."""
+    logger.info("Status polling started (interval: %ss)", STATUS_POLL_INTERVAL)
+    while True:
+        try:
+            # Get all users with active sessions
+            for user_id, wname in list(session_manager.active_sessions.items()):
+                try:
+                    await _update_status_message(bot, user_id, wname)
+                except Exception as e:
+                    logger.debug(f"Status update error for user {user_id}: {e}")
+        except Exception as e:
+            logger.error(f"Status poll loop error: {e}")
+
+        await asyncio.sleep(STATUS_POLL_INTERVAL)
+
+
 async def post_init(application: Application) -> None:
-    global session_monitor
+    global session_monitor, _status_poll_task
 
     await application.bot.delete_my_commands()
 
@@ -695,6 +1103,7 @@ async def post_init(application: Application) -> None:
         BotCommand("list", "List all sessions"),
         BotCommand("history", "Message history for active session"),
         BotCommand("screenshot", "Capture terminal screenshot"),
+        BotCommand("esc", "Send Escape to interrupt Claude"),
     ]
     # Add Claude Code slash commands
     for cmd_name, desc in CC_COMMANDS.items():
@@ -712,9 +1121,35 @@ async def post_init(application: Application) -> None:
     session_monitor = monitor
     logger.info("Session monitor started")
 
+    # Start status polling task
+    _status_poll_task = asyncio.create_task(_status_poll_loop(application.bot))
+    logger.info("Status polling task started")
+
 
 async def post_shutdown(application: Application) -> None:
-    global session_monitor
+    global session_monitor, _status_poll_task
+
+    # Stop status polling
+    if _status_poll_task:
+        _status_poll_task.cancel()
+        try:
+            await _status_poll_task
+        except asyncio.CancelledError:
+            pass
+        _status_poll_task = None
+        logger.info("Status polling stopped")
+
+    # Stop all queue workers
+    for user_id, worker in list(_queue_workers.items()):
+        worker.cancel()
+        try:
+            await worker
+        except asyncio.CancelledError:
+            pass
+    _queue_workers.clear()
+    _message_queues.clear()
+    logger.info("Message queue workers stopped")
+
     if session_monitor:
         session_monitor.stop()
         logger.info("Session monitor stopped")
@@ -828,10 +1263,37 @@ async def screenshot_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
         return
 
     png_bytes = text_to_image(text)
+    refresh_keyboard = InlineKeyboardMarkup([[
+        InlineKeyboardButton("🔄 Refresh", callback_data=f"{CB_SCREENSHOT_REFRESH}{active_wname}"[:64]),
+    ]])
     await update.message.reply_document(
         document=io.BytesIO(png_bytes),
         filename="screenshot.png",
+        reply_markup=refresh_keyboard,
     )
+
+
+async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Send Escape key to interrupt Claude."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    active_wname = session_manager.get_active_window_name(user.id)
+    if not active_wname:
+        await _safe_reply(update.message, "❌ No active session. Select one first.")
+        return
+
+    w = tmux_manager.find_window_by_name(active_wname)
+    if not w:
+        await _safe_reply(update.message, f"❌ Window '{active_wname}' no longer exists.")
+        return
+
+    # Send Escape control character (no enter)
+    tmux_manager.send_keys(w.window_id, "\x1b", enter=False)
+    await _safe_reply(update.message, "⎋ Sent Escape")
 
 
 
@@ -848,6 +1310,7 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("list", list_command))
     application.add_handler(CommandHandler("history", history_command))
     application.add_handler(CommandHandler("screenshot", screenshot_command))
+    application.add_handler(CommandHandler("esc", esc_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Forward any other /command to Claude Code
     application.add_handler(MessageHandler(filters.COMMAND, forward_command_handler))
