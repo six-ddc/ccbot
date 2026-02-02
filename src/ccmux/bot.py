@@ -80,6 +80,7 @@ from .handlers.directory_browser import (
 from .handlers.history import send_history
 from .handlers.interactive_ui import (
     INTERACTIVE_TOOL_NAMES,
+    clear_interactive_mode,
     clear_interactive_msg,
     get_interactive_msg_id,
     get_interactive_window,
@@ -790,7 +791,6 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 continue  # Don't send the normal tool_use message
             else:
                 # UI not rendered — clear the early-set mode
-                from .handlers.interactive_ui import clear_interactive_mode
                 clear_interactive_mode(user_id)
 
         # Any non-interactive message means the interaction is complete — delete the UI message

@@ -4,10 +4,10 @@ Provides utility functions for sending Telegram messages with automatic
 conversion to MarkdownV2 format and fallback to plain text on failure.
 
 Functions:
-  - _rate_limit_send: Rate limiter to avoid Telegram flood control
-  - _safe_reply: Reply with MarkdownV2, fallback to plain text
-  - _safe_edit: Edit message with MarkdownV2, fallback to plain text
-  - _safe_send: Send message with MarkdownV2, fallback to plain text
+  - rate_limit_send: Rate limiter to avoid Telegram flood control
+  - safe_reply: Reply with MarkdownV2, fallback to plain text
+  - safe_edit: Edit message with MarkdownV2, fallback to plain text
+  - safe_send: Send message with MarkdownV2, fallback to plain text
 """
 
 import logging

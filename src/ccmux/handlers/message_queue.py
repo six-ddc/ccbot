@@ -116,6 +116,12 @@ async def _merge_content_tasks(
 
     Returns: (merged_task, merge_count) where merge_count is the number of
     additional tasks merged (0 if no merging occurred).
+
+    Note on queue counter management:
+        When we put items back, we call task_done() to compensate for the
+        internal counter increment caused by put_nowait(). This is necessary
+        because the items were already counted when originally enqueued.
+        Without this compensation, queue.join() would wait indefinitely.
     """
     merged_parts = list(first.parts)
     current_length = sum(len(p) for p in merged_parts)
