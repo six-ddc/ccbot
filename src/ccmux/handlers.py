@@ -106,19 +106,19 @@ def _clear_browse_state(user_data: dict | None) -> None:
 
 async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /start command."""
-    from .bot import _safe_reply
+    from .message_sender import safe_reply
     
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         if update.message:
-            await _safe_reply(update.message, "You are not authorized to use this bot.")
+            await safe_reply(update.message, "You are not authorized to use this bot.")
         return
 
     _clear_browse_state(context.user_data)
 
     if update.message:
         # Remove any existing reply keyboard
-        await _safe_reply(
+        await safe_reply(
             update.message,
             "🤖 *Claude Code Monitor*\n\n"
             "Use /list to see sessions.\n"
@@ -129,12 +129,14 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle regular text messages from user."""
-    from .bot import _get_interactive_window, _handle_interactive_ui, _safe_reply, _status_msg_info
+    from .interactive_ui import get_interactive_window, handle_interactive_ui
+    from .message_queue import clear_status_tracking
+    from .message_sender import safe_reply
     
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         if update.message:
-            await _safe_reply(update.message, "You are not authorized to use this bot.")
+            await safe_reply(update.message, "You are not authorized to use this bot.")
         return
 
     if not update.message or not update.message.text:
@@ -144,7 +146,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     # Ignore text in directory browsing mode
     if context.user_data and context.user_data.get(STATE_KEY) == STATE_BROWSING_DIRECTORY:
-        await _safe_reply(
+        await safe_reply(
             update.message,
             "Please use the directory browser above, or tap Cancel.",
         )
@@ -155,7 +157,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if active_wname:
         w = await tmux_manager.find_window_by_name(active_wname)
         if not w:
-            await _safe_reply(
+            await safe_reply(
                 update.message,
                 f"❌ Window '{active_wname}' no longer exists.\n"
                 "Select a different session or create a new one.",
@@ -167,21 +169,21 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
         # Clear status message tracking so next status update sends a new message
         # (otherwise it would edit the old status message above user's message)
-        _status_msg_info.pop(user.id, None)
+        clear_status_tracking(user.id)
 
         success, message = await session_manager.send_to_active_session(user.id, text)
         if not success:
-            await _safe_reply(update.message, f"❌ {message}")
+            await safe_reply(update.message, f"❌ {message}")
             return
 
         # If in interactive mode, refresh the UI after sending text
-        interactive_window = _get_interactive_window(user.id)
+        interactive_window = get_interactive_window(user.id)
         if interactive_window and interactive_window == active_wname:
             await asyncio.sleep(0.2)  # Wait for terminal to update
-            await _handle_interactive_ui(context.bot, user.id, active_wname)
+            await handle_interactive_ui(context.bot, user.id, active_wname)
         return
 
-    await _safe_reply(
+    await safe_reply(
         update.message,
         "❌ No active session selected.\n"
         "Use /list to select a session or create a new one.",
@@ -190,16 +192,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle all callback queries from inline keyboards."""
-    from .bot import (
-        _build_session_detail,
-        _clear_interactive_msg,
-        _get_interactive_window,
-        _handle_interactive_ui,
-        _safe_edit,
-        _safe_send,
-        build_directory_browser,
-        send_history,
-    )
+    from .history import send_history
+    from .interactive_ui import clear_interactive_msg, get_interactive_window, handle_interactive_ui
+    from .message_sender import safe_edit, safe_send
+    from .ui_components import build_directory_browser, build_session_detail
+
     
     query = update.callback_query
     if not query or not query.data:
@@ -247,7 +244,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 # This prevents offset from going backwards if new messages arrive while paging
             )
         else:
-            await _safe_edit(query, "Window no longer exists.")
+            await safe_edit(query, "Window no longer exists.")
         await query.answer("Page updated")
 
     # Directory browser handlers
@@ -282,7 +279,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         msg_text, keyboard, subdirs = build_directory_browser(new_path_str)
         if context.user_data is not None:
             context.user_data[BROWSE_DIRS_KEY] = subdirs
-        await _safe_edit(query, msg_text, reply_markup=keyboard)
+        await safe_edit(query, msg_text, reply_markup=keyboard)
         await query.answer()
 
     elif data == CB_DIR_UP:
@@ -300,7 +297,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         msg_text, keyboard, subdirs = build_directory_browser(parent_path)
         if context.user_data is not None:
             context.user_data[BROWSE_DIRS_KEY] = subdirs
-        await _safe_edit(query, msg_text, reply_markup=keyboard)
+        await safe_edit(query, msg_text, reply_markup=keyboard)
         await query.answer()
 
     elif data.startswith(CB_DIR_PAGE):
@@ -317,7 +314,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         msg_text, keyboard, subdirs = build_directory_browser(current_path, pg)
         if context.user_data is not None:
             context.user_data[BROWSE_DIRS_KEY] = subdirs
-        await _safe_edit(query, msg_text, reply_markup=keyboard)
+        await safe_edit(query, msg_text, reply_markup=keyboard)
         await query.answer()
 
     elif data == CB_DIR_CONFIRM:
@@ -337,20 +334,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             active_items = await session_manager.list_active_sessions()
             list_text = f"📊 {len(active_items)} active sessions:"
             keyboard = await _build_list_keyboard(user.id)
-            await _safe_edit(query, list_text, reply_markup=keyboard)
+            await safe_edit(query, list_text, reply_markup=keyboard)
 
             # Send creation success as a new message
-            await _safe_send(
+            await safe_send(
                 context.bot, user.id,
                 f"✅ {message}\n\n_You can now send messages directly to this window._",
             )
         else:
-            await _safe_edit(query, f"❌ {message}")
+            await safe_edit(query, f"❌ {message}")
         await query.answer("Created" if success else "Failed")
 
     elif data == CB_DIR_CANCEL:
         _clear_browse_state(context.user_data)
-        await _safe_edit(query, "Cancelled")
+        await safe_edit(query, "Cancelled")
         await query.answer("Cancelled")
 
     # Session action: History
@@ -360,14 +357,14 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if w:
             await send_history(query.message, window_name)
         else:
-            await _safe_edit(query, "Window no longer exists.")
+            await safe_edit(query, "Window no longer exists.")
         await query.answer("Loading history")
 
     # Session action: Refresh
     elif data.startswith(CB_SESSION_REFRESH):
         window_name = data[len(CB_SESSION_REFRESH):]
-        detail_text, action_buttons = await _build_session_detail(window_name)
-        await _safe_edit(query, detail_text, reply_markup=action_buttons)
+        detail_text, action_buttons = await build_session_detail(window_name)
+        await safe_edit(query, detail_text, reply_markup=action_buttons)
         await query.answer("Refreshed")
 
     # Session action: Kill
@@ -381,9 +378,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 active_wname = session_manager.get_active_window_name(user.id)
                 if active_wname == window_name:
                     session_manager.set_active_window(user.id, "")
-            await _safe_edit(query, "🗑 Session killed.")
+            await safe_edit(query, "🗑 Session killed.")
         else:
-            await _safe_edit(query, "Window already gone.")
+            await safe_edit(query, "Window already gone.")
         await query.answer("Killed")
 
     # Screenshot: Refresh
@@ -428,11 +425,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             active_items = await session_manager.list_active_sessions()
             text = f"📊 {len(active_items)} active sessions:"
             keyboard = await _build_list_keyboard(user.id, pending_selection=w.window_name)
-            await _safe_edit(query, text, reply_markup=keyboard)
+            await safe_edit(query, text, reply_markup=keyboard)
 
             # Send session detail message
-            detail_text, action_buttons = await _build_session_detail(w.window_name)
-            await _safe_send(
+            detail_text, action_buttons = await build_session_detail(w.window_name)
+            await safe_send(
                 context.bot, user.id, detail_text,
                 reply_markup=action_buttons,
             )
@@ -479,7 +476,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data[BROWSE_PATH_KEY] = start_path
             context.user_data[BROWSE_PAGE_KEY] = 0
             context.user_data[BROWSE_DIRS_KEY] = subdirs
-        await _safe_edit(query, msg_text, reply_markup=keyboard)
+        await safe_edit(query, msg_text, reply_markup=keyboard)
         await query.answer()
 
     elif data == "noop":
@@ -492,7 +489,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if w:
             await tmux_manager.send_keys(w.window_id, "Up", enter=False, literal=False)
             await asyncio.sleep(0.15)
-            await _handle_interactive_ui(context.bot, user.id, window_name)
+            await handle_interactive_ui(context.bot, user.id, window_name)
         await query.answer()
 
     # Interactive UI: Down arrow
@@ -502,7 +499,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if w:
             await tmux_manager.send_keys(w.window_id, "Down", enter=False, literal=False)
             await asyncio.sleep(0.15)
-            await _handle_interactive_ui(context.bot, user.id, window_name)
+            await handle_interactive_ui(context.bot, user.id, window_name)
         await query.answer()
 
     # Interactive UI: Left arrow
@@ -512,7 +509,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if w:
             await tmux_manager.send_keys(w.window_id, "Left", enter=False, literal=False)
             await asyncio.sleep(0.15)
-            await _handle_interactive_ui(context.bot, user.id, window_name)
+            await handle_interactive_ui(context.bot, user.id, window_name)
         await query.answer()
 
     # Interactive UI: Right arrow
@@ -522,7 +519,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if w:
             await tmux_manager.send_keys(w.window_id, "Right", enter=False, literal=False)
             await asyncio.sleep(0.15)
-            await _handle_interactive_ui(context.bot, user.id, window_name)
+            await handle_interactive_ui(context.bot, user.id, window_name)
         await query.answer()
 
     # Interactive UI: Escape
@@ -531,7 +528,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         w = await tmux_manager.find_window_by_name(window_name)
         if w:
             await tmux_manager.send_keys(w.window_id, "Escape", enter=False, literal=False)
-            await _clear_interactive_msg(user.id, context.bot)
+            await clear_interactive_msg(user.id, context.bot)
         await query.answer("⎋ Esc")
 
     # Interactive UI: Enter
@@ -541,19 +538,19 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if w:
             await tmux_manager.send_keys(w.window_id, "Enter", enter=False, literal=False)
             await asyncio.sleep(0.15)
-            await _handle_interactive_ui(context.bot, user.id, window_name)
+            await handle_interactive_ui(context.bot, user.id, window_name)
         await query.answer("⏎ Enter")
 
     # Interactive UI: refresh display
     elif data.startswith(CB_ASK_REFRESH):
         window_name = data[len(CB_ASK_REFRESH):]
-        await _handle_interactive_ui(context.bot, user.id, window_name)
+        await handle_interactive_ui(context.bot, user.id, window_name)
         await query.answer("🔄")
 
 
 async def forward_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Forward any non-bot command as a slash command to the active Claude Code session."""
-    from .bot import _safe_reply
+    from .message_sender import safe_reply
     
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
@@ -567,24 +564,24 @@ async def forward_command_handler(update: Update, context: ContextTypes.DEFAULT_
 
     active_wname = session_manager.get_active_window_name(user.id)
     if not active_wname:
-        await _safe_reply(update.message, "❌ No active session. Select a session first.")
+        await safe_reply(update.message, "❌ No active session. Select a session first.")
         return
 
     w = await tmux_manager.find_window_by_name(active_wname)
     if not w:
-        await _safe_reply(update.message, f"❌ Window '{active_wname}' no longer exists.")
+        await safe_reply(update.message, f"❌ Window '{active_wname}' no longer exists.")
         return
 
     await update.message.chat.send_action(ChatAction.TYPING)
     success, message = await session_manager.send_to_active_session(user.id, cc_slash)
     if success:
-        await _safe_reply(update.message, f"⚡ [{active_wname}] Sent: {cc_slash}")
+        await safe_reply(update.message, f"⚡ [{active_wname}] Sent: {cc_slash}")
         # If /clear command was sent, clear the session association
         # so we can detect the new session after first message
         if cc_slash.strip().lower() == "/clear":
             session_manager.clear_window_session(active_wname)
     else:
-        await _safe_reply(update.message, f"❌ {message}")
+        await safe_reply(update.message, f"❌ {message}")
 
 
 async def _build_list_keyboard(
@@ -617,7 +614,7 @@ async def _build_list_keyboard(
 
 async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """List all active sessions as inline buttons."""
-    from .bot import _safe_reply
+    from .message_sender import safe_reply
     
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
@@ -629,12 +626,13 @@ async def list_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     text = f"📊 {len(active_items)} active sessions:" if active_items else "No active sessions."
     keyboard = await _build_list_keyboard(user.id)
 
-    await _safe_reply(update.message, text, reply_markup=keyboard)
+    await safe_reply(update.message, text, reply_markup=keyboard)
 
 
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Show message history for the active session."""
-    from .bot import _safe_reply, send_history
+    from .history import send_history
+    from .message_sender import safe_reply
     
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
@@ -644,7 +642,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
     active_wname = session_manager.get_active_window_name(user.id)
     if not active_wname:
-        await _safe_reply(update.message, "❌ No active session. Select one first.")
+        await safe_reply(update.message, "❌ No active session. Select one first.")
         return
 
     await send_history(update.message, active_wname)
@@ -652,7 +650,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
 
 async def screenshot_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Capture the current tmux pane and send it as an image."""
-    from .bot import _safe_reply
+    from .message_sender import safe_reply
     
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
@@ -662,17 +660,17 @@ async def screenshot_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
     active_wname = session_manager.get_active_window_name(user.id)
     if not active_wname:
-        await _safe_reply(update.message, "❌ No active session. Select one first.")
+        await safe_reply(update.message, "❌ No active session. Select one first.")
         return
 
     w = await tmux_manager.find_window_by_name(active_wname)
     if not w:
-        await _safe_reply(update.message, f"❌ Window '{active_wname}' no longer exists.")
+        await safe_reply(update.message, f"❌ Window '{active_wname}' no longer exists.")
         return
 
     text = await tmux_manager.capture_pane(w.window_id, with_ansi=True)
     if not text:
-        await _safe_reply(update.message, "❌ Failed to capture pane content.")
+        await safe_reply(update.message, "❌ Failed to capture pane content.")
         return
 
     png_bytes = await text_to_image(text, with_ansi=True)
@@ -688,7 +686,7 @@ async def screenshot_command(update: Update, context: ContextTypes.DEFAULT_TYPE)
 
 async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send Escape key to interrupt Claude."""
-    from .bot import _safe_reply
+    from .message_sender import safe_reply
     
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
@@ -698,14 +696,14 @@ async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
     active_wname = session_manager.get_active_window_name(user.id)
     if not active_wname:
-        await _safe_reply(update.message, "❌ No active session. Select one first.")
+        await safe_reply(update.message, "❌ No active session. Select one first.")
         return
 
     w = await tmux_manager.find_window_by_name(active_wname)
     if not w:
-        await _safe_reply(update.message, f"❌ Window '{active_wname}' no longer exists.")
+        await safe_reply(update.message, f"❌ Window '{active_wname}' no longer exists.")
         return
 
     # Send Escape control character (no enter)
     await tmux_manager.send_keys(w.window_id, "\x1b", enter=False)
-    await _safe_reply(update.message, "⎋ Sent Escape")
+    await safe_reply(update.message, "⎋ Sent Escape")

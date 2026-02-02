@@ -472,3 +472,26 @@ async def enqueue_status_clear(bot: Bot, user_id: int) -> None:
     queue = get_or_create_queue(bot, user_id)
     task = MessageTask(task_type="status_clear")
     await queue.put(task)
+
+
+def clear_status_tracking(user_id: int) -> None:
+    """Clear status message tracking for a user.
+    
+    Called when user sends a message, so next status update sends a new message
+    instead of editing the old one.
+    """
+    _status_msg_info.pop(user_id, None)
+
+
+async def cleanup_all_workers() -> None:
+    """Stop all queue workers and clear state. Called on bot shutdown."""
+    for user_id, worker in list(_queue_workers.items()):
+        worker.cancel()
+        try:
+            await worker
+        except asyncio.CancelledError:
+            pass
+    _queue_workers.clear()
+    _message_queues.clear()
+    _queue_locks.clear()
+    logger.info("Message queue workers stopped")
