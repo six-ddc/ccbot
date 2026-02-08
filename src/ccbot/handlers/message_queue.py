@@ -25,6 +25,7 @@ from telegram import Bot
 from telegram.error import RetryAfter
 
 from ..markdown_v2 import convert_markdown
+from ..session import session_manager
 from ..terminal_parser import parse_status_line
 from ..tmux_manager import tmux_manager
 from .message_sender import NO_LINK_PREVIEW, rate_limit_send_message
@@ -226,6 +227,7 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
     """Process a content message task."""
     wname = task.window_name or ""
     tid = task.thread_id or 0
+    chat_id = session_manager.resolve_chat_id(user_id, task.thread_id)
 
     # 1. Handle tool_result editing (merged parts are edited together)
     if task.content_type == "tool_result" and task.tool_use_id:
@@ -238,7 +240,7 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
             full_text = "\n\n".join(task.parts)
             try:
                 await bot.edit_message_text(
-                    chat_id=user_id,
+                    chat_id=chat_id,
                     message_id=edit_msg_id,
                     text=full_text,
                     parse_mode="MarkdownV2",
@@ -253,7 +255,7 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                     # Fallback: strip markdown
                     plain_text = task.text or full_text
                     await bot.edit_message_text(
-                        chat_id=user_id,
+                        chat_id=chat_id,
                         message_id=edit_msg_id,
                         text=plain_text,
                         link_preview_options=NO_LINK_PREVIEW,
@@ -283,7 +285,7 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                 continue
 
         sent = await rate_limit_send_message(
-            bot, user_id, part,
+            bot, chat_id, part,
             **_send_kwargs(task.thread_id),  # type: ignore[arg-type]
         )
 
@@ -310,11 +312,14 @@ async def _convert_status_to_content(
     if not info:
         return None
 
+    thread_id: int | None = thread_id_or_0 if thread_id_or_0 != 0 else None
+    chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+
     msg_id, stored_wname, _last_text = info
     if stored_wname != window_name:
         # Different window, just delete the old status
         try:
-            await bot.delete_message(chat_id=user_id, message_id=msg_id)
+            await bot.delete_message(chat_id=chat_id, message_id=msg_id)
         except Exception:
             pass
         return None
@@ -322,7 +327,7 @@ async def _convert_status_to_content(
     # Edit status message to show content
     try:
         await bot.edit_message_text(
-            chat_id=user_id,
+            chat_id=chat_id,
             message_id=msg_id,
             text=content_text,
             parse_mode="MarkdownV2",
@@ -335,7 +340,7 @@ async def _convert_status_to_content(
         try:
             # Fallback to plain text
             await bot.edit_message_text(
-                chat_id=user_id,
+                chat_id=chat_id,
                 message_id=msg_id,
                 text=content_text,
                 link_preview_options=NO_LINK_PREVIEW,
@@ -353,6 +358,7 @@ async def _process_status_update_task(bot: Bot, user_id: int, task: MessageTask)
     """Process a status update task."""
     wname = task.window_name or ""
     tid = task.thread_id or 0
+    chat_id = session_manager.resolve_chat_id(user_id, task.thread_id)
     skey = (user_id, tid)
     status_text = task.text or ""
 
@@ -366,7 +372,7 @@ async def _process_status_update_task(bot: Bot, user_id: int, task: MessageTask)
 
     if "esc to interrupt" in status_text.lower():
         try:
-            await bot.send_chat_action(chat_id=user_id, action=ChatAction.TYPING)
+            await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
         except Exception:
             pass
 
@@ -386,7 +392,7 @@ async def _process_status_update_task(bot: Bot, user_id: int, task: MessageTask)
             # Same window, text changed - edit in place
             try:
                 await bot.edit_message_text(
-                    chat_id=user_id,
+                    chat_id=chat_id,
                     message_id=msg_id,
                     text=convert_markdown(status_text),
                     parse_mode="MarkdownV2",
@@ -398,7 +404,7 @@ async def _process_status_update_task(bot: Bot, user_id: int, task: MessageTask)
             except Exception:
                 try:
                     await bot.edit_message_text(
-                        chat_id=user_id,
+                        chat_id=chat_id,
                         message_id=msg_id,
                         text=status_text,
                         link_preview_options=NO_LINK_PREVIEW,
@@ -425,8 +431,9 @@ async def _do_send_status_message(
     """Send a new status message and track it (internal, called from worker)."""
     skey = (user_id, thread_id_or_0)
     thread_id: int | None = thread_id_or_0 if thread_id_or_0 != 0 else None
+    chat_id = session_manager.resolve_chat_id(user_id, thread_id)
     sent = await rate_limit_send_message(
-        bot, user_id, text,
+        bot, chat_id, text,
         **_send_kwargs(thread_id),  # type: ignore[arg-type]
     )
     if sent:
@@ -441,8 +448,10 @@ async def _do_clear_status_message(
     info = _status_msg_info.pop(skey, None)
     if info:
         msg_id = info[0]
+        thread_id: int | None = thread_id_or_0 if thread_id_or_0 != 0 else None
+        chat_id = session_manager.resolve_chat_id(user_id, thread_id)
         try:
-            await bot.delete_message(chat_id=user_id, message_id=msg_id)
+            await bot.delete_message(chat_id=chat_id, message_id=msg_id)
         except Exception as e:
             logger.debug(f"Failed to delete status message {msg_id}: {e}")
 

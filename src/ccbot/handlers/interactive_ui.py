@@ -18,6 +18,7 @@ import logging
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
+from ..session import session_manager
 from ..terminal_parser import extract_interactive_content, is_interactive_ui
 from ..tmux_manager import tmux_manager
 from .callback_data import (
@@ -118,6 +119,7 @@ async def handle_interactive_ui(
     False otherwise.
     """
     ikey = (user_id, thread_id or 0)
+    chat_id = session_manager.resolve_chat_id(user_id, thread_id)
     w = await tmux_manager.find_window_by_name(window_name)
     if not w:
         return False
@@ -158,7 +160,7 @@ async def handle_interactive_ui(
     if existing_msg_id:
         try:
             await bot.edit_message_text(
-                chat_id=user_id,
+                chat_id=chat_id,
                 message_id=existing_msg_id,
                 text=text,
                 reply_markup=keyboard,
@@ -173,7 +175,7 @@ async def handle_interactive_ui(
     # Send new message
     logger.info("Sending interactive UI to user %d for window %s", user_id, window_name)
     sent = await rate_limit_send_message(
-        bot, user_id, text,
+        bot, chat_id, text,
         reply_markup=keyboard,
         **thread_kwargs,  # type: ignore[arg-type]
     )
@@ -193,7 +195,8 @@ async def clear_interactive_msg(
     _interactive_mode.pop(ikey, None)
     logger.debug("Clear interactive msg: user=%d, thread=%s, msg_id=%s", user_id, thread_id, msg_id)
     if bot and msg_id:
+        chat_id = session_manager.resolve_chat_id(user_id, thread_id)
         try:
-            await bot.delete_message(chat_id=user_id, message_id=msg_id)
+            await bot.delete_message(chat_id=chat_id, message_id=msg_id)
         except Exception:
             pass  # Message may already be deleted or too old

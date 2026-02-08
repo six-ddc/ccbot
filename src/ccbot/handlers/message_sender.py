@@ -77,17 +77,19 @@ async def _send_with_fallback(
 
 async def rate_limit_send_message(
     bot: Bot,
-    user_id: int,
+    chat_id: int,
     text: str,
     **kwargs: Any,
 ) -> Message | None:
     """Rate-limited send with MarkdownV2 fallback.
 
     Combines rate_limit_send() + _send_with_fallback() for convenience.
+    The chat_id should be the group chat ID for forum topics, or the user ID
+    for direct messages.  Use session_manager.resolve_chat_id() to obtain it.
     Returns the sent Message on success, None on failure.
     """
-    await rate_limit_send(user_id)
-    return await _send_with_fallback(bot, user_id, text, **kwargs)
+    await rate_limit_send(chat_id)
+    return await _send_with_fallback(bot, chat_id, text, **kwargs)
 
 
 async def safe_reply(message: Message, text: str, **kwargs: Any) -> Message:

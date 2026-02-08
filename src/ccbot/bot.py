@@ -277,6 +277,11 @@ async def forward_command_handler(update: Update, context: ContextTypes.DEFAULT_
     if not update.message:
         return
 
+    # Store group chat_id for forum topic message routing
+    chat = update.message.chat
+    if chat.type in ("group", "supergroup"):
+        session_manager.set_group_chat_id(user.id, chat.id)
+
     cmd_text = update.message.text or ""
     # The full text is already a slash command like "/clear" or "/compact foo"
     cc_slash = cmd_text.split("@")[0]  # strip bot mention
@@ -331,6 +336,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     if not update.message or not update.message.text:
         return
+
+    # Store group chat_id for forum topic message routing
+    chat = update.message.chat
+    if chat.type in ("group", "supergroup"):
+        session_manager.set_group_chat_id(user.id, chat.id)
 
     text = update.message.text
     thread_id = _get_thread_id(update)
@@ -406,6 +416,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if not user or not is_user_allowed(user.id):
         await query.answer("Not authorized")
         return
+
+    # Store group chat_id for forum topic message routing
+    if query.message and query.message.chat.type in ("group", "supergroup"):
+        session_manager.set_group_chat_id(user.id, query.message.chat.id)
 
     data = query.data
 
@@ -541,7 +555,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 # Rename the topic to match the window name
                 try:
                     await context.bot.edit_forum_topic(
-                        chat_id=user.id,
+                        chat_id=session_manager.resolve_chat_id(user.id, pending_thread_id),
                         message_thread_id=pending_thread_id,
                         name=created_wname,
                     )
@@ -566,7 +580,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     if not send_ok:
                         logger.warning("Failed to forward pending text: %s", send_msg)
                         await safe_send(
-                            context.bot, user.id,
+                            context.bot,
+                            session_manager.resolve_chat_id(user.id, pending_thread_id),
                             f"❌ Failed to send pending message: {send_msg}",
                             message_thread_id=pending_thread_id,
                         )

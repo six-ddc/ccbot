@@ -12,10 +12,10 @@ from typing import Any
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
+from ..config import config
 from ..session import session_manager
 from ..telegram_sender import split_message
 from ..transcript_parser import TranscriptParser
-from ..config import config
 from .callback_data import CB_HISTORY_NEXT, CB_HISTORY_PREV
 from .message_sender import safe_edit, safe_reply, safe_send
 
@@ -124,7 +124,9 @@ async def send_history(
                 await safe_edit(target, text, reply_markup=keyboard)
             elif bot is not None and user_id is not None:
                 await safe_send(
-                    bot, user_id, text,
+                    bot,
+                    session_manager.resolve_chat_id(user_id, message_thread_id),
+                    text,
                     message_thread_id=message_thread_id,
                     reply_markup=keyboard,
                 )
@@ -198,7 +200,9 @@ async def send_history(
     elif bot is not None and user_id is not None:
         # Direct send mode (for unread catch-up after window switch)
         await safe_send(
-            bot, user_id, text,
+            bot,
+            session_manager.resolve_chat_id(user_id, message_thread_id),
+            text,
             message_thread_id=message_thread_id,
             reply_markup=keyboard,
         )

@@ -103,6 +103,7 @@ class SessionManager:
     window_states: dict[str, WindowState] = field(default_factory=dict)
     user_window_offsets: dict[int, dict[str, int]] = field(default_factory=dict)
     thread_bindings: dict[int, dict[int, str]] = field(default_factory=dict)
+    group_chat_ids: dict[int, int] = field(default_factory=dict)
 
     # Reverse index: (user_id, window_name) -> thread_id for O(1) inbound lookups
     _window_to_thread: dict[tuple[int, str], int] = field(
@@ -133,6 +134,10 @@ class SessionManager:
                 str(uid): {str(tid): wname for tid, wname in bindings.items()}
                 for uid, bindings in self.thread_bindings.items()
             },
+            "group_chat_ids": {
+                str(uid): chat_id
+                for uid, chat_id in self.group_chat_ids.items()
+            },
         }
         atomic_write_json(config.state_file, state)
         logger.debug("State saved to %s", config.state_file)
@@ -154,11 +159,16 @@ class SessionManager:
                     int(uid): {int(tid): wname for tid, wname in bindings.items()}
                     for uid, bindings in state.get("thread_bindings", {}).items()
                 }
+                self.group_chat_ids = {
+                    int(uid): int(chat_id)
+                    for uid, chat_id in state.get("group_chat_ids", {}).items()
+                }
             except (json.JSONDecodeError, ValueError) as e:
                 logger.warning(f"Failed to load state: {e}")
                 self.window_states = {}
                 self.user_window_offsets = {}
                 self.thread_bindings = {}
+                self.group_chat_ids = {}
 
     async def wait_for_session_map_entry(
         self, window_name: str, timeout: float = 5.0, interval: float = 0.5
@@ -484,6 +494,29 @@ class SessionManager:
             if resolved and resolved.session_id == session_id:
                 result.append((user_id, window_name, thread_id))
         return result
+
+    # --- Group chat ID management ---
+
+    def set_group_chat_id(self, user_id: int, chat_id: int) -> None:
+        """Store the group chat ID for a user (for forum topic message routing)."""
+        if self.group_chat_ids.get(user_id) != chat_id:
+            self.group_chat_ids[user_id] = chat_id
+            self._save_state()
+            logger.info(
+                f"Stored group chat_id {chat_id} for user {user_id}"
+            )
+
+    def resolve_chat_id(self, user_id: int, thread_id: int | None = None) -> int:
+        """Resolve the chat_id for sending messages.
+
+        In forum topics (thread_id is set), returns the stored group chat_id.
+        Falls back to user_id for direct messages or if no group_id stored.
+        """
+        if thread_id is not None:
+            group_id = self.group_chat_ids.get(user_id)
+            if group_id is not None:
+                return group_id
+        return user_id
 
     # --- Tmux helpers ---
 
