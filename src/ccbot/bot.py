@@ -323,14 +323,13 @@ async def forward_command_handler(update: Update, context: ContextTypes.DEFAULT_
 
     # Store group chat_id for forum topic message routing
     chat = update.message.chat
-    if chat.type in ("group", "supergroup"):
-        session_manager.set_group_chat_id(user.id, chat.id)
+    thread_id = _get_thread_id(update)
+    if chat.type in ("group", "supergroup") and thread_id is not None:
+        session_manager.set_group_chat_id(user.id, thread_id, chat.id)
 
     cmd_text = update.message.text or ""
     # The full text is already a slash command like "/clear" or "/compact foo"
     cc_slash = cmd_text.split("@")[0]  # strip bot mention
-
-    thread_id = _get_thread_id(update)
     wname = session_manager.resolve_window_for_thread(user.id, thread_id)
     if not wname:
         await safe_reply(update.message, "❌ No session bound to this topic.")
@@ -383,11 +382,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     # Store group chat_id for forum topic message routing
     chat = update.message.chat
-    if chat.type in ("group", "supergroup"):
-        session_manager.set_group_chat_id(user.id, chat.id)
+    thread_id = _get_thread_id(update)
+    if chat.type in ("group", "supergroup") and thread_id is not None:
+        session_manager.set_group_chat_id(user.id, thread_id, chat.id)
 
     text = update.message.text
-    thread_id = _get_thread_id(update)
 
     # Ignore text in directory browsing mode (only for the same thread)
     if context.user_data and context.user_data.get(STATE_KEY) == STATE_BROWSING_DIRECTORY:
@@ -470,7 +469,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Store group chat_id for forum topic message routing
     if query.message and query.message.chat.type in ("group", "supergroup"):
-        session_manager.set_group_chat_id(user.id, query.message.chat.id)
+        thread_id = getattr(query.message, "message_thread_id", None)
+        if thread_id is not None:
+            session_manager.set_group_chat_id(user.id, thread_id, query.message.chat.id)
 
     data = query.data
 
