@@ -39,20 +39,30 @@ def _build_history_keyboard(
 
     buttons = []
     if page_index > 0:
-        cb_data = f"{CB_HISTORY_PREV}{page_index - 1}:{window_name}:{start_byte}:{end_byte}"
-        buttons.append(InlineKeyboardButton(
-            "◀ Older",
-            callback_data=cb_data[:64],
-        ))
+        cb_data = (
+            f"{CB_HISTORY_PREV}{page_index - 1}:{window_name}:{start_byte}:{end_byte}"
+        )
+        buttons.append(
+            InlineKeyboardButton(
+                "◀ Older",
+                callback_data=cb_data[:64],
+            )
+        )
 
-    buttons.append(InlineKeyboardButton(f"{page_index + 1}/{total_pages}", callback_data="noop"))
+    buttons.append(
+        InlineKeyboardButton(f"{page_index + 1}/{total_pages}", callback_data="noop")
+    )
 
     if page_index < total_pages - 1:
-        cb_data = f"{CB_HISTORY_NEXT}{page_index + 1}:{window_name}:{start_byte}:{end_byte}"
-        buttons.append(InlineKeyboardButton(
-            "Newer ▶",
-            callback_data=cb_data[:64],
-        ))
+        cb_data = (
+            f"{CB_HISTORY_NEXT}{page_index + 1}:{window_name}:{start_byte}:{end_byte}"
+        )
+        buttons.append(
+            InlineKeyboardButton(
+                "Newer ▶",
+                callback_data=cb_data[:64],
+            )
+        )
 
     return InlineKeyboardMarkup([buttons])
 
@@ -87,7 +97,11 @@ async def send_history(
     is_unread = start_byte > 0 or end_byte > 0
     logger.debug(
         "send_history: window=%s, offset=%d, is_unread=%s, byte_range=%d-%d",
-        window_name, offset, is_unread, start_byte, end_byte,
+        window_name,
+        offset,
+        is_unread,
+        start_byte,
+        end_byte,
     )
 
     messages, total = await session_manager.get_recent_messages(
@@ -134,7 +148,9 @@ async def send_history(
                 await safe_reply(target, text, reply_markup=keyboard)
             # Update offset even if no assistant messages
             if user_id is not None and end_byte > 0:
-                session_manager.update_user_window_offset(user_id, window_name, end_byte)
+                session_manager.update_user_window_offset(
+                    user_id, window_name, end_byte
+                )
             return
 
         if is_unread:
@@ -192,7 +208,9 @@ async def send_history(
         )
         logger.debug(
             "send_history result: %d messages, %d pages, serving page %d",
-            total, len(pages), page_index,
+            total,
+            len(pages),
+            page_index,
         )
 
     if edit:

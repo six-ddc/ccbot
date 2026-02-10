@@ -6,8 +6,6 @@ Provides:
   - read_cwd_from_jsonl(): extract the cwd field from the first JSONL entry.
 """
 
-from __future__ import annotations
-
 import json
 import os
 import tempfile

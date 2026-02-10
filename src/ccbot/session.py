@@ -19,8 +19,6 @@ Key methods for thread binding access:
   - find_users_for_session: Find all users bound to a session_id
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging
@@ -81,7 +79,6 @@ class ClaudeSession:
         return self.summary
 
 
-
 @dataclass
 class UnreadInfo:
     """Information about unread messages for a user's window."""
@@ -124,12 +121,9 @@ class SessionManager:
 
     def _save_state(self) -> None:
         state = {
-            "window_states": {
-                k: v.to_dict() for k, v in self.window_states.items()
-            },
+            "window_states": {k: v.to_dict() for k, v in self.window_states.items()},
             "user_window_offsets": {
-                str(uid): offsets
-                for uid, offsets in self.user_window_offsets.items()
+                str(uid): offsets for uid, offsets in self.user_window_offsets.items()
             },
             "thread_bindings": {
                 str(uid): {str(tid): wname for tid, wname in bindings.items()}
@@ -172,7 +166,11 @@ class SessionManager:
 
         Returns True if the entry was found within timeout, False otherwise.
         """
-        logger.debug("Waiting for session_map entry: window=%s, timeout=%.1f", window_name, timeout)
+        logger.debug(
+            "Waiting for session_map entry: window=%s, timeout=%.1f",
+            window_name,
+            timeout,
+        )
         key = f"{config.tmux_session_name}:{window_name}"
         deadline = asyncio.get_event_loop().time() + timeout
         while asyncio.get_event_loop().time() < deadline:
@@ -184,13 +182,17 @@ class SessionManager:
                     info = session_map.get(key, {})
                     if info.get("session_id"):
                         # Found — load into window_states immediately
-                        logger.debug("session_map entry found for window %s", window_name)
+                        logger.debug(
+                            "session_map entry found for window %s", window_name
+                        )
                         await self.load_session_map()
                         return True
             except (json.JSONDecodeError, OSError):
                 pass
             await asyncio.sleep(interval)
-        logger.warning("Timed out waiting for session_map entry: window=%s", window_name)
+        logger.warning(
+            "Timed out waiting for session_map entry: window=%s", window_name
+        )
         return False
 
     async def load_session_map(self) -> None:
@@ -217,7 +219,7 @@ class SessionManager:
             # Only process entries for our tmux session
             if not key.startswith(prefix):
                 continue
-            window_name = key[len(prefix):]
+            window_name = key[len(prefix) :]
             valid_windows.add(window_name)
             new_sid = info.get("session_id", "")
             new_cwd = info.get("cwd", "")
@@ -322,7 +324,9 @@ class SessionManager:
 
     # --- Window → Session resolution ---
 
-    async def resolve_session_for_window(self, window_name: str) -> ClaudeSession | None:
+    async def resolve_session_for_window(
+        self, window_name: str
+    ) -> ClaudeSession | None:
         """Resolve a tmux window to the best matching Claude session.
 
         Uses persisted session_id + cwd to construct file path directly.
@@ -456,7 +460,9 @@ class SessionManager:
         return dict(self.thread_bindings.get(user_id, {}))
 
     def resolve_window_for_thread(
-        self, user_id: int, thread_id: int | None,
+        self,
+        user_id: int,
+        thread_id: int | None,
     ) -> str | None:
         """Resolve the tmux window for a user's thread.
 
@@ -477,7 +483,8 @@ class SessionManager:
                 yield user_id, thread_id, window_name
 
     async def find_users_for_session(
-        self, session_id: str,
+        self,
+        session_id: str,
     ) -> list[tuple[int, str, int]]:
         """Find all users whose thread-bound window maps to the given session_id.
 

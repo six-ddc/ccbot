@@ -11,7 +11,6 @@ Key function: convert_markdown(text) → MarkdownV2 string.
 import re
 
 import mistletoe
-import telegramify_markdown
 from mistletoe.block_token import BlockCode, remove_token
 from telegramify_markdown import _update_block, escape_latex
 from telegramify_markdown.render import TelegramMarkdownRenderer
@@ -115,7 +114,5 @@ def convert_markdown(text: str) -> str:
         if is_quote:
             parts.append(_EXPQUOTE_RE.sub(_render_expandable_quote, segment))
         else:
-            parts.append(
-                _markdownify(segment)
-            )
+            parts.append(_markdownify(segment))
     return "".join(parts)

@@ -8,7 +8,9 @@ Provides:
 TELEGRAM_MAX_MESSAGE_LENGTH = 4096
 
 
-def split_message(text: str, max_length: int = TELEGRAM_MAX_MESSAGE_LENGTH) -> list[str]:
+def split_message(
+    text: str, max_length: int = TELEGRAM_MAX_MESSAGE_LENGTH
+) -> list[str]:
     """Split a message into chunks that fit Telegram's length limit.
 
     Tries to split on newlines when possible to preserve formatting.

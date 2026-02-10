@@ -97,7 +97,9 @@ async def safe_reply(message: Message, text: str, **kwargs: Any) -> Message:
     kwargs.setdefault("link_preview_options", NO_LINK_PREVIEW)
     try:
         return await message.reply_text(
-            convert_markdown(text), parse_mode="MarkdownV2", **kwargs,
+            convert_markdown(text),
+            parse_mode="MarkdownV2",
+            **kwargs,
         )
     except RetryAfter:
         raise
@@ -110,7 +112,9 @@ async def safe_edit(target: Any, text: str, **kwargs: Any) -> None:
     kwargs.setdefault("link_preview_options", NO_LINK_PREVIEW)
     try:
         await target.edit_message_text(
-            convert_markdown(text), parse_mode="MarkdownV2", **kwargs,
+            convert_markdown(text),
+            parse_mode="MarkdownV2",
+            **kwargs,
         )
     except RetryAfter:
         raise

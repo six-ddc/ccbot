@@ -52,10 +52,17 @@ def get_interactive_window(user_id: int, thread_id: int | None = None) -> str | 
 
 
 def set_interactive_mode(
-    user_id: int, window_name: str, thread_id: int | None = None,
+    user_id: int,
+    window_name: str,
+    thread_id: int | None = None,
 ) -> None:
     """Set interactive mode for a user."""
-    logger.debug("Set interactive mode: user=%d, window=%s, thread=%s", user_id, window_name, thread_id)
+    logger.debug(
+        "Set interactive mode: user=%d, window=%s, thread=%s",
+        user_id,
+        window_name,
+        thread_id,
+    )
     _interactive_mode[(user_id, thread_id or 0)] = window_name
 
 
@@ -71,7 +78,8 @@ def get_interactive_msg_id(user_id: int, thread_id: int | None = None) -> int | 
 
 
 def _build_interactive_keyboard(
-    window_name: str, ui_name: str = "",
+    window_name: str,
+    ui_name: str = "",
 ) -> InlineKeyboardMarkup:
     """Build keyboard for interactive UI navigation.
 
@@ -82,27 +90,53 @@ def _build_interactive_keyboard(
 
     rows: list[list[InlineKeyboardButton]] = []
     # Row 1: directional keys
-    rows.append([
-        InlineKeyboardButton("␣ Space", callback_data=f"{CB_ASK_SPACE}{window_name}"[:64]),
-        InlineKeyboardButton("↑", callback_data=f"{CB_ASK_UP}{window_name}"[:64]),
-        InlineKeyboardButton("⇥ Tab", callback_data=f"{CB_ASK_TAB}{window_name}"[:64]),
-    ])
+    rows.append(
+        [
+            InlineKeyboardButton(
+                "␣ Space", callback_data=f"{CB_ASK_SPACE}{window_name}"[:64]
+            ),
+            InlineKeyboardButton("↑", callback_data=f"{CB_ASK_UP}{window_name}"[:64]),
+            InlineKeyboardButton(
+                "⇥ Tab", callback_data=f"{CB_ASK_TAB}{window_name}"[:64]
+            ),
+        ]
+    )
     if vertical_only:
-        rows.append([
-            InlineKeyboardButton("↓", callback_data=f"{CB_ASK_DOWN}{window_name}"[:64]),
-        ])
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "↓", callback_data=f"{CB_ASK_DOWN}{window_name}"[:64]
+                ),
+            ]
+        )
     else:
-        rows.append([
-            InlineKeyboardButton("←", callback_data=f"{CB_ASK_LEFT}{window_name}"[:64]),
-            InlineKeyboardButton("↓", callback_data=f"{CB_ASK_DOWN}{window_name}"[:64]),
-            InlineKeyboardButton("→", callback_data=f"{CB_ASK_RIGHT}{window_name}"[:64]),
-        ])
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    "←", callback_data=f"{CB_ASK_LEFT}{window_name}"[:64]
+                ),
+                InlineKeyboardButton(
+                    "↓", callback_data=f"{CB_ASK_DOWN}{window_name}"[:64]
+                ),
+                InlineKeyboardButton(
+                    "→", callback_data=f"{CB_ASK_RIGHT}{window_name}"[:64]
+                ),
+            ]
+        )
     # Row 2: action keys
-    rows.append([
-        InlineKeyboardButton("⎋ Esc", callback_data=f"{CB_ASK_ESC}{window_name}"[:64]),
-        InlineKeyboardButton("🔄", callback_data=f"{CB_ASK_REFRESH}{window_name}"[:64]),
-        InlineKeyboardButton("⏎ Enter", callback_data=f"{CB_ASK_ENTER}{window_name}"[:64]),
-    ])
+    rows.append(
+        [
+            InlineKeyboardButton(
+                "⎋ Esc", callback_data=f"{CB_ASK_ESC}{window_name}"[:64]
+            ),
+            InlineKeyboardButton(
+                "🔄", callback_data=f"{CB_ASK_REFRESH}{window_name}"[:64]
+            ),
+            InlineKeyboardButton(
+                "⏎ Enter", callback_data=f"{CB_ASK_ENTER}{window_name}"[:64]
+            ),
+        ]
+    )
     return InlineKeyboardMarkup(rows)
 
 
@@ -175,7 +209,9 @@ async def handle_interactive_ui(
     # Send new message
     logger.info("Sending interactive UI to user %d for window %s", user_id, window_name)
     sent = await rate_limit_send_message(
-        bot, chat_id, text,
+        bot,
+        chat_id,
+        text,
         reply_markup=keyboard,
         **thread_kwargs,  # type: ignore[arg-type]
     )
@@ -187,13 +223,20 @@ async def handle_interactive_ui(
 
 
 async def clear_interactive_msg(
-    user_id: int, bot: Bot | None = None, thread_id: int | None = None,
+    user_id: int,
+    bot: Bot | None = None,
+    thread_id: int | None = None,
 ) -> None:
     """Clear tracked interactive message, delete from chat, and exit interactive mode."""
     ikey = (user_id, thread_id or 0)
     msg_id = _interactive_msgs.pop(ikey, None)
     _interactive_mode.pop(ikey, None)
-    logger.debug("Clear interactive msg: user=%d, thread=%s, msg_id=%s", user_id, thread_id, msg_id)
+    logger.debug(
+        "Clear interactive msg: user=%d, thread=%s, msg_id=%s",
+        user_id,
+        thread_id,
+        msg_id,
+    )
     if bot and msg_id:
         chat_id = session_manager.resolve_chat_id(user_id, thread_id)
         try:

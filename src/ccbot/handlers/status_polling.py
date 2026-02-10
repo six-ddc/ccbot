@@ -57,7 +57,9 @@ async def update_status_message(
     w = await tmux_manager.find_window_by_name(window_name)
     if not w:
         # Window gone, enqueue clear
-        await enqueue_status_update(bot, user_id, window_name, None, thread_id=thread_id)
+        await enqueue_status_update(
+            bot, user_id, window_name, None, thread_id=thread_id
+        )
         return
 
     pane_text = await tmux_manager.capture_pane(w.window_id)
@@ -92,7 +94,11 @@ async def update_status_message(
 
     if status_line:
         await enqueue_status_update(
-            bot, user_id, window_name, status_line, thread_id=thread_id,
+            bot,
+            user_id,
+            window_name,
+            status_line,
+            thread_id=thread_id,
         )
     # If no status line, keep existing status message (don't clear on transient state)
 
@@ -132,11 +138,15 @@ async def status_poll_loop(bot: Bot) -> None:
                             )
                         else:
                             logger.debug(
-                                "Topic probe error for %s: %s", wname, e,
+                                "Topic probe error for %s: %s",
+                                wname,
+                                e,
                             )
                     except Exception as e:
                         logger.debug(
-                            "Topic probe error for %s: %s", wname, e,
+                            "Topic probe error for %s: %s",
+                            wname,
+                            e,
                         )
 
             for user_id, thread_id, wname in list(
@@ -158,7 +168,10 @@ async def status_poll_loop(bot: Bot) -> None:
                     if queue and not queue.empty():
                         continue
                     await update_status_message(
-                        bot, user_id, wname, thread_id=thread_id,
+                        bot,
+                        user_id,
+                        wname,
+                        thread_id=thread_id,
                     )
                 except Exception as e:
                     logger.debug(

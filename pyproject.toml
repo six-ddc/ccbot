@@ -3,7 +3,7 @@ name = "ccbot"
 version = "0.1.0"
 description = "Telegram Bot for monitoring Claude Code sessions"
 readme = "README.md"
-requires-python = ">=3.10"
+requires-python = ">=3.12"
 dependencies = [
     "python-telegram-bot>=21.0",
     "python-dotenv>=1.0.0",
@@ -20,6 +20,9 @@ ccbot = "ccbot.main:main"
 [project.optional-dependencies]
 dev = [
     "pyright>=1.1.0",
+    "pytest>=8.0",
+    "pytest-asyncio>=0.24.0",
+    "pytest-cov>=6.0",
 ]
 
 [build-system]
@@ -28,3 +31,29 @@ build-backend = "hatchling.build"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ccbot"]
+
+# Target Python 3.12
+[tool.black]
+target-version = ["py312"]
+
+[tool.ruff]
+target-version = "py312"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "integration: tests using real filesystem or external processes",
+]
+
+[tool.coverage.run]
+source = ["ccbot"]
+branch = true
+
+[tool.coverage.report]
+show_missing = true
+exclude_lines = [
+    "pragma: no cover",
+    "if __name__ == .__main__.",
+    "logger\\.",
+]

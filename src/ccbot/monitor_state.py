@@ -7,8 +7,6 @@ incremental reading after restarts without re-sending old messages.
 Key classes: MonitorState, TrackedSession.
 """
 
-from __future__ import annotations
-
 import json
 import logging
 from dataclasses import asdict, dataclass, field
@@ -31,7 +29,7 @@ class TrackedSession:
         return asdict(self)
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> TrackedSession:
+    def from_dict(cls, data: dict[str, Any]) -> "TrackedSession":
         """Create from dict."""
         return cls(
             session_id=data.get("session_id", ""),
@@ -64,7 +62,9 @@ class MonitorState:
             self.tracked_sessions = {
                 k: TrackedSession.from_dict(v) for k, v in sessions.items()
             }
-            logger.info(f"Loaded {len(self.tracked_sessions)} tracked sessions from state")
+            logger.info(
+                f"Loaded {len(self.tracked_sessions)} tracked sessions from state"
+            )
         except (json.JSONDecodeError, KeyError, TypeError) as e:
             logger.warning(f"Failed to load state file: {e}")
             self.tracked_sessions = {}
@@ -82,7 +82,9 @@ class MonitorState:
         try:
             atomic_write_json(self.state_file, data)
             self._dirty = False
-            logger.debug("Saved %d tracked sessions to state", len(self.tracked_sessions))
+            logger.debug(
+                "Saved %d tracked sessions to state", len(self.tracked_sessions)
+            )
         except OSError as e:
             logger.error("Failed to save state file: %s", e)
 
@@ -105,4 +107,3 @@ class MonitorState:
         """Save state only if it has been modified."""
         if self._dirty:
             self.save()
-

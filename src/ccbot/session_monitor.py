@@ -11,8 +11,6 @@ Optimizations: mtime cache skips unchanged files; byte offset avoids re-reading.
 Key classes: SessionMonitor, NewMessage, SessionInfo.
 """
 
-from __future__ import annotations
-
 import asyncio
 import json
 import logging
@@ -65,12 +63,14 @@ class SessionMonitor:
         poll_interval: float | None = None,
         state_file: Path | None = None,
     ):
-        self.projects_path = projects_path if projects_path is not None else config.claude_projects_path
-        self.poll_interval = poll_interval if poll_interval is not None else config.monitor_poll_interval
-
-        self.state = MonitorState(
-            state_file=state_file or config.monitor_state_file
+        self.projects_path = (
+            projects_path if projects_path is not None else config.claude_projects_path
         )
+        self.poll_interval = (
+            poll_interval if poll_interval is not None else config.monitor_poll_interval
+        )
+
+        self.state = MonitorState(state_file=state_file or config.monitor_state_file)
         self.state.load()
 
         self._running = False
@@ -144,10 +144,12 @@ class SessionMonitor:
                         indexed_ids.add(session_id)
                         file_path = Path(full_path)
                         if file_path.exists():
-                            sessions.append(SessionInfo(
-                                session_id=session_id,
-                                file_path=file_path,
-                            ))
+                            sessions.append(
+                                SessionInfo(
+                                    session_id=session_id,
+                                    file_path=file_path,
+                                )
+                            )
 
                 except (json.JSONDecodeError, OSError) as e:
                     logger.debug(f"Error reading index {index_file}: {e}")
@@ -162,7 +164,9 @@ class SessionMonitor:
                     # Determine project_path for this file
                     file_project_path = original_path
                     if not file_project_path:
-                        file_project_path = await asyncio.to_thread(read_cwd_from_jsonl, jsonl_file)
+                        file_project_path = await asyncio.to_thread(
+                            read_cwd_from_jsonl, jsonl_file
+                        )
                     if not file_project_path:
                         dir_name = project_dir.name
                         if dir_name.startswith("-"):
@@ -176,16 +180,20 @@ class SessionMonitor:
                     if norm_fp not in active_cwds:
                         continue
 
-                    sessions.append(SessionInfo(
-                        session_id=session_id,
-                        file_path=jsonl_file,
-                    ))
+                    sessions.append(
+                        SessionInfo(
+                            session_id=session_id,
+                            file_path=jsonl_file,
+                        )
+                    )
             except OSError as e:
                 logger.debug(f"Error scanning jsonl files in {project_dir}: {e}")
 
         return sessions
 
-    async def _read_new_lines(self, session: TrackedSession, file_path: Path) -> list[dict]:
+    async def _read_new_lines(
+        self, session: TrackedSession, file_path: Path
+    ) -> list[dict]:
         """Read new lines from a session file using byte offset for efficiency.
 
         Detects file truncation (e.g. after /clear) and resets offset.
@@ -224,8 +232,7 @@ class SessionMonitor:
                     elif line.strip():
                         # Partial JSONL line — don't advance offset past it
                         logger.warning(
-                            "Partial JSONL line in session %s, "
-                            "will retry next cycle",
+                            "Partial JSONL line in session %s, will retry next cycle",
                             session.session_id,
                         )
                         break
@@ -291,7 +298,9 @@ class SessionMonitor:
                     continue
 
                 # File changed, read new content from last offset
-                new_entries = await self._read_new_lines(tracked, session_info.file_path)
+                new_entries = await self._read_new_lines(
+                    tracked, session_info.file_path
+                )
                 self._file_mtimes[session_info.session_id] = current_mtime
 
                 if new_entries:
@@ -303,7 +312,8 @@ class SessionMonitor:
                 # Parse new entries using the shared logic, carrying over pending tools
                 carry = self._pending_tools.get(session_info.session_id, {})
                 parsed_entries, remaining = TranscriptParser.parse_entries(
-                    new_entries, pending_tools=carry,
+                    new_entries,
+                    pending_tools=carry,
                 )
                 if remaining:
                     self._pending_tools[session_info.session_id] = remaining
@@ -316,15 +326,17 @@ class SessionMonitor:
                     # Skip user messages unless show_user_messages is enabled
                     if entry.role == "user" and not config.show_user_messages:
                         continue
-                    new_messages.append(NewMessage(
-                        session_id=session_info.session_id,
-                        text=entry.text,
-                        is_complete=True,
-                        content_type=entry.content_type,
-                        tool_use_id=entry.tool_use_id,
-                        role=entry.role,
-                        tool_name=entry.tool_name,
-                    ))
+                    new_messages.append(
+                        NewMessage(
+                            session_id=session_info.session_id,
+                            text=entry.text,
+                            is_complete=True,
+                            content_type=entry.content_type,
+                            tool_use_id=entry.tool_use_id,
+                            role=entry.role,
+                            tool_name=entry.tool_name,
+                        )
+                    )
 
                 self.state.update_session(tracked)
 
@@ -351,7 +363,7 @@ class SessionMonitor:
                     # Only process entries for our tmux session
                     if not key.startswith(prefix):
                         continue
-                    window_name = key[len(prefix):]
+                    window_name = key[len(prefix) :]
                     session_id = info.get("session_id", "")
                     if session_id:
                         window_to_session[window_name] = session_id
@@ -370,7 +382,9 @@ class SessionMonitor:
                 stale_sessions.append(session_id)
 
         if stale_sessions:
-            logger.info(f"[Startup cleanup] Removing {len(stale_sessions)} stale sessions")
+            logger.info(
+                f"[Startup cleanup] Removing {len(stale_sessions)} stale sessions"
+            )
             for session_id in stale_sessions:
                 self.state.remove_session(session_id)
                 self._file_mtimes.pop(session_id, None)
@@ -389,7 +403,9 @@ class SessionMonitor:
         for window_name, old_session_id in self._last_session_map.items():
             new_session_id = current_map.get(window_name)
             if new_session_id and new_session_id != old_session_id:
-                logger.info(f"Window '{window_name}' session changed: {old_session_id} -> {new_session_id}")
+                logger.info(
+                    f"Window '{window_name}' session changed: {old_session_id} -> {new_session_id}"
+                )
                 sessions_to_remove.add(old_session_id)
 
         # Check for deleted windows (window in old map but not in current)
@@ -399,7 +415,9 @@ class SessionMonitor:
 
         for window_name in deleted_windows:
             old_session_id = self._last_session_map[window_name]
-            logger.info(f"Window '{window_name}' deleted, removing session {old_session_id}")
+            logger.info(
+                f"Window '{window_name}' deleted, removing session {old_session_id}"
+            )
             sessions_to_remove.add(old_session_id)
 
         # Perform cleanup
@@ -444,9 +462,7 @@ class SessionMonitor:
                 for msg in new_messages:
                     status = "complete" if msg.is_complete else "streaming"
                     preview = msg.text[:80] + ("..." if len(msg.text) > 80 else "")
-                    logger.info(
-                        "[%s] session=%s: %s", status, msg.session_id, preview
-                    )
+                    logger.info("[%s] session=%s: %s", status, msg.session_id, preview)
                     if self._message_callback:
                         try:
                             await self._message_callback(msg)
