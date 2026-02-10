@@ -6,7 +6,6 @@ Control Claude Code sessions remotely via Telegram — monitor, interact, and ma
 
 https://github.com/user-attachments/assets/15ffb38e-5eb9-4720-93b9-412e4961dc93
 
-
 ## Why CCBot?
 
 Claude Code runs in your terminal. When you step away from your computer — commuting, on the couch, or just away from your desk — the session keeps working, but you lose visibility and control.
@@ -58,20 +57,22 @@ cp .env.example .env
 
 **Required:**
 
-| Variable | Description |
-|---|---|
-| `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather |
-| `ALLOWED_USERS` | Comma-separated Telegram user IDs |
+| Variable             | Description                       |
+| -------------------- | --------------------------------- |
+| `TELEGRAM_BOT_TOKEN` | Bot token from @BotFather         |
+| `ALLOWED_USERS`      | Comma-separated Telegram user IDs |
 
 **Optional:**
 
-| Variable | Default | Description |
-|---|---|---|
-| `TMUX_SESSION_NAME` | `ccbot` | Tmux session name |
-| `CLAUDE_COMMAND` | `claude` | Command to run in new windows |
-| `MONITOR_POLL_INTERVAL` | `2.0` | Polling interval in seconds |
+| Variable                | Default    | Description                                      |
+| ----------------------- | ---------- | ------------------------------------------------ |
+| `CCBOT_DIR`             | `~/.ccbot` | Config/state directory (`.env` loaded from here) |
+| `TMUX_SESSION_NAME`     | `ccbot`    | Tmux session name                                |
+| `CLAUDE_COMMAND`        | `claude`   | Command to run in new windows                    |
+| `MONITOR_POLL_INTERVAL` | `2.0`      | Polling interval in seconds                      |
 
 > If running on a VPS where there's no interactive terminal to approve permissions, consider:
+>
 > ```
 > CLAUDE_COMMAND=IS_SANDBOX=1 claude --dangerously-skip-permissions
 > ```
@@ -98,7 +99,7 @@ Or manually add to `~/.claude/settings.json`:
 }
 ```
 
-This writes window-session mappings to `~/.ccbot/session_map.json`, so the bot automatically tracks which Claude session is running in each tmux window — even after `/clear` or session restarts.
+This writes window-session mappings to `$CCBOT_DIR/session_map.json` (`~/.ccbot/` by default), so the bot automatically tracks which Claude session is running in each tmux window — even after `/clear` or session restarts.
 
 ## Usage
 
@@ -110,22 +111,22 @@ uv run ccbot
 
 **Bot commands:**
 
-| Command | Description |
-|---|---|
-| `/start` | Show welcome message |
-| `/history` | Message history for this topic |
-| `/screenshot` | Capture terminal screenshot |
-| `/esc` | Send Escape to interrupt Claude |
+| Command       | Description                     |
+| ------------- | ------------------------------- |
+| `/start`      | Show welcome message            |
+| `/history`    | Message history for this topic  |
+| `/screenshot` | Capture terminal screenshot     |
+| `/esc`        | Send Escape to interrupt Claude |
 
 **Claude Code commands (forwarded via tmux):**
 
-| Command | Description |
-|---|---|
-| `/clear` | Clear conversation history |
+| Command    | Description                  |
+| ---------- | ---------------------------- |
+| `/clear`   | Clear conversation history   |
 | `/compact` | Compact conversation context |
-| `/cost` | Show token/cost usage |
-| `/help` | Show Claude Code help |
-| `/memory` | Edit CLAUDE.md |
+| `/cost`    | Show token/cost usage        |
+| `/help`    | Show Claude Code help        |
+| `/memory`  | Edit CLAUDE.md               |
 
 Any unrecognized `/command` is also forwarded to Claude Code as-is (e.g. `/review`, `/doctor`, `/init`).
 
@@ -169,6 +170,7 @@ I'll look into the login bug...
 ### Notifications
 
 The monitor polls session JSONL files every 2 seconds and sends notifications for:
+
 - **Assistant responses** — Claude's text replies
 - **Thinking content** — Shown as expandable blockquotes
 - **Tool use/result** — Summarized with stats (e.g. "Read 42 lines", "Found 5 matches")
@@ -197,12 +199,12 @@ The window must be in the `ccbot` tmux session (configurable via `TMUX_SESSION_N
 
 ## Data Storage
 
-| Path | Description |
-|---|---|
-| `~/.ccbot/state.json` | Thread bindings, window states, and per-user read offsets |
-| `~/.ccbot/session_map.json` | Hook-generated `{tmux_session:window_name: {session_id, cwd}}` mappings |
-| `~/.ccbot/monitor_state.json` | Monitor byte offsets per session (prevents duplicate notifications) |
-| `~/.claude/projects/` | Claude Code session data (read-only) |
+| Path                            | Description                                                             |
+| ------------------------------- | ----------------------------------------------------------------------- |
+| `$CCBOT_DIR/state.json`         | Thread bindings, window states, and per-user read offsets               |
+| `$CCBOT_DIR/session_map.json`   | Hook-generated `{tmux_session:window_name: {session_id, cwd}}` mappings |
+| `$CCBOT_DIR/monitor_state.json` | Monitor byte offsets per session (prevents duplicate notifications)     |
+| `~/.claude/projects/`           | Claude Code session data (read-only)                                    |
 
 ## File Structure
 

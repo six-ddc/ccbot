@@ -1,11 +1,12 @@
 """Hook subcommand for Claude Code session tracking.
 
 Called by Claude Code's SessionStart hook to maintain a window↔session
-mapping in ~/.ccbot/session_map.json. Also provides `--install` to
+mapping in <CCBOT_DIR>/session_map.json. Also provides `--install` to
 auto-configure the hook in ~/.claude/settings.json.
 
 This module must NOT import config.py (which requires TELEGRAM_BOT_TOKEN),
 since hooks run inside tmux panes where bot env vars are not set.
+Config directory resolution uses utils.ccbot_dir() (shared with config.py).
 
 Key functions: hook_main() (CLI entry), _install_hook().
 """
@@ -26,7 +27,6 @@ logger = logging.getLogger(__name__)
 # Validate session_id looks like a UUID
 _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
-_SESSION_MAP_FILE = Path.home() / ".ccbot" / "session_map.json"
 _CLAUDE_SETTINGS_FILE = Path.home() / ".claude" / "settings.json"
 
 # The hook command suffix for detection
@@ -118,7 +118,9 @@ def _install_hook() -> int:
 
     # Write back
     try:
-        settings_file.write_text(json.dumps(settings, indent=2, ensure_ascii=False) + "\n")
+        settings_file.write_text(
+            json.dumps(settings, indent=2, ensure_ascii=False) + "\n"
+        )
     except OSError as e:
         logger.error("Error writing %s: %s", settings_file, e)
         print(f"Error writing {settings_file}: {e}", file=sys.stderr)
@@ -192,7 +194,14 @@ def hook_main() -> None:
         return
 
     result = subprocess.run(
-        ["tmux", "display-message", "-t", pane_id, "-p", "#{session_name}:#{window_name}"],
+        [
+            "tmux",
+            "display-message",
+            "-t",
+            pane_id,
+            "-p",
+            "#{session_name}:#{window_name}",
+        ],
         capture_output=True,
         text=True,
     )
@@ -201,10 +210,14 @@ def hook_main() -> None:
         logger.warning("Failed to get session:window key from tmux (pane=%s)", pane_id)
         return
 
-    logger.debug("tmux key=%s, session_id=%s, cwd=%s", session_window_key, session_id, cwd)
+    logger.debug(
+        "tmux key=%s, session_id=%s, cwd=%s", session_window_key, session_id, cwd
+    )
 
     # Read-modify-write with file locking to prevent concurrent hook races
-    map_file = _SESSION_MAP_FILE
+    from .utils import ccbot_dir
+
+    map_file = ccbot_dir() / "session_map.json"
     map_file.parent.mkdir(parents=True, exist_ok=True)
 
     lock_path = map_file.with_suffix(".lock")
@@ -218,7 +231,9 @@ def hook_main() -> None:
                     try:
                         session_map = json.loads(map_file.read_text())
                     except (json.JSONDecodeError, OSError):
-                        logger.warning("Failed to read existing session_map, starting fresh")
+                        logger.warning(
+                            "Failed to read existing session_map, starting fresh"
+                        )
 
                 session_map[session_window_key] = {
                     "session_id": session_id,
@@ -230,7 +245,9 @@ def hook_main() -> None:
                 atomic_write_json(map_file, session_map)
                 logger.info(
                     "Updated session_map: %s -> session_id=%s, cwd=%s",
-                    session_window_key, session_id, cwd,
+                    session_window_key,
+                    session_id,
+                    cwd,
                 )
             finally:
                 fcntl.flock(lock_f, fcntl.LOCK_UN)
