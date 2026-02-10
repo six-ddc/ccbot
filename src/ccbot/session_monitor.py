@@ -392,6 +392,7 @@ class SessionMonitor:
             for session_id in stale_sessions:
                 self.state.remove_session(session_id)
                 self._file_mtimes.pop(session_id, None)
+                self._pending_tools.pop(session_id, None)
             self.state.save_if_dirty()
 
     async def _detect_and_cleanup_changes(self) -> dict[str, str]:
@@ -434,6 +435,7 @@ class SessionMonitor:
             for session_id in sessions_to_remove:
                 self.state.remove_session(session_id)
                 self._file_mtimes.pop(session_id, None)
+                self._pending_tools.pop(session_id, None)
             self.state.save_if_dirty()
 
         # Update last known map
