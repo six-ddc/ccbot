@@ -11,8 +11,6 @@ All blocking libtmux calls are wrapped in asyncio.to_thread().
 Key class: TmuxManager (singleton instantiated as `tmux_manager`).
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from dataclasses import dataclass
