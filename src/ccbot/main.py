@@ -33,8 +33,8 @@ def main() -> None:
         env_path = config_dir / ".env"
         print(f"Error: {e}\n")
         print(f"Create {env_path} with the following content:\n")
-        print(f"  TELEGRAM_BOT_TOKEN=your_bot_token_here")
-        print(f"  ALLOWED_USERS=your_telegram_user_id")
+        print("  TELEGRAM_BOT_TOKEN=your_bot_token_here")
+        print("  ALLOWED_USERS=your_telegram_user_id")
         print()
         print("Get your bot token from @BotFather on Telegram.")
         print("Get your user ID from @userinfobot on Telegram.")
