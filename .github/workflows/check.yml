@@ -1,0 +1,28 @@
+name: Check
+on:
+  push:
+  pull_request:
+    branches:
+      - main
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        python-version:
+          - "3.12"
+          - "3.13"
+    steps:
+      - uses: actions/checkout@v5
+      - uses: astral-sh/setup-uv@v5
+        with:
+          python-version: ${{ matrix.python-version }}
+      - run: uv sync --all-extras
+      - name: Formatter
+        run: |
+          uv run ruff check src/ tests/
+          uv run ruff format --check src/ tests/
+      - name: Lint
+        run: uv run pyright src/ccbot/
+      - name: Test
+        run: uv run pytest --tb=short -q
