@@ -1244,7 +1244,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
     )
 
     # Find users whose thread-bound window matches this session
-    active_users = await session_manager.find_users_for_session(msg.session_id)
+    active_users = session_manager.find_users_for_session(msg.session_id)
 
     if not active_users:
         logger.info(f"No active users for session {msg.session_id}")

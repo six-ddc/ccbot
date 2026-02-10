@@ -115,3 +115,35 @@ class TestIsWindowId:
         assert mgr._is_window_id("@") is False
         assert mgr._is_window_id("") is False
         assert mgr._is_window_id("@abc") is False
+
+
+class TestFindUsersForSession:
+    @staticmethod
+    def _ws(session_id: str):
+        from ccbot.session import WindowState
+
+        return WindowState(session_id=session_id, cwd="/tmp")
+
+    def test_returns_matching_users(self, mgr: SessionManager) -> None:
+        mgr.bind_thread(100, 1, "@1")
+        mgr.window_states["@1"] = self._ws("sid-1")
+        result = mgr.find_users_for_session("sid-1")
+        assert result == [(100, "@1", 1)]
+
+    def test_no_match_returns_empty(self, mgr: SessionManager) -> None:
+        mgr.bind_thread(100, 1, "@1")
+        mgr.window_states["@1"] = self._ws("sid-1")
+        assert mgr.find_users_for_session("sid-other") == []
+
+    def test_multiple_users_same_session(self, mgr: SessionManager) -> None:
+        mgr.bind_thread(100, 1, "@1")
+        mgr.bind_thread(200, 2, "@2")
+        mgr.window_states["@1"] = self._ws("sid-shared")
+        mgr.window_states["@2"] = self._ws("sid-shared")
+        result = mgr.find_users_for_session("sid-shared")
+        assert len(result) == 2
+        assert {r[0] for r in result} == {100, 200}
+
+    def test_ignores_windows_without_state(self, mgr: SessionManager) -> None:
+        mgr.bind_thread(100, 1, "@1")
+        assert mgr.find_users_for_session("sid-1") == []

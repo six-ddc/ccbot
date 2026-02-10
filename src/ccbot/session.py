@@ -742,18 +742,19 @@ class SessionManager:
             for thread_id, window_id in bindings.items():
                 yield user_id, thread_id, window_id
 
-    async def find_users_for_session(
+    def find_users_for_session(
         self,
         session_id: str,
     ) -> list[tuple[int, str, int]]:
         """Find all users whose thread-bound window maps to the given session_id.
 
+        Uses in-memory window_states for O(bindings) lookup with zero I/O.
         Returns list of (user_id, window_id, thread_id) tuples.
         """
         result: list[tuple[int, str, int]] = []
         for user_id, thread_id, window_id in self.iter_thread_bindings():
-            resolved = await self.resolve_session_for_window(window_id)
-            if resolved and resolved.session_id == session_id:
+            state = self.window_states.get(window_id)
+            if state and state.session_id == session_id:
                 result.append((user_id, window_id, thread_id))
         return result
 

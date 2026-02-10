@@ -100,13 +100,9 @@ class SessionMonitor:
                 cwds.add(w.cwd)
         return cwds
 
-    async def scan_projects(self) -> list[SessionInfo]:
-        """Scan projects that have active tmux windows."""
-        active_cwds = await self._get_active_cwds()
-        if not active_cwds:
-            return []
-
-        sessions = []
+    def _scan_projects_sync(self, active_cwds: set[str]) -> list[SessionInfo]:
+        """Scan filesystem for session files matching active cwds (sync, for to_thread)."""
+        sessions: list[SessionInfo] = []
 
         if not self.projects_path.exists():
             return sessions
@@ -121,9 +117,7 @@ class SessionMonitor:
 
             if index_file.exists():
                 try:
-                    async with aiofiles.open(index_file, "r") as f:
-                        content = await f.read()
-                    index_data = json.loads(content)
+                    index_data = json.loads(index_file.read_text())
                     entries = index_data.get("entries", [])
                     original_path = index_data.get("originalPath", "")
 
@@ -162,12 +156,9 @@ class SessionMonitor:
                     if session_id in indexed_ids:
                         continue
 
-                    # Determine project_path for this file
                     file_project_path = original_path
                     if not file_project_path:
-                        file_project_path = await asyncio.to_thread(
-                            read_cwd_from_jsonl, jsonl_file
-                        )
+                        file_project_path = read_cwd_from_jsonl(jsonl_file)
                     if not file_project_path:
                         dir_name = project_dir.name
                         if dir_name.startswith("-"):
@@ -191,6 +182,16 @@ class SessionMonitor:
                 logger.debug(f"Error scanning jsonl files in {project_dir}: {e}")
 
         return sessions
+
+    async def scan_projects(self) -> list[SessionInfo]:
+        """Scan projects that have active tmux windows.
+
+        Filesystem scanning runs in a thread to avoid blocking the event loop.
+        """
+        active_cwds = await self._get_active_cwds()
+        if not active_cwds:
+            return []
+        return await asyncio.to_thread(self._scan_projects_sync, active_cwds)
 
     async def _read_new_lines(
         self, session: TrackedSession, file_path: Path
