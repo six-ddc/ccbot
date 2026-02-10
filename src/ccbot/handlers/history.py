@@ -12,7 +12,6 @@ from typing import Any
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
-from ..config import config
 from ..session import session_manager
 from ..telegram_sender import split_message
 from ..transcript_parser import TranscriptParser
@@ -122,13 +121,6 @@ async def send_history(
         _start = TranscriptParser.EXPANDABLE_QUOTE_START
         _end = TranscriptParser.EXPANDABLE_QUOTE_END
 
-        # Filter messages based on config
-        if config.show_user_messages:
-            # Keep both user and assistant messages
-            pass
-        else:
-            # Filter to assistant messages only
-            messages = [m for m in messages if m["role"] == "assistant"]
         total = len(messages)
         if total == 0:
             if is_unread:

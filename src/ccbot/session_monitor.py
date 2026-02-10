@@ -325,9 +325,6 @@ class SessionMonitor:
                 for entry in parsed_entries:
                     if not entry.text:
                         continue
-                    # Skip user messages unless show_user_messages is enabled
-                    if entry.role == "user" and not config.show_user_messages:
-                        continue
                     new_messages.append(
                         NewMessage(
                             session_id=session_info.session_id,

@@ -70,10 +70,6 @@ class Config:
         self.claude_projects_path = Path.home() / ".claude" / "projects"
         self.monitor_poll_interval = float(os.getenv("MONITOR_POLL_INTERVAL", "2.0"))
 
-        # Display user messages in history and real-time notifications
-        # When True, user messages are shown with a 👤 prefix
-        self.show_user_messages = True
-
         logger.debug(
             "Config initialized: dir=%s, token=%s..., allowed_users=%d, "
             "tmux_session=%s",

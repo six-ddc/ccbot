@@ -80,21 +80,6 @@ class ClaudeSession:
     message_count: int
     file_path: str
 
-    @property
-    def short_summary(self) -> str:
-        if len(self.summary) > 30:
-            return self.summary[:27] + "..."
-        return self.summary
-
-
-@dataclass
-class UnreadInfo:
-    """Information about unread messages for a user's window."""
-
-    has_unread: bool
-    start_offset: int  # User's last read offset
-    end_offset: int  # Current file size
-
 
 @dataclass
 class SessionManager:
@@ -614,48 +599,6 @@ class SessionManager:
             self.user_window_offsets[user_id] = {}
         self.user_window_offsets[user_id][window_id] = offset
         self._save_state()
-
-    async def get_unread_info(self, user_id: int, window_id: str) -> UnreadInfo | None:
-        """Get unread message info for a user's window.
-
-        Returns UnreadInfo if there are potentially unread messages,
-        None if the session/file cannot be resolved.
-        """
-        session = await self.resolve_session_for_window(window_id)
-        if not session or not session.file_path:
-            return None
-
-        file_path = Path(session.file_path)
-        if not file_path.exists():
-            return None
-
-        try:
-            file_size = file_path.stat().st_size
-        except OSError:
-            return None
-
-        user_offset = self.get_user_window_offset(user_id, window_id)
-
-        # If user has no offset, they haven't viewed this window before
-        # Initialize to current file size (no unread)
-        if user_offset is None:
-            return UnreadInfo(
-                has_unread=False,
-                start_offset=file_size,
-                end_offset=file_size,
-            )
-
-        # Detect file truncation (e.g., after /clear)
-        if user_offset > file_size:
-            # Reset offset to 0, show all content as unread
-            user_offset = 0
-
-        has_unread = user_offset < file_size
-        return UnreadInfo(
-            has_unread=has_unread,
-            start_offset=user_offset,
-            end_offset=file_size,
-        )
 
     # --- Thread binding management ---
 
