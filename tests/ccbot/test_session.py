@@ -147,3 +147,34 @@ class TestFindUsersForSession:
     def test_ignores_windows_without_state(self, mgr: SessionManager) -> None:
         mgr.bind_thread(100, 1, "@1")
         assert mgr.find_users_for_session("sid-1") == []
+
+
+class TestParseSessionMap:
+    def test_filters_by_prefix(self) -> None:
+        from ccbot.session import parse_session_map
+
+        raw = {
+            "ccbot:win-a": {"session_id": "s1", "cwd": "/a"},
+            "other:win-b": {"session_id": "s2", "cwd": "/b"},
+        }
+        result = parse_session_map(raw, "ccbot:")
+        assert "win-a" in result
+        assert "win-b" not in result
+
+    def test_skips_empty_session_id(self) -> None:
+        from ccbot.session import parse_session_map
+
+        raw = {"ccbot:win-a": {"session_id": "", "cwd": "/a"}}
+        assert parse_session_map(raw, "ccbot:") == {}
+
+    def test_empty_input(self) -> None:
+        from ccbot.session import parse_session_map
+
+        assert parse_session_map({}, "ccbot:") == {}
+
+    def test_extracts_cwd(self) -> None:
+        from ccbot.session import parse_session_map
+
+        raw = {"ccbot:win-a": {"session_id": "s1", "cwd": "/home/user/proj"}}
+        result = parse_session_map(raw, "ccbot:")
+        assert result["win-a"]["cwd"] == "/home/user/proj"

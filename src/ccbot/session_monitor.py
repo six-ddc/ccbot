@@ -22,6 +22,7 @@ import aiofiles
 
 from .config import config
 from .monitor_state import MonitorState, TrackedSession
+from .session import parse_session_map
 from .tmux_manager import tmux_manager
 from .transcript_parser import TranscriptParser
 from .utils import read_cwd_from_jsonl
@@ -354,24 +355,17 @@ class SessionMonitor:
         to be monitored until the hook re-fires with new format.
         Only entries matching our tmux_session_name are processed.
         """
-        window_to_session: dict[str, str] = {}
         if config.session_map_file.exists():
             try:
                 async with aiofiles.open(config.session_map_file, "r") as f:
                     content = await f.read()
-                session_map = json.loads(content)
+                raw = json.loads(content)
                 prefix = f"{config.tmux_session_name}:"
-                for key, info in session_map.items():
-                    # Only process entries for our tmux session
-                    if not key.startswith(prefix):
-                        continue
-                    window_key = key[len(prefix) :]
-                    session_id = info.get("session_id", "")
-                    if session_id:
-                        window_to_session[window_key] = session_id
+                parsed = parse_session_map(raw, prefix)
+                return {k: v["session_id"] for k, v in parsed.items()}
             except (json.JSONDecodeError, OSError):
                 pass
-        return window_to_session
+        return {}
 
     async def _cleanup_all_stale_sessions(self) -> None:
         """Clean up all tracked sessions not in current session_map (used on startup)."""

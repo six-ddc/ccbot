@@ -39,6 +39,25 @@ from .utils import atomic_write_json
 logger = logging.getLogger(__name__)
 
 
+def parse_session_map(raw: dict[str, Any], prefix: str) -> dict[str, dict[str, str]]:
+    """Parse session_map.json entries matching a tmux session prefix.
+
+    Returns {window_name: {"session_id": ..., "cwd": ...}} for matching entries.
+    """
+    result: dict[str, dict[str, str]] = {}
+    for key, info in raw.items():
+        if not key.startswith(prefix):
+            continue
+        window_name = key[len(prefix) :]
+        session_id = info.get("session_id", "")
+        if session_id:
+            result[window_name] = {
+                "session_id": session_id,
+                "cwd": info.get("cwd", ""),
+            }
+    return result
+
+
 @dataclass
 class WindowState:
     """Persistent state for a tmux window.
