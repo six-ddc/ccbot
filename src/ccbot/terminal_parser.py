@@ -275,3 +275,68 @@ def extract_bash_output(pane_text: str, command: str) -> str | None:
         return None
 
     return "\n".join(raw_output).strip()
+
+
+# ── Usage modal parsing ──────────────────────────────────────────────────────────
+
+
+@dataclass
+class UsageInfo:
+    """Parsed output from Claude Code's /usage modal."""
+
+    raw_text: str  # Full captured pane text
+    parsed_lines: list[str]  # Cleaned content lines from the modal
+
+
+def parse_usage_output(pane_text: str) -> UsageInfo | None:
+    """Extract usage information from Claude Code's /usage settings tab.
+
+    The /usage modal shows a Settings overlay with a "Usage" tab containing
+    progress bars and reset times.  This parser looks for the Settings header
+    line, then collects all content until "Esc to cancel".
+
+    Returns UsageInfo with cleaned lines, or None if not detected.
+    """
+    if not pane_text:
+        return None
+
+    lines = pane_text.strip().split("\n")
+
+    # Find the Settings header that indicates we're in the usage modal
+    start_idx: int | None = None
+    end_idx: int | None = None
+
+    for i, line in enumerate(lines):
+        stripped = line.strip()
+        if start_idx is None:
+            # The usage tab header line
+            if "Settings:" in stripped and "Usage" in stripped:
+                start_idx = i + 1  # skip the header itself
+        else:
+            if stripped.startswith("Esc to"):
+                end_idx = i
+                break
+
+    if start_idx is None:
+        return None
+    if end_idx is None:
+        end_idx = len(lines)
+
+    # Collect content lines, stripping progress bar characters and whitespace
+    cleaned: list[str] = []
+    for line in lines[start_idx:end_idx]:
+        # Strip the line but preserve meaningful content
+        stripped = line.strip()
+        if not stripped:
+            continue
+        # Remove progress bar block characters but keep the rest
+        # Progress bars are like: █████▋   38% used
+        # Strip leading block chars, keep the percentage
+        stripped = re.sub(r"^[\u2580-\u259f\s]+", "", stripped).strip()
+        if stripped:
+            cleaned.append(stripped)
+
+    if cleaned:
+        return UsageInfo(raw_text=pane_text, parsed_lines=cleaned)
+
+    return None

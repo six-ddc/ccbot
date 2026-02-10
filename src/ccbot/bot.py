@@ -285,6 +285,53 @@ async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await safe_reply(update.message, "⎋ Sent Escape")
 
 
+async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Fetch Claude Code usage stats from TUI and send to Telegram."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    thread_id = _get_thread_id(update)
+    wname = session_manager.resolve_window_for_thread(user.id, thread_id)
+    if not wname:
+        await safe_reply(update.message, "No session bound to this topic.")
+        return
+
+    w = await tmux_manager.find_window_by_name(wname)
+    if not w:
+        await safe_reply(update.message, f"Window '{wname}' no longer exists.")
+        return
+
+    # Send /usage command to Claude Code TUI
+    await tmux_manager.send_keys(w.window_id, "/usage")
+    # Wait for the modal to render
+    await asyncio.sleep(2.0)
+    # Capture the pane content
+    pane_text = await tmux_manager.capture_pane(w.window_id)
+    # Dismiss the modal
+    await tmux_manager.send_keys(w.window_id, "Escape", enter=False, literal=False)
+
+    if not pane_text:
+        await safe_reply(update.message, "Failed to capture usage info.")
+        return
+
+    # Try to parse structured usage info
+    from .terminal_parser import parse_usage_output
+
+    usage = parse_usage_output(pane_text)
+    if usage and usage.parsed_lines:
+        text = "\n".join(usage.parsed_lines)
+        await safe_reply(update.message, f"```\n{text}\n```")
+    else:
+        # Fallback: send raw pane capture trimmed
+        trimmed = pane_text.strip()
+        if len(trimmed) > 3000:
+            trimmed = trimmed[:3000] + "\n... (truncated)"
+        await safe_reply(update.message, f"```\n{trimmed}\n```")
+
+
 # --- Screenshot keyboard with quick control keys ---
 
 # key_id → (tmux_key, enter, literal)
@@ -1369,6 +1416,7 @@ async def post_init(application: Application) -> None:
         BotCommand("esc", "Send Escape to interrupt Claude"),
         BotCommand("kill", "Kill session and delete topic"),
         BotCommand("unbind", "Unbind topic from session (keeps window running)"),
+        BotCommand("usage", "Show Claude Code usage remaining"),
     ]
     # Add Claude Code slash commands
     for cmd_name, desc in CC_COMMANDS.items():
@@ -1441,6 +1489,7 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("screenshot", screenshot_command))
     application.add_handler(CommandHandler("esc", esc_command))
     application.add_handler(CommandHandler("unbind", unbind_command))
+    application.add_handler(CommandHandler("usage", usage_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Topic closed event — auto-kill associated window
     application.add_handler(
