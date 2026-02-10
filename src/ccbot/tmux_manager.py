@@ -11,8 +11,6 @@ All blocking libtmux calls are wrapped in asyncio.to_thread().
 Key class: TmuxManager (singleton instantiated as `tmux_manager`).
 """
 
-from __future__ import annotations
-
 import asyncio
 import logging
 from dataclasses import dataclass
@@ -83,6 +81,7 @@ class TmuxManager:
         Returns:
             List of TmuxWindow with window info and cwd
         """
+
         def _sync_list_windows() -> list[TmuxWindow]:
             windows = []
             session = self.get_session()
@@ -136,7 +135,6 @@ class TmuxManager:
         logger.debug("Window not found: %s", window_name)
         return None
 
-
     async def capture_pane(self, window_id: str, with_ansi: bool = False) -> str | None:
         """Capture the visible text content of a window's active pane.
 
@@ -151,14 +149,21 @@ class TmuxManager:
             # Use async subprocess to call tmux capture-pane -e for ANSI colors
             try:
                 proc = await asyncio.create_subprocess_exec(
-                    "tmux", "capture-pane", "-e", "-p", "-t", window_id,
+                    "tmux",
+                    "capture-pane",
+                    "-e",
+                    "-p",
+                    "-t",
+                    window_id,
                     stdout=asyncio.subprocess.PIPE,
                     stderr=asyncio.subprocess.PIPE,
                 )
                 stdout, stderr = await proc.communicate()
                 if proc.returncode == 0:
                     return stdout.decode("utf-8")
-                logger.error(f"Failed to capture pane {window_id}: {stderr.decode('utf-8')}")
+                logger.error(
+                    f"Failed to capture pane {window_id}: {stderr.decode('utf-8')}"
+                )
                 return None
             except Exception as e:
                 logger.error(f"Unexpected error capturing pane {window_id}: {e}")
@@ -276,6 +281,7 @@ class TmuxManager:
 
     async def kill_window(self, window_id: str) -> bool:
         """Kill a tmux window by its ID."""
+
         def _sync_kill() -> bool:
             session = self.get_session()
             if not session:
@@ -294,7 +300,9 @@ class TmuxManager:
         return await asyncio.to_thread(_sync_kill)
 
     async def restart_claude_in_window(
-        self, window_name: str, command: str | None = None,
+        self,
+        window_name: str,
+        command: str | None = None,
     ) -> bool:
         """Restart Claude Code in an existing window.
 
@@ -316,10 +324,14 @@ class TmuxManager:
                 if not pane:
                     return False
                 pane.send_keys(cmd, enter=True)
-                logger.info("Restarted Claude Code in window '%s' (cmd=%s)", window_name, cmd)
+                logger.info(
+                    "Restarted Claude Code in window '%s' (cmd=%s)", window_name, cmd
+                )
                 return True
             except Exception as e:
-                logger.error("Failed to restart Claude in window '%s': %s", window_name, e)
+                logger.error(
+                    "Failed to restart Claude in window '%s': %s", window_name, e
+                )
                 return False
 
         return await asyncio.to_thread(_sync_restart)
@@ -374,7 +386,11 @@ class TmuxManager:
                         pane.send_keys(config.claude_command, enter=True)
 
                 logger.info("Created window '%s' at %s", final_window_name, path)
-                return True, f"Created window '{final_window_name}' at {path}", final_window_name
+                return (
+                    True,
+                    f"Created window '{final_window_name}' at {path}",
+                    final_window_name,
+                )
 
             except Exception as e:
                 logger.error(f"Failed to create window: {e}")

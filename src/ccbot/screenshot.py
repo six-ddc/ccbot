@@ -10,8 +10,6 @@ and a three-tier font fallback chain:
 Key function: text_to_image(text, font_size, with_ansi) → PNG bytes.
 """
 
-from __future__ import annotations
-
 import asyncio
 import io
 import logging
@@ -50,33 +48,34 @@ _SYMBOLA_CODEPOINTS: set[int] = {
 # ANSI color mapping (basic 16 colors)
 _ANSI_COLORS: dict[int, tuple[int, int, int]] = {
     # Standard colors (30-37, 40-47)
-    0: (0, 0, 0),        # Black
-    1: (205, 49, 49),    # Red
-    2: (13, 188, 121),   # Green
-    3: (229, 229, 16),   # Yellow
-    4: (36, 114, 200),   # Blue
-    5: (188, 63, 188),   # Magenta
-    6: (17, 168, 205),   # Cyan
+    0: (0, 0, 0),  # Black
+    1: (205, 49, 49),  # Red
+    2: (13, 188, 121),  # Green
+    3: (229, 229, 16),  # Yellow
+    4: (36, 114, 200),  # Blue
+    5: (188, 63, 188),  # Magenta
+    6: (17, 168, 205),  # Cyan
     7: (229, 229, 229),  # White
     # Bright colors (90-97, 100-107)
     8: (102, 102, 102),  # Bright Black
-    9: (241, 76, 76),    # Bright Red
+    9: (241, 76, 76),  # Bright Red
     10: (35, 209, 139),  # Bright Green
     11: (245, 245, 67),  # Bright Yellow
     12: (59, 142, 234),  # Bright Blue
-    13: (214, 112, 214), # Bright Magenta
+    13: (214, 112, 214),  # Bright Magenta
     14: (41, 184, 219),  # Bright Cyan
-    15: (255, 255, 255), # Bright White
+    15: (255, 255, 255),  # Bright White
 }
 
 # Default colors for terminals
 _DEFAULT_FG = (212, 212, 212)  # Light gray
-_DEFAULT_BG = (30, 30, 30)     # Dark gray
+_DEFAULT_BG = (30, 30, 30)  # Dark gray
 
 
 @dataclass
 class TextStyle:
     """Text styling information from ANSI codes."""
+
     fg_color: tuple[int, int, int] = _DEFAULT_FG
     bg_color: tuple[int, int, int] | None = None
 
@@ -84,6 +83,7 @@ class TextStyle:
 @dataclass
 class StyledSegment:
     """A text segment with its styling."""
+
     text: str
     style: TextStyle
     font_tier: int
@@ -104,12 +104,16 @@ def _font_tier(ch: str) -> int:
     if cp in _SYMBOLA_CODEPOINTS:
         return 2
     # CJK Unified Ideographs + CJK compat + fullwidth forms + known Noto-only codepoints
-    if cp in _NOTO_CODEPOINTS or cp >= 0x2E80 and (
-        cp <= 0x9FFF  # CJK radicals, kangxi, ideographs
-        or 0xF900 <= cp <= 0xFAFF  # CJK compat ideographs
-        or 0xFE30 <= cp <= 0xFE4F  # CJK compat forms
-        or 0xFF00 <= cp <= 0xFFEF  # fullwidth forms
-        or 0x20000 <= cp <= 0x2FA1F  # CJK extension B+
+    if (
+        cp in _NOTO_CODEPOINTS
+        or cp >= 0x2E80
+        and (
+            cp <= 0x9FFF  # CJK radicals, kangxi, ideographs
+            or 0xF900 <= cp <= 0xFAFF  # CJK compat ideographs
+            or 0xFE30 <= cp <= 0xFE4F  # CJK compat forms
+            or 0xFF00 <= cp <= 0xFFEF  # fullwidth forms
+            or 0x20000 <= cp <= 0x2FA1F  # CJK extension B+
+        )
     ):
         return 1
     return 0
@@ -118,7 +122,7 @@ def _font_tier(ch: str) -> int:
 def _parse_ansi_line(line: str) -> list[StyledSegment]:
     """Parse a line with ANSI escape codes into styled segments."""
     # ANSI escape sequence pattern
-    ansi_pattern = re.compile(r'\x1b\[([0-9;]*)m')
+    ansi_pattern = re.compile(r"\x1b\[([0-9;]*)m")
 
     segments: list[StyledSegment] = []
     current_style = TextStyle()
@@ -126,7 +130,7 @@ def _parse_ansi_line(line: str) -> list[StyledSegment]:
 
     for match in ansi_pattern.finditer(line):
         # Add text before this escape code
-        text_before = line[pos:match.start()]
+        text_before = line[pos : match.start()]
         if text_before:
             # Split by font tier
             for seg_text, tier in _split_line_segments_plain(text_before):
@@ -161,7 +165,7 @@ def _apply_ansi_codes(style: TextStyle, codes: str) -> TextStyle:
         bg_color=style.bg_color,
     )
 
-    parts = [int(c) for c in codes.split(';') if c]
+    parts = [int(c) for c in codes.split(";") if c]
     i = 0
     while i < len(parts):
         code = parts[i]
@@ -250,7 +254,9 @@ def _split_line_segments_plain(line: str) -> list[tuple[str, int]]:
     return segments
 
 
-async def text_to_image(text: str, font_size: int = 28, with_ansi: bool = True) -> bytes:
+async def text_to_image(
+    text: str, font_size: int = 28, with_ansi: bool = True
+) -> bytes:
     """Render monospace text onto a dark-background image and return PNG bytes.
 
     Args:
@@ -261,6 +267,7 @@ async def text_to_image(text: str, font_size: int = 28, with_ansi: bool = True) 
     Returns:
         PNG image bytes
     """
+
     def _render_image() -> bytes:
         fonts = [_load_font(p, font_size) for p in _FONT_PATHS]
 
@@ -274,7 +281,10 @@ async def text_to_image(text: str, font_size: int = 28, with_ansi: bool = True) 
             # Legacy plain text mode
             line_segments_plain = [_split_line_segments_plain(line) for line in lines]
             line_segments = [
-                [StyledSegment(seg_text, TextStyle(), tier) for seg_text, tier in segments]
+                [
+                    StyledSegment(seg_text, TextStyle(), tier)
+                    for seg_text, tier in segments
+                ]
                 for segments in line_segments_plain
             ]
 
@@ -305,7 +315,9 @@ async def text_to_image(text: str, font_size: int = 28, with_ansi: bool = True) 
                 # Draw background if specified
                 if seg.style.bg_color:
                     bbox = draw.textbbox((x, y), seg.text, font=f)
-                    draw.rectangle([bbox[0], y, bbox[2], y + line_height], fill=seg.style.bg_color)
+                    draw.rectangle(
+                        [bbox[0], y, bbox[2], y + line_height], fill=seg.style.bg_color
+                    )
 
                 # Draw text with foreground color
                 draw.text((x, y), seg.text, fill=seg.style.fg_color, font=f)

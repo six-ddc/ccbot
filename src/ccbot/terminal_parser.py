@@ -12,8 +12,6 @@ a changed Claude Code version, edit UI_PATTERNS / STATUS_SPINNERS.
 Key functions: is_interactive_ui(), extract_interactive_content(), parse_status_line().
 """
 
-from __future__ import annotations
-
 import re
 from dataclasses import dataclass
 
@@ -62,13 +60,13 @@ UI_PATTERNS: list[UIPattern] = [
     ),
     UIPattern(
         name="AskUserQuestion",
-        top=(re.compile(r"^\s*←\s+[☐✔☒]"),),   # Multi-tab: no bottom needed
+        top=(re.compile(r"^\s*←\s+[☐✔☒]"),),  # Multi-tab: no bottom needed
         bottom=(),
         min_gap=1,
     ),
     UIPattern(
         name="AskUserQuestion",
-        top=(re.compile(r"^\s*[☐✔☒]"),),        # Single-tab: bottom required
+        top=(re.compile(r"^\s*[☐✔☒]"),),  # Single-tab: bottom required
         bottom=(re.compile(r"^\s*Enter to select"),),
         min_gap=1,
     ),
@@ -101,8 +99,7 @@ _RE_LONG_DASH = re.compile(r"^─{5,}$")
 def _shorten_separators(text: str) -> str:
     """Replace lines of 5+ ─ characters with exactly ─────."""
     return "\n".join(
-        "─────" if _RE_LONG_DASH.match(line) else line
-        for line in text.split("\n")
+        "─────" if _RE_LONG_DASH.match(line) else line for line in text.split("\n")
     )
 
 
