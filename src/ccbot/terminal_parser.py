@@ -62,13 +62,13 @@ UI_PATTERNS: list[UIPattern] = [
     ),
     UIPattern(
         name="AskUserQuestion",
-        top=(re.compile(r"^\s*←\s+[☐✔☒]"),),   # Multi-tab: no bottom needed
+        top=(re.compile(r"^\s*←\s+[☐✔☒]"),),  # Multi-tab: no bottom needed
         bottom=(),
         min_gap=1,
     ),
     UIPattern(
         name="AskUserQuestion",
-        top=(re.compile(r"^\s*[☐✔☒]"),),        # Single-tab: bottom required
+        top=(re.compile(r"^\s*[☐✔☒]"),),  # Single-tab: bottom required
         bottom=(re.compile(r"^\s*Enter to select"),),
         min_gap=1,
     ),
@@ -101,8 +101,7 @@ _RE_LONG_DASH = re.compile(r"^─{5,}$")
 def _shorten_separators(text: str) -> str:
     """Replace lines of 5+ ─ characters with exactly ─────."""
     return "\n".join(
-        "─────" if _RE_LONG_DASH.match(line) else line
-        for line in text.split("\n")
+        "─────" if _RE_LONG_DASH.match(line) else line for line in text.split("\n")
     )
 
 
@@ -194,7 +193,6 @@ def parse_status_line(pane_text: str) -> str | None:
         if line[0] in STATUS_SPINNERS:
             return line[1:].strip()
     return None
-
 
 
 # ── Usage modal parsing ──────────────────────────────────────────────────────────

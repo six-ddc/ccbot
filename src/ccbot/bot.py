@@ -141,8 +141,6 @@ def _get_thread_id(update: Update) -> int | None:
     return tid
 
 
-
-
 # --- Command handlers ---
 
 
@@ -180,7 +178,9 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await send_history(update.message, wname)
 
 
-async def screenshot_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def screenshot_command(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """Capture the current tmux pane and send it as an image."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
@@ -284,7 +284,6 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await safe_reply(update.message, f"```\n{trimmed}\n```")
 
 
-
 # --- Screenshot keyboard with quick control keys ---
 
 # key_id → (tmux_key, enter, literal)
@@ -302,28 +301,45 @@ _KEYS_SEND_MAP: dict[str, tuple[str, bool, bool]] = {
 
 # key_id → display label (shown in callback answer toast)
 _KEY_LABELS: dict[str, str] = {
-    "up": "↑", "dn": "↓", "lt": "←", "rt": "→",
-    "esc": "⎋ Esc", "ent": "⏎ Enter", "spc": "␣ Space",
-    "tab": "⇥ Tab", "cc": "^C",
+    "up": "↑",
+    "dn": "↓",
+    "lt": "←",
+    "rt": "→",
+    "esc": "⎋ Esc",
+    "ent": "⏎ Enter",
+    "spc": "␣ Space",
+    "tab": "⇥ Tab",
+    "cc": "^C",
 }
 
 
 def _build_screenshot_keyboard(window_name: str) -> InlineKeyboardMarkup:
     """Build inline keyboard for screenshot: control keys + refresh."""
+
     def btn(label: str, key_id: str) -> InlineKeyboardButton:
         return InlineKeyboardButton(
-            label, callback_data=f"{CB_KEYS_PREFIX}{key_id}:{window_name}"[:64],
+            label,
+            callback_data=f"{CB_KEYS_PREFIX}{key_id}:{window_name}"[:64],
         )
 
-    return InlineKeyboardMarkup([
-        [btn("␣ Space", "spc"), btn("↑", "up"), btn("⇥ Tab", "tab")],
-        [btn("←", "lt"), btn("↓", "dn"), btn("→", "rt")],
-        [btn("⎋ Esc", "esc"), btn("^C", "cc"), btn("⏎ Enter", "ent")],
-        [InlineKeyboardButton("🔄 Refresh", callback_data=f"{CB_SCREENSHOT_REFRESH}{window_name}"[:64])],
-    ])
+    return InlineKeyboardMarkup(
+        [
+            [btn("␣ Space", "spc"), btn("↑", "up"), btn("⇥ Tab", "tab")],
+            [btn("←", "lt"), btn("↓", "dn"), btn("→", "rt")],
+            [btn("⎋ Esc", "esc"), btn("^C", "cc"), btn("⏎ Enter", "ent")],
+            [
+                InlineKeyboardButton(
+                    "🔄 Refresh",
+                    callback_data=f"{CB_SCREENSHOT_REFRESH}{window_name}"[:64],
+                )
+            ],
+        ]
+    )
 
 
-async def topic_closed_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def topic_closed_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """Handle topic closure — kill the associated tmux window and clean up state."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
@@ -340,21 +356,29 @@ async def topic_closed_handler(update: Update, context: ContextTypes.DEFAULT_TYP
             await tmux_manager.kill_window(w.window_id)
             logger.info(
                 "Topic closed: killed window %s (user=%d, thread=%d)",
-                wname, user.id, thread_id,
+                wname,
+                user.id,
+                thread_id,
             )
         else:
             logger.info(
                 "Topic closed: window %s already gone (user=%d, thread=%d)",
-                wname, user.id, thread_id,
+                wname,
+                user.id,
+                thread_id,
             )
         session_manager.unbind_thread(user.id, thread_id)
         # Clean up all memory state for this topic
         await clear_topic_state(user.id, thread_id, context.bot, context.user_data)
     else:
-        logger.debug("Topic closed: no binding (user=%d, thread=%d)", user.id, thread_id)
+        logger.debug(
+            "Topic closed: no binding (user=%d, thread=%d)", user.id, thread_id
+        )
 
 
-async def forward_command_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def forward_command_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
     """Forward any non-bot command as a slash command to the active Claude Code session."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
@@ -381,7 +405,9 @@ async def forward_command_handler(update: Update, context: ContextTypes.DEFAULT_
         await safe_reply(update.message, f"❌ Window '{wname}' no longer exists.")
         return
 
-    logger.info("Forwarding command %s to window %s (user=%d)", cc_slash, wname, user.id)
+    logger.info(
+        "Forwarding command %s to window %s (user=%d)", cc_slash, wname, user.id
+    )
     await update.message.chat.send_action(ChatAction.TYPING)
     success, message = await session_manager.send_to_window(wname, cc_slash)
     if success:
@@ -396,7 +422,8 @@ async def forward_command_handler(update: Update, context: ContextTypes.DEFAULT_
 
 
 async def unsupported_content_handler(
-    update: Update, _context: ContextTypes.DEFAULT_TYPE,
+    update: Update,
+    _context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
     """Reply to non-text messages (images, stickers, voice, etc.)."""
     if not update.message:
@@ -430,7 +457,10 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     text = update.message.text
 
     # Ignore text in directory browsing mode (only for the same thread)
-    if context.user_data and context.user_data.get(STATE_KEY) == STATE_BROWSING_DIRECTORY:
+    if (
+        context.user_data
+        and context.user_data.get(STATE_KEY) == STATE_BROWSING_DIRECTORY
+    ):
         pending_tid = context.user_data.get("_pending_thread_id")
         if pending_tid == thread_id:
             await safe_reply(
@@ -454,7 +484,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     wname = session_manager.get_window_for_thread(user.id, thread_id)
     if wname is None:
         # Unbound topic — show directory browser to create a new session
-        logger.info("Unbound topic: showing directory browser (user=%d, thread=%d)", user.id, thread_id)
+        logger.info(
+            "Unbound topic: showing directory browser (user=%d, thread=%d)",
+            user.id,
+            thread_id,
+        )
         start_path = str(Path.cwd())
         msg_text, keyboard, subdirs = build_directory_browser(start_path)
         if context.user_data is not None:
@@ -470,7 +504,12 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     # Bound topic — forward to bound window
     w = await tmux_manager.find_window_by_name(wname)
     if not w:
-        logger.info("Stale binding: window %s gone, unbinding (user=%d, thread=%d)", wname, user.id, thread_id)
+        logger.info(
+            "Stale binding: window %s gone, unbinding (user=%d, thread=%d)",
+            wname,
+            user.id,
+            thread_id,
+        )
         session_manager.unbind_thread(user.id, thread_id)
         await safe_reply(
             update.message,
@@ -511,7 +550,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     if query.message and query.message.chat.type in ("group", "supergroup"):
         cb_thread_id = _get_thread_id(update)
         if cb_thread_id is not None:
-            session_manager.set_group_chat_id(user.id, cb_thread_id, query.message.chat.id)
+            session_manager.set_group_chat_id(
+                user.id, cb_thread_id, query.message.chat.id
+            )
 
     data = query.data
 
@@ -556,26 +597,36 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Directory browser handlers
     elif data.startswith(CB_DIR_SELECT):
         # Validate: callback must come from the same topic that started browsing
-        pending_tid = context.user_data.get("_pending_thread_id") if context.user_data else None
+        pending_tid = (
+            context.user_data.get("_pending_thread_id") if context.user_data else None
+        )
         if pending_tid is not None and _get_thread_id(update) != pending_tid:
             await query.answer("Stale browser (topic mismatch)", show_alert=True)
             return
         # callback_data contains index, not dir name (to avoid 64-byte limit)
         try:
-            idx = int(data[len(CB_DIR_SELECT):])
+            idx = int(data[len(CB_DIR_SELECT) :])
         except ValueError:
             await query.answer("Invalid data")
             return
 
         # Look up dir name from cached subdirs
-        cached_dirs: list[str] = context.user_data.get(BROWSE_DIRS_KEY, []) if context.user_data else []
+        cached_dirs: list[str] = (
+            context.user_data.get(BROWSE_DIRS_KEY, []) if context.user_data else []
+        )
         if idx < 0 or idx >= len(cached_dirs):
-            await query.answer("Directory list changed, please refresh", show_alert=True)
+            await query.answer(
+                "Directory list changed, please refresh", show_alert=True
+            )
             return
         subdir_name = cached_dirs[idx]
 
         default_path = str(Path.cwd())
-        current_path = context.user_data.get(BROWSE_PATH_KEY, default_path) if context.user_data else default_path
+        current_path = (
+            context.user_data.get(BROWSE_PATH_KEY, default_path)
+            if context.user_data
+            else default_path
+        )
         new_path = (Path(current_path) / subdir_name).resolve()
 
         if not new_path.exists() or not new_path.is_dir():
@@ -594,12 +645,18 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await query.answer()
 
     elif data == CB_DIR_UP:
-        pending_tid = context.user_data.get("_pending_thread_id") if context.user_data else None
+        pending_tid = (
+            context.user_data.get("_pending_thread_id") if context.user_data else None
+        )
         if pending_tid is not None and _get_thread_id(update) != pending_tid:
             await query.answer("Stale browser (topic mismatch)", show_alert=True)
             return
         default_path = str(Path.cwd())
-        current_path = context.user_data.get(BROWSE_PATH_KEY, default_path) if context.user_data else default_path
+        current_path = (
+            context.user_data.get(BROWSE_PATH_KEY, default_path)
+            if context.user_data
+            else default_path
+        )
         current = Path(current_path).resolve()
         parent = current.parent
         # No restriction - allow navigating anywhere
@@ -616,17 +673,23 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await query.answer()
 
     elif data.startswith(CB_DIR_PAGE):
-        pending_tid = context.user_data.get("_pending_thread_id") if context.user_data else None
+        pending_tid = (
+            context.user_data.get("_pending_thread_id") if context.user_data else None
+        )
         if pending_tid is not None and _get_thread_id(update) != pending_tid:
             await query.answer("Stale browser (topic mismatch)", show_alert=True)
             return
         try:
-            pg = int(data[len(CB_DIR_PAGE):])
+            pg = int(data[len(CB_DIR_PAGE) :])
         except ValueError:
             await query.answer("Invalid data")
             return
         default_path = str(Path.cwd())
-        current_path = context.user_data.get(BROWSE_PATH_KEY, default_path) if context.user_data else default_path
+        current_path = (
+            context.user_data.get(BROWSE_PATH_KEY, default_path)
+            if context.user_data
+            else default_path
+        )
         if context.user_data is not None:
             context.user_data[BROWSE_PAGE_KEY] = pg
 
@@ -638,9 +701,15 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     elif data == CB_DIR_CONFIRM:
         default_path = str(Path.cwd())
-        selected_path = context.user_data.get(BROWSE_PATH_KEY, default_path) if context.user_data else default_path
+        selected_path = (
+            context.user_data.get(BROWSE_PATH_KEY, default_path)
+            if context.user_data
+            else default_path
+        )
         # Check if this was initiated from a thread bind flow
-        pending_thread_id: int | None = context.user_data.get("_pending_thread_id") if context.user_data else None
+        pending_thread_id: int | None = (
+            context.user_data.get("_pending_thread_id") if context.user_data else None
+        )
 
         # Validate: confirm button must come from the same topic that started browsing
         confirm_thread_id = _get_thread_id(update)
@@ -654,11 +723,16 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
         clear_browse_state(context.user_data)
 
-        success, message, created_wname = await tmux_manager.create_window(selected_path)
+        success, message, created_wname = await tmux_manager.create_window(
+            selected_path
+        )
         if success:
             logger.info(
                 "Window created: %s at %s (user=%d, thread=%s)",
-                created_wname, selected_path, user.id, pending_thread_id,
+                created_wname,
+                selected_path,
+                user.id,
+                pending_thread_id,
             )
             # Wait for Claude Code's SessionStart hook to register in session_map
             await session_manager.wait_for_session_map_entry(created_wname)
@@ -670,7 +744,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 # Rename the topic to match the window name
                 try:
                     await context.bot.edit_forum_topic(
-                        chat_id=session_manager.resolve_chat_id(user.id, pending_thread_id),
+                        chat_id=session_manager.resolve_chat_id(
+                            user.id, pending_thread_id
+                        ),
                         message_thread_id=pending_thread_id,
                         name=created_wname,
                     )
@@ -683,14 +759,23 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 )
 
                 # Send pending text if any
-                pending_text = context.user_data.get("_pending_thread_text") if context.user_data else None
+                pending_text = (
+                    context.user_data.get("_pending_thread_text")
+                    if context.user_data
+                    else None
+                )
                 if pending_text:
-                    logger.debug("Forwarding pending text to window %s (len=%d)", created_wname, len(pending_text))
+                    logger.debug(
+                        "Forwarding pending text to window %s (len=%d)",
+                        created_wname,
+                        len(pending_text),
+                    )
                     if context.user_data is not None:
                         context.user_data.pop("_pending_thread_text", None)
                         context.user_data.pop("_pending_thread_id", None)
                     send_ok, send_msg = await session_manager.send_to_window(
-                        created_wname, pending_text,
+                        created_wname,
+                        pending_text,
                     )
                     if not send_ok:
                         logger.warning("Failed to forward pending text: %s", send_msg)
@@ -713,7 +798,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await query.answer("Created" if success else "Failed")
 
     elif data == CB_DIR_CANCEL:
-        pending_tid = context.user_data.get("_pending_thread_id") if context.user_data else None
+        pending_tid = (
+            context.user_data.get("_pending_thread_id") if context.user_data else None
+        )
         if pending_tid is not None and _get_thread_id(update) != pending_tid:
             await query.answer("Stale browser (topic mismatch)", show_alert=True)
             return
@@ -726,7 +813,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Screenshot: Refresh
     elif data.startswith(CB_SCREENSHOT_REFRESH):
-        window_name = data[len(CB_SCREENSHOT_REFRESH):]
+        window_name = data[len(CB_SCREENSHOT_REFRESH) :]
         w = await tmux_manager.find_window_by_name(window_name)
         if not w:
             await query.answer("Window no longer exists", show_alert=True)
@@ -741,7 +828,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         keyboard = _build_screenshot_keyboard(window_name)
         try:
             await query.edit_message_media(
-                media=InputMediaDocument(media=io.BytesIO(png_bytes), filename="screenshot.png"),
+                media=InputMediaDocument(
+                    media=io.BytesIO(png_bytes), filename="screenshot.png"
+                ),
                 reply_markup=keyboard,
             )
             await query.answer("Refreshed")
@@ -754,7 +843,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Interactive UI: Up arrow
     elif data.startswith(CB_ASK_UP):
-        window_name = data[len(CB_ASK_UP):]
+        window_name = data[len(CB_ASK_UP) :]
         thread_id = _get_thread_id(update)
         w = await tmux_manager.find_window_by_name(window_name)
         if w:
@@ -765,72 +854,84 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Interactive UI: Down arrow
     elif data.startswith(CB_ASK_DOWN):
-        window_name = data[len(CB_ASK_DOWN):]
+        window_name = data[len(CB_ASK_DOWN) :]
         thread_id = _get_thread_id(update)
         w = await tmux_manager.find_window_by_name(window_name)
         if w:
-            await tmux_manager.send_keys(w.window_id, "Down", enter=False, literal=False)
+            await tmux_manager.send_keys(
+                w.window_id, "Down", enter=False, literal=False
+            )
             await asyncio.sleep(0.5)
             await handle_interactive_ui(context.bot, user.id, window_name, thread_id)
         await query.answer()
 
     # Interactive UI: Left arrow
     elif data.startswith(CB_ASK_LEFT):
-        window_name = data[len(CB_ASK_LEFT):]
+        window_name = data[len(CB_ASK_LEFT) :]
         thread_id = _get_thread_id(update)
         w = await tmux_manager.find_window_by_name(window_name)
         if w:
-            await tmux_manager.send_keys(w.window_id, "Left", enter=False, literal=False)
+            await tmux_manager.send_keys(
+                w.window_id, "Left", enter=False, literal=False
+            )
             await asyncio.sleep(0.5)
             await handle_interactive_ui(context.bot, user.id, window_name, thread_id)
         await query.answer()
 
     # Interactive UI: Right arrow
     elif data.startswith(CB_ASK_RIGHT):
-        window_name = data[len(CB_ASK_RIGHT):]
+        window_name = data[len(CB_ASK_RIGHT) :]
         thread_id = _get_thread_id(update)
         w = await tmux_manager.find_window_by_name(window_name)
         if w:
-            await tmux_manager.send_keys(w.window_id, "Right", enter=False, literal=False)
+            await tmux_manager.send_keys(
+                w.window_id, "Right", enter=False, literal=False
+            )
             await asyncio.sleep(0.5)
             await handle_interactive_ui(context.bot, user.id, window_name, thread_id)
         await query.answer()
 
     # Interactive UI: Escape
     elif data.startswith(CB_ASK_ESC):
-        window_name = data[len(CB_ASK_ESC):]
+        window_name = data[len(CB_ASK_ESC) :]
         thread_id = _get_thread_id(update)
         w = await tmux_manager.find_window_by_name(window_name)
         if w:
-            await tmux_manager.send_keys(w.window_id, "Escape", enter=False, literal=False)
+            await tmux_manager.send_keys(
+                w.window_id, "Escape", enter=False, literal=False
+            )
             await clear_interactive_msg(user.id, context.bot, thread_id)
         await query.answer("⎋ Esc")
 
     # Interactive UI: Enter
     elif data.startswith(CB_ASK_ENTER):
-        window_name = data[len(CB_ASK_ENTER):]
+        window_name = data[len(CB_ASK_ENTER) :]
         thread_id = _get_thread_id(update)
         w = await tmux_manager.find_window_by_name(window_name)
         if w:
-            await tmux_manager.send_keys(w.window_id, "Enter", enter=False, literal=False)
+            await tmux_manager.send_keys(
+                w.window_id, "Enter", enter=False, literal=False
+            )
             await asyncio.sleep(0.5)
             await handle_interactive_ui(context.bot, user.id, window_name, thread_id)
         await query.answer("⏎ Enter")
 
     # Interactive UI: Space
     elif data.startswith(CB_ASK_SPACE):
-        window_name = data[len(CB_ASK_SPACE):]
+        window_name = data[len(CB_ASK_SPACE) :]
         thread_id = _get_thread_id(update)
         w = await tmux_manager.find_window_by_name(window_name)
         if w:
-            await tmux_manager.send_keys(w.window_id, "Space", enter=False, literal=False)
+            await tmux_manager.send_keys(
+                w.window_id, "Space", enter=False, literal=False
+            )
             await asyncio.sleep(0.5)
             await handle_interactive_ui(context.bot, user.id, window_name, thread_id)
         await query.answer("␣ Space")
 
     # Interactive UI: Tab
     elif data.startswith(CB_ASK_TAB):
-        window_name = data[len(CB_ASK_TAB):]
+        window_name = data[len(CB_ASK_TAB) :]
         thread_id = _get_thread_id(update)
         w = await tmux_manager.find_window_by_name(window_name)
         if w:
@@ -841,20 +942,20 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
     # Interactive UI: refresh display
     elif data.startswith(CB_ASK_REFRESH):
-        window_name = data[len(CB_ASK_REFRESH):]
+        window_name = data[len(CB_ASK_REFRESH) :]
         thread_id = _get_thread_id(update)
         await handle_interactive_ui(context.bot, user.id, window_name, thread_id)
         await query.answer("🔄")
 
     # Screenshot quick keys: send key to tmux window
     elif data.startswith(CB_KEYS_PREFIX):
-        rest = data[len(CB_KEYS_PREFIX):]
+        rest = data[len(CB_KEYS_PREFIX) :]
         colon_idx = rest.find(":")
         if colon_idx < 0:
             await query.answer("Invalid data")
             return
         key_id = rest[:colon_idx]
-        window_name = rest[colon_idx + 1:]
+        window_name = rest[colon_idx + 1 :]
 
         key_info = _KEYS_SEND_MAP.get(key_id)
         if not key_info:
@@ -867,7 +968,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.answer("Window not found", show_alert=True)
             return
 
-        await tmux_manager.send_keys(w.window_id, tmux_key, enter=enter, literal=literal)
+        await tmux_manager.send_keys(
+            w.window_id, tmux_key, enter=enter, literal=literal
+        )
         await query.answer(_KEY_LABELS.get(key_id, key_id))
 
         # Refresh screenshot after key press
@@ -879,13 +982,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             try:
                 await query.edit_message_media(
                     media=InputMediaDocument(
-                        media=io.BytesIO(png_bytes), filename="screenshot.png",
+                        media=io.BytesIO(png_bytes),
+                        filename="screenshot.png",
                     ),
                     reply_markup=keyboard,
                 )
             except Exception:
                 pass  # Screenshot unchanged or message too old
-
 
 
 # --- Streaming response / notifications ---
@@ -928,7 +1031,9 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 if session and session.file_path:
                     try:
                         file_size = Path(session.file_path).stat().st_size
-                        session_manager.update_user_window_offset(user_id, wname, file_size)
+                        session_manager.update_user_window_offset(
+                            user_id, wname, file_size
+                        )
                     except OSError:
                         pass
                 continue  # Don't send the normal tool_use message
@@ -941,7 +1046,10 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             await clear_interactive_msg(user_id, bot, thread_id)
 
         parts = build_response_parts(
-            msg.text, msg.is_complete, msg.content_type, msg.role,
+            msg.text,
+            msg.is_complete,
+            msg.content_type,
+            msg.role,
         )
 
         if msg.is_complete:
@@ -1044,16 +1152,23 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("usage", usage_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Topic closed event — auto-kill associated window
-    application.add_handler(MessageHandler(
-        filters.StatusUpdate.FORUM_TOPIC_CLOSED, topic_closed_handler,
-    ))
+    application.add_handler(
+        MessageHandler(
+            filters.StatusUpdate.FORUM_TOPIC_CLOSED,
+            topic_closed_handler,
+        )
+    )
     # Forward any other /command to Claude Code
     application.add_handler(MessageHandler(filters.COMMAND, forward_command_handler))
-    application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
+    application.add_handler(
+        MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler)
+    )
     # Catch-all: non-text content (images, stickers, voice, etc.)
-    application.add_handler(MessageHandler(
-        ~filters.COMMAND & ~filters.TEXT & ~filters.StatusUpdate.ALL,
-        unsupported_content_handler,
-    ))
+    application.add_handler(
+        MessageHandler(
+            ~filters.COMMAND & ~filters.TEXT & ~filters.StatusUpdate.ALL,
+            unsupported_content_handler,
+        )
+    )
 
     return application
