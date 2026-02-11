@@ -70,9 +70,9 @@ class TestGroupFilterRegistration:
         for group_handlers in app.handlers.values():
             for handler in group_handlers:
                 if isinstance(handler, CommandHandler):
-                    assert _has_chat_filter(
-                        handler.filters
-                    ), f"CommandHandler {handler.commands} missing group filter"
+                    assert _has_chat_filter(handler.filters), (
+                        f"CommandHandler {handler.commands} missing group filter"
+                    )
 
     @patch("ccbot.bot._group_filter", filters.Chat(chat_id=-100123))
     @patch("ccbot.bot.config")
@@ -83,9 +83,9 @@ class TestGroupFilterRegistration:
         for group_handlers in app.handlers.values():
             for handler in group_handlers:
                 if isinstance(handler, MessageHandler):
-                    assert _has_chat_filter(
-                        handler.filters
-                    ), "MessageHandler missing group filter"
+                    assert _has_chat_filter(handler.filters), (
+                        "MessageHandler missing group filter"
+                    )
 
     @patch("ccbot.bot.config")
     def test_no_chat_filter_when_group_id_unset(self, mock_config: MagicMock) -> None:
