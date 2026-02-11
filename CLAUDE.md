@@ -1,6 +1,6 @@
 # CLAUDE.md
 
-ccmux — Telegram bot that bridges Telegram Forum topics to Claude Code sessions via tmux windows. Each topic is bound to one tmux window running one Claude Code instance.
+ccbot — Telegram bot that bridges Telegram Forum topics to Claude Code sessions via tmux windows. Each topic is bound to one tmux window running one Claude Code instance.
 
 Tech stack: Python, python-telegram-bot, tmux, uv.
 

@@ -1,5 +1,5 @@
 # Session state - auto-managed by specctl
-task: TASK-007-demote-commands-to-buttons
+task: TASK-015-doc-cleanup
 step: planning
-started: 2026-02-11T12:13:50Z
-base_commit: e119a07
+started: 2026-02-11T14:54:01Z
+base_commit: 01e7824

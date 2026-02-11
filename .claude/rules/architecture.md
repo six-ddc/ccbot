@@ -68,19 +68,21 @@
 └────────────────────────┘
 
 Additional modules:
+  cc_commands.py      ─ CC command discovery (skills, custom commands) + menu registration
   screenshot.py       ─ Terminal text → PNG rendering (ANSI color, font fallback)
   main.py             ─ CLI entry point
   utils.py            ─ Shared utilities (ccbot_dir, atomic_write_json)
 
 Handler modules (handlers/):
-  message_sender.py   ─ safe_reply/safe_edit/safe_send + rate_limit_send
-  message_queue.py    ─ Per-user queue + worker (merge, status dedup)
-  status_polling.py   ─ Background status line polling (1s interval)
-  response_builder.py ─ Response pagination and formatting
-  interactive_ui.py   ─ AskUserQuestion / ExitPlanMode / Permission UI
-  directory_browser.py─ Directory selection UI for new topics
-  cleanup.py          ─ Topic state cleanup on close/delete
-  callback_data.py    ─ Callback data constants
+  message_sender.py      ─ safe_reply/safe_edit/safe_send + rate_limit_send
+  message_queue.py       ─ Per-user queue + worker (merge, status dedup)
+  status_polling.py      ─ Background status line polling (1s interval)
+  response_builder.py    ─ Response pagination and formatting
+  interactive_ui.py      ─ AskUserQuestion / ExitPlanMode / Permission UI
+  directory_browser.py   ─ Directory selection UI for new topics
+  sessions_dashboard.py  ─ /sessions command: active session overview + kill
+  cleanup.py             ─ Topic state cleanup on close/delete
+  callback_data.py       ─ Callback data constants
 
 State files (~/.ccbot/ or $CCBOT_DIR/):
   state.json         ─ thread bindings + window states + display names + read offsets

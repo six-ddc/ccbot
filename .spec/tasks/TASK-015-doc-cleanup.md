@@ -1,7 +1,7 @@
 ---
 id: TASK-015
 title: Clean up documentation structure
-status: todo
+status: done
 req: REQ-005
 epic: EPIC-005
 ---
