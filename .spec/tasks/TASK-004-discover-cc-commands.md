@@ -1,7 +1,7 @@
 ---
 id: TASK-004
 title: Implement CC command discovery and menu registration
-status: in_progress
+status: done
 req: REQ-002
 epic: EPIC-002
 ---
