@@ -17,6 +17,7 @@ State dicts are keyed by (user_id, thread_id_or_0) for Telegram topic support.
 import logging
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest
 
 from ..session import session_manager
 from ..terminal_parser import extract_interactive_content, is_interactive_ui
@@ -202,9 +203,14 @@ async def handle_interactive_ui(
             )
             _interactive_mode[ikey] = window_id
             return True
+        except BadRequest as e:
+            if "Message is not modified" in e.message:
+                return True  # Content identical, no-op
+            logger.warning("BadRequest editing interactive msg: %s", e.message)
+            return False
         except Exception:
-            # Message unchanged or other error - silently ignore, don't send new
-            return True
+            logger.warning("Failed to edit interactive message", exc_info=True)
+            return False
 
     # Send new message
     logger.info(

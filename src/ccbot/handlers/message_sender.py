@@ -11,6 +11,7 @@ Functions:
   - safe_send: Send message with MarkdownV2, fallback to plain text
 """
 
+import asyncio
 import logging
 import time
 from typing import Any
@@ -25,23 +26,21 @@ logger = logging.getLogger(__name__)
 # Disable link previews in all messages to reduce visual noise
 NO_LINK_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
-# Rate limiting: last send time per user to avoid Telegram flood control
+# Rate limiting: last send time per chat to avoid Telegram flood control
 _last_send_time: dict[int, float] = {}
-MESSAGE_SEND_INTERVAL = 1.1  # seconds between messages to same user
+MESSAGE_SEND_INTERVAL = 1.1  # seconds between messages to same chat
 
 
-async def rate_limit_send(user_id: int) -> None:
-    """Wait if necessary to avoid Telegram flood control (max 1 msg/sec per user)."""
-    import asyncio
-
-    now = time.time()
-    if user_id in _last_send_time:
-        elapsed = now - _last_send_time[user_id]
+async def rate_limit_send(chat_id: int) -> None:
+    """Wait if necessary to avoid Telegram flood control (max 1 msg/sec per chat)."""
+    now = time.monotonic()
+    if chat_id in _last_send_time:
+        elapsed = now - _last_send_time[chat_id]
         if elapsed < MESSAGE_SEND_INTERVAL:
             wait_time = MESSAGE_SEND_INTERVAL - elapsed
-            logger.debug(f"Rate limiting: waiting {wait_time:.2f}s for user {user_id}")
+            logger.debug("Rate limiting: waiting %.2fs for chat %d", wait_time, chat_id)
             await asyncio.sleep(wait_time)
-    _last_send_time[user_id] = time.time()
+    _last_send_time[chat_id] = time.monotonic()
 
 
 async def _send_with_fallback(

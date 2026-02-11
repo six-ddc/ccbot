@@ -384,8 +384,9 @@ class SessionManager:
             timeout,
         )
         key = f"{config.tmux_session_name}:{window_id}"
-        deadline = asyncio.get_event_loop().time() + timeout
-        while asyncio.get_event_loop().time() < deadline:
+        loop = asyncio.get_running_loop()
+        deadline = loop.time() + timeout
+        while loop.time() < deadline:
             try:
                 if config.session_map_file.exists():
                     async with aiofiles.open(config.session_map_file, "r") as f:

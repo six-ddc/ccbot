@@ -1349,8 +1349,8 @@ async def post_init(application: Application) -> None:
     session_monitor = monitor
     logger.info("Session monitor started")
 
-    # Start status polling task
-    _status_poll_task = asyncio.create_task(status_poll_loop(application.bot))
+    # Start status polling task (routed through PTB error handler)
+    _status_poll_task = application.create_task(status_poll_loop(application.bot))
     logger.info("Status polling task started")
 
 
