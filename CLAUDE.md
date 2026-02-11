@@ -76,6 +76,15 @@ Task management via `.spec/` directory. One task per session — complete fully 
 | `/spec:new`    | Create new task or requirement  |
 | `/spec:done`   | Mark complete with evidence     |
 
+**Quick queries** (`~/.claude/scripts/specctl`):
+
+```bash
+specctl status                # Progress overview
+specctl ready                 # Next tasks (priority-ordered)
+specctl session show          # Current session state
+specctl validate              # Check for issues
+```
+
 Never mark done until: `make check` passes (fmt + lint + typecheck + test).
 
 ## Architecture Details
