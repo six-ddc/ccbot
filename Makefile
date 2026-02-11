@@ -1,4 +1,4 @@
-.PHONY: fmt lint test typecheck check install dev clean
+.PHONY: fmt lint test typecheck check install dev build clean
 
 fmt:
 	uv run ruff format src/ tests/
@@ -19,6 +19,9 @@ install:
 
 dev:
 	uv sync --extra dev
+
+build:
+	uv build
 
 clean:
 	rm -rf build/ dist/ *.egg-info .pytest_cache .ruff_cache .mypy_cache htmlcov/

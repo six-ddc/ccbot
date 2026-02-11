@@ -43,7 +43,6 @@ async def clear_topic_state(
     await clear_interactive_msg(user_id, bot, thread_id)
 
     # Clear pending thread state from user_data
-    if user_data is not None:
-        if user_data.get("_pending_thread_id") == thread_id:
-            user_data.pop("_pending_thread_id", None)
-            user_data.pop("_pending_thread_text", None)
+    if user_data is not None and user_data.get("_pending_thread_id") == thread_id:
+        user_data.pop("_pending_thread_id", None)
+        user_data.pop("_pending_thread_text", None)

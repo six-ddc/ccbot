@@ -31,6 +31,9 @@ from .callback_data import (
 # Directories per page in directory browser
 DIRS_PER_PAGE = 6
 
+# Max characters to show in a button label before truncating with "…"
+_MAX_BUTTON_LABEL_LEN = 13
+
 # User state keys
 STATE_KEY = "state"
 STATE_BROWSING_DIRECTORY = "browsing_directory"
@@ -83,7 +86,7 @@ def build_window_picker(
         row = []
         for j in range(min(2, len(windows) - i)):
             name = windows[i + j][1]
-            display = name[:12] + "…" if len(name) > 13 else name
+            display = name[:12] + "…" if len(name) > _MAX_BUTTON_LABEL_LEN else name
             row.append(
                 InlineKeyboardButton(
                     f"🖥 {display}", callback_data=f"{CB_WIN_BIND}{i + j}"
@@ -133,7 +136,7 @@ def build_directory_browser(
     for i in range(0, len(page_dirs), 2):
         row = []
         for j, name in enumerate(page_dirs[i : i + 2]):
-            display = name[:12] + "…" if len(name) > 13 else name
+            display = name[:12] + "…" if len(name) > _MAX_BUTTON_LABEL_LEN else name
             # Use global index (start + i + j) to avoid long dir names in callback_data
             idx = start + i + j
             row.append(

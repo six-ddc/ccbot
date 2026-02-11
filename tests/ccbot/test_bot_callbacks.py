@@ -2,7 +2,10 @@
 
 import pytest
 
-from ccbot.bot import _INTERACTIVE_KEY_MAP, _INTERACTIVE_PREFIXES
+from ccbot.handlers.interactive_callbacks import (
+    INTERACTIVE_KEY_MAP,
+    INTERACTIVE_PREFIXES,
+)
 from ccbot.handlers.callback_data import (
     CB_ASK_DOWN,
     CB_ASK_ENTER,
@@ -28,7 +31,7 @@ class TestInteractiveKeyMap:
             CB_ASK_SPACE,
             CB_ASK_TAB,
         }
-        assert set(_INTERACTIVE_KEY_MAP.keys()) == expected
+        assert set(INTERACTIVE_KEY_MAP.keys()) == expected
 
     @pytest.mark.parametrize(
         ("prefix", "expected_refresh"),
@@ -44,9 +47,9 @@ class TestInteractiveKeyMap:
         ],
     )
     def test_key_refresh_behavior(self, prefix: str, expected_refresh: bool) -> None:
-        _, refresh = _INTERACTIVE_KEY_MAP[prefix]
+        _, refresh = INTERACTIVE_KEY_MAP[prefix]
         assert refresh is expected_refresh
 
     def test_refresh_in_prefixes_but_not_map(self) -> None:
-        assert CB_ASK_REFRESH in _INTERACTIVE_PREFIXES
-        assert CB_ASK_REFRESH not in _INTERACTIVE_KEY_MAP
+        assert CB_ASK_REFRESH in INTERACTIVE_PREFIXES
+        assert CB_ASK_REFRESH not in INTERACTIVE_KEY_MAP

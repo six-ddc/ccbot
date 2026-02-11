@@ -1,7 +1,7 @@
 ---
 id: TASK-023
 title: Refactor callback_handler into dispatch map + modules
-status: todo
+status: done
 priority: high
 req: REQ-006
 epic: EPIC-006

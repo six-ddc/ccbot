@@ -11,6 +11,7 @@ import os
 import tempfile
 from pathlib import Path
 from typing import Any
+import contextlib
 
 CCBOT_DIR_ENV = "CCBOT_DIR"
 
@@ -42,10 +43,8 @@ def atomic_write_json(path: Path, data: Any, indent: int = 2) -> None:
             os.fsync(f.fileno())
         os.replace(tmp_path, str(path))
     except BaseException:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp_path)
-        except OSError:
-            pass
         raise
 
 

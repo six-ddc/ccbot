@@ -140,7 +140,7 @@ async def status_poll_loop(bot: Bot) -> None:
                                 wid,
                                 e,
                             )
-                    except Exception as e:
+                    except Exception as e:  # noqa: BLE001
                         logger.debug(
                             "Topic probe error for %s: %s",
                             wid,
@@ -163,12 +163,14 @@ async def status_poll_loop(bot: Bot) -> None:
                         wid,
                         thread_id=thread_id,
                     )
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     logger.debug(
-                        f"Status update error for user {user_id} "
-                        f"thread {thread_id}: {e}"
+                        "Status update error for user %s thread %s: %s",
+                        user_id,
+                        thread_id,
+                        e,
                     )
-        except Exception as e:
-            logger.error(f"Status poll loop error: {e}")
+        except Exception as e:  # noqa: BLE001
+            logger.error("Status poll loop error: %s", e)
 
         await asyncio.sleep(STATUS_POLL_INTERVAL)

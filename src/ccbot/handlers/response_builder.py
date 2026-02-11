@@ -14,6 +14,9 @@ from ..markdown_v2 import convert_markdown
 from ..telegram_sender import split_message
 from ..transcript_parser import TranscriptParser
 
+# Max length for user messages before truncation
+_MAX_USER_MSG_LENGTH = 3000
+
 
 def build_response_parts(
     text: str,
@@ -33,8 +36,8 @@ def build_response_parts(
         prefix = "👤 "
         separator = ""
         # User messages are typically short, no special processing needed
-        if len(text) > 3000:
-            text = text[:3000] + "…"
+        if len(text) > _MAX_USER_MSG_LENGTH:
+            text = text[:_MAX_USER_MSG_LENGTH] + "…"
         return [convert_markdown(f"{prefix}{text}")]
 
     # Truncate thinking content to keep it compact

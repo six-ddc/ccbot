@@ -76,7 +76,7 @@ async def _build_dashboard(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     return text, InlineKeyboardMarkup(rows)
 
 
-async def sessions_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def sessions_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle /sessions — show dashboard of all bound sessions."""
     user = update.effective_user
     if not user or not update.message:
@@ -97,7 +97,7 @@ async def handle_sessions_refresh(query: CallbackQuery, user_id: int) -> None:
 
 
 async def handle_sessions_kill(
-    query: CallbackQuery, user_id: int, window_id: str
+    query: CallbackQuery, _user_id: int, window_id: str
 ) -> None:
     """First Kill tap — show confirmation prompt."""
     display = session_manager.get_display_name(window_id)

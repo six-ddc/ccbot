@@ -1,9 +1,23 @@
 [project]
 name = "ccbot"
-version = "0.1.0"
-description = "Telegram Bot for monitoring Claude Code sessions"
+dynamic = ["version"]
+description = "Telegram bot that bridges Telegram Forum topics to Claude Code sessions via tmux"
 readme = "README.md"
-requires-python = ">=3.12"
+license = "MIT"
+requires-python = ">=3.14"
+authors = [
+    { name = "Alexei Ledenev", email = "alexei.led@gmail.com" },
+]
+classifiers = [
+    "Development Status :: 4 - Beta",
+    "Environment :: Console",
+    "Intended Audience :: Developers",
+    "License :: OSI Approved :: MIT License",
+    "Programming Language :: Python :: 3.14",
+    "Topic :: Communications :: Chat",
+    "Topic :: Software Development",
+    "Typing :: Typed",
+]
 dependencies = [
     "python-telegram-bot>=21.0",
     "python-dotenv>=1.0.0",
@@ -13,6 +27,12 @@ dependencies = [
     "telegramify-markdown>=0.5.0",
     "aiofiles>=24.0.0",
 ]
+
+[project.urls]
+Homepage = "https://github.com/alexei-led/ccbot"
+Repository = "https://github.com/alexei-led/ccbot"
+Issues = "https://github.com/alexei-led/ccbot/issues"
+Changelog = "https://github.com/alexei-led/ccbot/blob/main/CHANGELOG.md"
 
 [project.scripts]
 ccbot = "ccbot.main:main"
@@ -27,18 +47,35 @@ dev = [
 ]
 
 [build-system]
-requires = ["hatchling"]
+requires = ["hatchling", "hatch-vcs"]
 build-backend = "hatchling.build"
+
+[tool.hatch.version]
+source = "vcs"
+
+[tool.hatch.version.raw-options]
+local_scheme = "no-local-version"
+
+[tool.hatch.build.hooks.vcs]
+version-file = "src/ccbot/_version.py"
 
 [tool.hatch.build.targets.wheel]
 packages = ["src/ccbot"]
 
-# Target Python 3.12
-[tool.black]
-target-version = ["py312"]
-
 [tool.ruff]
-target-version = "py312"
+target-version = "py313"
+
+[tool.ruff.lint]
+select = ["E4", "E7", "E9", "F", "ARG", "G", "BLE", "SIM", "PLR2004"]
+
+[tool.ruff.lint.per-file-ignores]
+# Tests: unused args (fixtures, mock lambdas), magic values in assertions
+"tests/**" = ["ARG", "PLR2004"]
+# ANSI SGR codes and Unicode ranges are domain-standard numeric constants
+"src/ccbot/screenshot.py" = ["PLR2004"]
+
+[tool.pyright]
+pythonVersion = "3.14"
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

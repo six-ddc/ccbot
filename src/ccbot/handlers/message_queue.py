@@ -22,7 +22,7 @@ from dataclasses import dataclass, field
 from typing import Literal
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.error import RetryAfter
+from telegram.error import RetryAfter, TelegramError
 
 from ..markdown_v2 import convert_markdown
 from ..session import session_manager
@@ -30,6 +30,7 @@ from ..terminal_parser import parse_status_line
 from ..tmux_manager import tmux_manager
 from .callback_data import CB_STATUS_ESC, CB_STATUS_SCREENSHOT
 from .message_sender import NO_LINK_PREVIEW, rate_limit_send_message
+import contextlib
 
 logger = logging.getLogger(__name__)
 
@@ -125,9 +126,7 @@ def _can_merge_tasks(base: MessageTask, candidate: MessageTask) -> bool:
     # - tool_result: edits previous message, merging would cause order issues
     if base.content_type in ("tool_use", "tool_result"):
         return False
-    if candidate.content_type in ("tool_use", "tool_result"):
-        return False
-    return True
+    return candidate.content_type not in ("tool_use", "tool_result")
 
 
 async def _merge_content_tasks(
@@ -198,7 +197,7 @@ async def _message_queue_worker(bot: Bot, user_id: int) -> None:
     """Process message tasks for a user sequentially."""
     queue = _message_queues[user_id]
     lock = _queue_locks[user_id]
-    logger.info(f"Message queue worker started for user {user_id}")
+    logger.info("Message queue worker started for user %s", user_id)
 
     while True:
         try:
@@ -210,7 +209,9 @@ async def _message_queue_worker(bot: Bot, user_id: int) -> None:
                         queue, task, lock
                     )
                     if merge_count > 0:
-                        logger.debug(f"Merged {merge_count} tasks for user {user_id}")
+                        logger.debug(
+                            "Merged %d tasks for user %s", merge_count, user_id
+                        )
                         # Mark merged tasks as done
                         for _ in range(merge_count):
                             queue.task_done()
@@ -226,18 +227,20 @@ async def _message_queue_worker(bot: Bot, user_id: int) -> None:
                     else int(e.retry_after.total_seconds())
                 )
                 logger.warning(
-                    f"Flood control for user {user_id}, pausing {retry_secs}s"
+                    "Flood control for user %s, pausing %ss", user_id, retry_secs
                 )
                 await asyncio.sleep(retry_secs)
-            except Exception as e:
-                logger.error(f"Error processing message task for user {user_id}: {e}")
+            except Exception as e:  # noqa: BLE001
+                logger.error(
+                    "Error processing message task for user %s: %s", user_id, e
+                )
             finally:
                 queue.task_done()
         except asyncio.CancelledError:
-            logger.info(f"Message queue worker cancelled for user {user_id}")
+            logger.info("Message queue worker cancelled for user %s", user_id)
             break
-        except Exception as e:
-            logger.error(f"Unexpected error in queue worker for user {user_id}: {e}")
+        except Exception as e:  # noqa: BLE001
+            logger.error("Unexpected error in queue worker for user %s: %s", user_id, e)
 
 
 def _send_kwargs(thread_id: int | None) -> dict[str, int]:
@@ -274,7 +277,7 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                 return
             except RetryAfter:
                 raise
-            except Exception:
+            except TelegramError:
                 try:
                     # Fallback: strip markdown
                     plain_text = task.text or full_text
@@ -288,8 +291,8 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                     return
                 except RetryAfter:
                     raise
-                except Exception:
-                    logger.debug(f"Failed to edit tool msg {edit_msg_id}, sending new")
+                except TelegramError:
+                    logger.debug("Failed to edit tool msg %s, sending new", edit_msg_id)
                     # Fall through to send as new message
 
     # 2. Send content messages, converting status message to first content part
@@ -352,10 +355,8 @@ async def _convert_status_to_content(
     msg_id, stored_wid, _last_text = info
     if stored_wid != window_id:
         # Different window, just delete the old status
-        try:
+        with contextlib.suppress(Exception):
             await bot.delete_message(chat_id=chat_id, message_id=msg_id)
-        except Exception:
-            pass
         return None
 
     # Edit status message to show content (remove status buttons)
@@ -371,7 +372,7 @@ async def _convert_status_to_content(
         return msg_id
     except RetryAfter:
         raise
-    except Exception:
+    except TelegramError:
         try:
             # Fallback to plain text
             await bot.edit_message_text(
@@ -384,8 +385,8 @@ async def _convert_status_to_content(
             return msg_id
         except RetryAfter:
             raise
-        except Exception as e:
-            logger.debug(f"Failed to convert status to content: {e}")
+        except TelegramError as e:
+            logger.debug("Failed to convert status to content: %s", e)
             # Message might be deleted or too old, caller will send new message
             return None
 
@@ -409,10 +410,8 @@ async def _process_status_update_task(
     from telegram.constants import ChatAction
 
     if "esc to interrupt" in status_text.lower():
-        try:
+        with contextlib.suppress(Exception):
             await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
-        except Exception:
-            pass
 
     current_info = _status_msg_info.get(skey)
 
@@ -441,7 +440,7 @@ async def _process_status_update_task(
                 _status_msg_info[skey] = (msg_id, wid, status_text)
             except RetryAfter:
                 raise
-            except Exception:
+            except TelegramError:
                 try:
                     await bot.edit_message_text(
                         chat_id=chat_id,
@@ -453,8 +452,8 @@ async def _process_status_update_task(
                     _status_msg_info[skey] = (msg_id, wid, status_text)
                 except RetryAfter:
                     raise
-                except Exception as e:
-                    logger.debug(f"Failed to edit status message: {e}")
+                except TelegramError as e:
+                    logger.debug("Failed to edit status message: %s", e)
                     _status_msg_info.pop(skey, None)
                     await _do_send_status_message(bot, user_id, tid, wid, status_text)
     else:
@@ -499,8 +498,8 @@ async def _do_clear_status_message(
         chat_id = session_manager.resolve_chat_id(user_id, thread_id)
         try:
             await bot.delete_message(chat_id=chat_id, message_id=msg_id)
-        except Exception as e:
-            logger.debug(f"Failed to delete status message {msg_id}: {e}")
+        except TelegramError as e:
+            logger.debug("Failed to delete status message %s: %s", msg_id, e)
 
 
 async def _check_and_send_status(
@@ -606,10 +605,8 @@ async def shutdown_workers() -> None:
     """Stop all queue workers (called during bot shutdown)."""
     for user_id, worker in list(_queue_workers.items()):
         worker.cancel()
-        try:
+        with contextlib.suppress(asyncio.CancelledError):
             await worker
-        except asyncio.CancelledError:
-            pass
     _queue_workers.clear()
     _message_queues.clear()
     _queue_locks.clear()

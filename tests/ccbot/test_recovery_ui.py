@@ -4,7 +4,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ccbot.bot import _build_recovery_keyboard, callback_handler, text_handler
+from ccbot.bot import text_handler
+from ccbot.handlers.recovery_callbacks import (
+    build_recovery_keyboard,
+    handle_recovery_callback,
+)
 from ccbot.handlers.callback_data import (
     CB_RECOVERY_CANCEL,
     CB_RECOVERY_CONTINUE,
@@ -12,7 +16,7 @@ from ccbot.handlers.callback_data import (
     CB_RECOVERY_RESUME,
 )
 
-# ── Helpers ──────────────────────────────────────────────────────────────
+_RC = "ccbot.handlers.recovery_callbacks"
 
 
 def _make_update(
@@ -66,45 +70,39 @@ def _make_context(user_data: dict | None = None) -> MagicMock:
     return ctx
 
 
-# ── _build_recovery_keyboard tests ──────────────────────────────────────
-
-
 class TestBuildRecoveryKeyboard:
     def test_has_three_action_buttons(self) -> None:
-        kb = _build_recovery_keyboard("@0")
+        kb = build_recovery_keyboard("@0")
         action_row = kb.inline_keyboard[0]
         assert len(action_row) == 3
 
     def test_has_cancel_button(self) -> None:
-        kb = _build_recovery_keyboard("@0")
+        kb = build_recovery_keyboard("@0")
         cancel_row = kb.inline_keyboard[1]
         assert len(cancel_row) == 1
         assert cancel_row[0].callback_data == CB_RECOVERY_CANCEL
 
     def test_fresh_callback_data(self) -> None:
-        kb = _build_recovery_keyboard("@5")
+        kb = build_recovery_keyboard("@5")
         data = kb.inline_keyboard[0][0].callback_data
         assert data == f"{CB_RECOVERY_FRESH}@5"
 
     def test_continue_callback_data(self) -> None:
-        kb = _build_recovery_keyboard("@5")
+        kb = build_recovery_keyboard("@5")
         data = kb.inline_keyboard[0][1].callback_data
         assert data == f"{CB_RECOVERY_CONTINUE}@5"
 
     def test_resume_callback_data(self) -> None:
-        kb = _build_recovery_keyboard("@5")
+        kb = build_recovery_keyboard("@5")
         data = kb.inline_keyboard[0][2].callback_data
         assert data == f"{CB_RECOVERY_RESUME}@5"
 
     def test_callback_data_truncated_to_64_bytes(self) -> None:
         long_id = "@" + "x" * 60
-        kb = _build_recovery_keyboard(long_id)
+        kb = build_recovery_keyboard(long_id)
         for row in kb.inline_keyboard:
             for btn in row:
                 assert len(btn.callback_data) <= 64
-
-
-# ── text_handler dead window detection tests ────────────────────────────
 
 
 @pytest.fixture(autouse=True)
@@ -279,22 +277,16 @@ class TestTextHandlerDeadWindow:
         mock_sm.unbind_thread.assert_not_called()
 
 
-# ── Recovery callback handler tests ─────────────────────────────────────
-
-
 class TestRecoveryFreshCallback:
-    @patch("ccbot.bot.tmux_manager")
-    @patch("ccbot.bot.session_manager")
-    @patch("ccbot.bot.safe_edit", new_callable=AsyncMock)
-    @patch("ccbot.bot.config")
+    @patch(f"{_RC}.tmux_manager")
+    @patch(f"{_RC}.session_manager")
+    @patch(f"{_RC}.safe_edit", new_callable=AsyncMock)
     async def test_fresh_creates_window_and_rebinds(
         self,
-        mock_config: MagicMock,
-        mock_safe_edit: AsyncMock,
+        _mock_safe_edit: AsyncMock,
         mock_sm: MagicMock,
         mock_tm: MagicMock,
     ) -> None:
-        mock_config.group_id = None
         mock_sm.get_window_state.return_value = MagicMock(cwd="/tmp/project")
         mock_tm.create_window = AsyncMock(
             return_value=(True, "Window created", "project", "@5")
@@ -310,10 +302,11 @@ class TestRecoveryFreshCallback:
             "_recovery_window_id": "@0",
         }
         ctx = _make_context(user_data)
+        query = update.callback_query
 
-        with patch("ccbot.bot.Path") as mock_path:
+        with patch(f"{_RC}.Path") as mock_path:
             mock_path.return_value.is_dir.return_value = True
-            await callback_handler(update, ctx)
+            await handle_recovery_callback(query, 100, query.data, update, ctx)
 
         mock_sm.unbind_thread.assert_called_once_with(100, 42)
         mock_tm.create_window.assert_called_once_with("/tmp/project")
@@ -321,20 +314,17 @@ class TestRecoveryFreshCallback:
             100, 42, "@5", window_name="project"
         )
 
-    @patch("ccbot.bot.tmux_manager")
-    @patch("ccbot.bot.session_manager")
-    @patch("ccbot.bot.safe_edit", new_callable=AsyncMock)
-    @patch("ccbot.bot.safe_send", new_callable=AsyncMock)
-    @patch("ccbot.bot.config")
+    @patch(f"{_RC}.tmux_manager")
+    @patch(f"{_RC}.session_manager")
+    @patch(f"{_RC}.safe_edit", new_callable=AsyncMock)
+    @patch(f"{_RC}.safe_send", new_callable=AsyncMock)
     async def test_fresh_forwards_pending_message(
         self,
-        mock_config: MagicMock,
-        mock_safe_send: AsyncMock,
-        mock_safe_edit: AsyncMock,
+        _mock_safe_send: AsyncMock,
+        _mock_safe_edit: AsyncMock,
         mock_sm: MagicMock,
         mock_tm: MagicMock,
     ) -> None:
-        mock_config.group_id = None
         mock_sm.get_window_state.return_value = MagicMock(cwd="/tmp/project")
         mock_tm.create_window = AsyncMock(
             return_value=(True, "Window created", "project", "@5")
@@ -350,28 +340,26 @@ class TestRecoveryFreshCallback:
             "_recovery_window_id": "@0",
         }
         ctx = _make_context(user_data)
+        query = update.callback_query
 
-        with patch("ccbot.bot.Path") as mock_path:
+        with patch(f"{_RC}.Path") as mock_path:
             mock_path.return_value.is_dir.return_value = True
-            await callback_handler(update, ctx)
+            await handle_recovery_callback(query, 100, query.data, update, ctx)
 
         mock_sm.send_to_window.assert_called_once_with("@5", "hello")
         assert "_pending_thread_text" not in user_data
         assert "_pending_thread_id" not in user_data
         assert "_recovery_window_id" not in user_data
 
-    @patch("ccbot.bot.tmux_manager")
-    @patch("ccbot.bot.session_manager")
-    @patch("ccbot.bot.safe_edit", new_callable=AsyncMock)
-    @patch("ccbot.bot.config")
+    @patch(f"{_RC}.tmux_manager")
+    @patch(f"{_RC}.session_manager")
+    @patch(f"{_RC}.safe_edit", new_callable=AsyncMock)
     async def test_fresh_fails_when_cwd_gone(
         self,
-        mock_config: MagicMock,
         mock_safe_edit: AsyncMock,
         mock_sm: MagicMock,
-        mock_tm: MagicMock,
+        _mock_tm: MagicMock,
     ) -> None:
-        mock_config.group_id = None
         mock_sm.get_window_state.return_value = MagicMock(cwd="/gone")
         mock_sm.resolve_chat_id.return_value = -100999
 
@@ -382,84 +370,57 @@ class TestRecoveryFreshCallback:
             "_recovery_window_id": "@0",
         }
         ctx = _make_context(user_data)
+        query = update.callback_query
 
-        with patch("ccbot.bot.Path") as mock_path:
+        with patch(f"{_RC}.Path") as mock_path:
             mock_path.return_value.is_dir.return_value = False
-            await callback_handler(update, ctx)
+            await handle_recovery_callback(query, 100, query.data, update, ctx)
 
-        mock_tm.create_window.assert_not_called()
         mock_safe_edit.assert_called_once()
         assert "no longer exists" in mock_safe_edit.call_args.args[1].lower()
 
-    @patch("ccbot.bot.tmux_manager")
-    @patch("ccbot.bot.session_manager")
-    @patch("ccbot.bot.safe_edit", new_callable=AsyncMock)
-    @patch("ccbot.bot.config")
-    async def test_fresh_topic_mismatch_rejected(
-        self,
-        mock_config: MagicMock,
-        mock_safe_edit: AsyncMock,
-        mock_sm: MagicMock,
-        mock_tm: MagicMock,
-    ) -> None:
-        mock_config.group_id = None
+    async def test_fresh_topic_mismatch_rejected(self) -> None:
         update = _make_callback_update(data=f"{CB_RECOVERY_FRESH}@0", thread_id=99)
         user_data = {"_pending_thread_id": 42, "_recovery_window_id": "@0"}
         ctx = _make_context(user_data)
+        query = update.callback_query
 
-        await callback_handler(update, ctx)
+        await handle_recovery_callback(query, 100, query.data, update, ctx)
 
-        update.callback_query.answer.assert_called_once()
-        assert "mismatch" in update.callback_query.answer.call_args.args[0].lower()
+        query.answer.assert_called_once()
+        assert "mismatch" in query.answer.call_args.args[0].lower()
 
-    @patch("ccbot.bot.session_manager")
-    @patch("ccbot.bot.config")
-    async def test_fresh_no_pending_state_rejected(
-        self,
-        mock_config: MagicMock,
-        mock_sm: MagicMock,
-    ) -> None:
-        mock_config.group_id = None
+    async def test_fresh_no_pending_state_rejected(self) -> None:
         update = _make_callback_update(data=f"{CB_RECOVERY_FRESH}@0")
         ctx = _make_context({})
+        query = update.callback_query
 
-        await callback_handler(update, ctx)
+        await handle_recovery_callback(query, 100, query.data, update, ctx)
 
-        update.callback_query.answer.assert_called_once()
-        assert "mismatch" in update.callback_query.answer.call_args.args[0].lower()
+        query.answer.assert_called_once()
+        assert "mismatch" in query.answer.call_args.args[0].lower()
 
-    @patch("ccbot.bot.session_manager")
-    @patch("ccbot.bot.config")
-    async def test_fresh_window_id_mismatch_rejected(
-        self,
-        mock_config: MagicMock,
-        mock_sm: MagicMock,
-    ) -> None:
-        mock_config.group_id = None
+    async def test_fresh_window_id_mismatch_rejected(self) -> None:
         update = _make_callback_update(data=f"{CB_RECOVERY_FRESH}@999")
         user_data = {
             "_pending_thread_id": 42,
             "_recovery_window_id": "@0",
         }
         ctx = _make_context(user_data)
+        query = update.callback_query
 
-        await callback_handler(update, ctx)
+        await handle_recovery_callback(query, 100, query.data, update, ctx)
 
-        update.callback_query.answer.assert_called_once()
-        assert "mismatch" in update.callback_query.answer.call_args.args[0].lower()
+        query.answer.assert_called_once()
+        assert "mismatch" in query.answer.call_args.args[0].lower()
 
 
 class TestRecoveryCancelCallback:
-    @patch("ccbot.bot.session_manager")
-    @patch("ccbot.bot.safe_edit", new_callable=AsyncMock)
-    @patch("ccbot.bot.config")
+    @patch(f"{_RC}.safe_edit", new_callable=AsyncMock)
     async def test_cancel_clears_state(
         self,
-        mock_config: MagicMock,
         mock_safe_edit: AsyncMock,
-        mock_sm: MagicMock,
     ) -> None:
-        mock_config.group_id = None
         update = _make_callback_update(data=CB_RECOVERY_CANCEL)
         user_data = {
             "_pending_thread_id": 42,
@@ -467,8 +428,9 @@ class TestRecoveryCancelCallback:
             "_recovery_window_id": "@0",
         }
         ctx = _make_context(user_data)
+        query = update.callback_query
 
-        await callback_handler(update, ctx)
+        await handle_recovery_callback(query, 100, query.data, update, ctx)
 
         assert "_pending_thread_text" not in user_data
         assert "_pending_thread_id" not in user_data
@@ -477,38 +439,26 @@ class TestRecoveryCancelCallback:
 
 
 class TestRecoveryStubCallbacks:
-    @patch("ccbot.bot.session_manager")
-    @patch("ccbot.bot.config")
-    async def test_continue_shows_coming_soon(
-        self,
-        mock_config: MagicMock,
-        mock_sm: MagicMock,
-    ) -> None:
-        mock_config.group_id = None
+    async def test_continue_shows_coming_soon(self) -> None:
         update = _make_callback_update(data=f"{CB_RECOVERY_CONTINUE}@0")
         ctx = _make_context()
+        query = update.callback_query
 
-        await callback_handler(update, ctx)
+        await handle_recovery_callback(query, 100, query.data, update, ctx)
 
-        update.callback_query.answer.assert_called_once()
-        call_args = update.callback_query.answer.call_args
+        query.answer.assert_called_once()
+        call_args = query.answer.call_args
         msg = call_args.args[0] if call_args.args else call_args.kwargs.get("text", "")
         assert "future" in msg.lower()
 
-    @patch("ccbot.bot.session_manager")
-    @patch("ccbot.bot.config")
-    async def test_resume_shows_coming_soon(
-        self,
-        mock_config: MagicMock,
-        mock_sm: MagicMock,
-    ) -> None:
-        mock_config.group_id = None
+    async def test_resume_shows_coming_soon(self) -> None:
         update = _make_callback_update(data=f"{CB_RECOVERY_RESUME}@0")
         ctx = _make_context()
+        query = update.callback_query
 
-        await callback_handler(update, ctx)
+        await handle_recovery_callback(query, 100, query.data, update, ctx)
 
-        update.callback_query.answer.assert_called_once()
-        call_args = update.callback_query.answer.call_args
+        query.answer.assert_called_once()
+        call_args = query.answer.call_args
         msg = call_args.args[0] if call_args.args else call_args.kwargs.get("text", "")
         assert "future" in msg.lower()

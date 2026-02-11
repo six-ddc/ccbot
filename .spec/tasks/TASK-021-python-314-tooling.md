@@ -1,10 +1,17 @@
 ---
 id: TASK-021
 title: Upgrade runtime and tooling to Python 3.14
-status: todo
+status: done
 priority: high
 req: REQ-006
 epic: EPIC-006
+done-at: 2026-02-11T16:00:04Z
+done-summary: Upgraded to Python 3.14: pyproject.toml targets >=3.14, ruff py314, pyright 3.14, removed vestigial [tool.black], added make build, regenerated lockfile
+done-files:
+  - pyproject.toml
+  - Makefile
+  - uv.lock
+done-tests: 340 passed on Python 3.14.3
 ---
 
 # TASK-021: Upgrade runtime and tooling to Python 3.14

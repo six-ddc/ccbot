@@ -14,10 +14,11 @@ Provides:
 State dicts are keyed by (user_id, thread_id_or_0) for Telegram topic support.
 """
 
+import contextlib
 import logging
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
-from telegram.error import BadRequest
+from telegram.error import BadRequest, TelegramError
 
 from ..session import session_manager
 from ..terminal_parser import extract_interactive_content, is_interactive_ui
@@ -208,7 +209,7 @@ async def handle_interactive_ui(
                 return True  # Content identical, no-op
             logger.warning("BadRequest editing interactive msg: %s", e.message)
             return False
-        except Exception:
+        except Exception:  # noqa: BLE001
             logger.warning("Failed to edit interactive message", exc_info=True)
             return False
 
@@ -247,7 +248,5 @@ async def clear_interactive_msg(
     )
     if bot and msg_id:
         chat_id = session_manager.resolve_chat_id(user_id, thread_id)
-        try:
+        with contextlib.suppress(TelegramError):
             await bot.delete_message(chat_id=chat_id, message_id=msg_id)
-        except Exception:
-            pass  # Message may already be deleted or too old

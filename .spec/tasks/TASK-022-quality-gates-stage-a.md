@@ -1,11 +1,20 @@
 ---
 id: TASK-022
 title: "Quality gates Stage A: ARG, G, BLE, SIM, PLR2004"
-status: todo
+status: done
 priority: normal
 req: REQ-006
 epic: EPIC-006
 depends: [TASK-021]
+done-at: 2026-02-11T16:06:00Z
+done-summary: Fixed all ARG, G, BLE, SIM, PLR2004 violations across 5 files. All tests pass (340), lint clean, type check 0 errors.
+done-files:
+  - src/ccbot/handlers/message_sender.py
+  - src/ccbot/handlers/sessions_dashboard.py
+  - src/ccbot/screenshot.py
+  - src/ccbot/transcript_parser.py
+  - src/ccbot/bot.py
+done-tests: 340 passed
 ---
 
 # TASK-022: Quality gates Stage A

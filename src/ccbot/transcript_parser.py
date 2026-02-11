@@ -67,6 +67,7 @@ class TranscriptParser:
     # Magic string constants
     _NO_CONTENT_PLACEHOLDER = "(no content)"
     _INTERRUPTED_TEXT = "[Request interrupted by user for tool use]"
+    _ERROR_SUMMARY_LIMIT = 100
     _MAX_SUMMARY_LENGTH = 200
 
     @staticmethod
@@ -124,11 +125,10 @@ class TranscriptParser:
         for item in content_list:
             if isinstance(item, str):
                 texts.append(item)
-            elif isinstance(item, dict):
-                if item.get("type") == "text":
-                    text = item.get("text", "")
-                    if text:
-                        texts.append(text)
+            elif isinstance(item, dict) and item.get("type") == "text":
+                text = item.get("text", "")
+                if text:
+                    texts.append(text)
 
         return "\n".join(texts)
 
@@ -395,10 +395,9 @@ class TranscriptParser:
         last_cmd_name: str | None = None
         # Pending tool_use blocks keyed by id
         _carry_over = pending_tools is not None
-        if pending_tools is None:
-            pending_tools = {}
-        else:
-            pending_tools = dict(pending_tools)  # don't mutate caller's dict
+        pending_tools = (
+            {} if pending_tools is None else dict(pending_tools)
+        )  # don't mutate caller's dict
 
         for data in entries:
             msg_type = cls.get_message_type(data)
@@ -431,10 +430,7 @@ class TranscriptParser:
                         else:
                             formatted = f"❯ `{cmd}`\n`{text}`"
                     else:
-                        if "\n" in text:
-                            formatted = f"```\n{text}\n```"
-                        else:
-                            formatted = f"`{text}`"
+                        formatted = f"```\n{text}\n```" if "\n" in text else f"`{text}`"
                     result.append(
                         ParsedEntry(
                             role="assistant",
@@ -590,16 +586,15 @@ class TranscriptParser:
                             )
                         elif is_error:
                             # Show error in stats line
-                            if tool_summary:
-                                entry_text = tool_summary
-                            else:
-                                entry_text = "**Error**"
+                            entry_text = tool_summary or "**Error**"
                             # Add error message in stats format
                             if result_text:
                                 # Take first line of error as summary
                                 error_summary = result_text.split("\n")[0]
-                                if len(error_summary) > 100:
-                                    error_summary = error_summary[:100] + "…"
+                                if len(error_summary) > cls._ERROR_SUMMARY_LIMIT:
+                                    error_summary = (
+                                        error_summary[: cls._ERROR_SUMMARY_LIMIT] + "…"
+                                    )
                                 entry_text += f"\n  ⎿  Error: {error_summary}"
                                 # If multi-line error, add expandable quote
                                 if "\n" in result_text:

@@ -56,7 +56,7 @@ class TmuxManager:
         """Get the tmux session if it exists."""
         try:
             return self.server.sessions.get(session_name=self.session_name)
-        except Exception:
+        except Exception:  # noqa: BLE001
             return None
 
     def get_or_create_session(self) -> libtmux.Session:
@@ -113,8 +113,8 @@ class TmuxManager:
                             pane_current_command=pane_cmd,
                         )
                     )
-                except Exception as e:
-                    logger.debug(f"Error getting window info: {e}")
+                except Exception as e:  # noqa: BLE001
+                    logger.debug("Error getting window info: %s", e)
 
             return windows
 
@@ -179,11 +179,11 @@ class TmuxManager:
                 if proc.returncode == 0:
                     return stdout.decode("utf-8")
                 logger.error(
-                    f"Failed to capture pane {window_id}: {stderr.decode('utf-8')}"
+                    "Failed to capture pane %s: %s", window_id, stderr.decode("utf-8")
                 )
                 return None
-            except Exception as e:
-                logger.error(f"Unexpected error capturing pane {window_id}: {e}")
+            except Exception as e:  # noqa: BLE001
+                logger.error("Unexpected error capturing pane %s: %s", window_id, e)
                 return None
 
         # Original implementation for plain text - wrap in thread
@@ -200,8 +200,8 @@ class TmuxManager:
                     return None
                 lines = pane.capture_pane()
                 return "\n".join(lines) if isinstance(lines, list) else str(lines)
-            except Exception as e:
-                logger.error(f"Failed to capture pane {window_id}: {e}")
+            except Exception as e:  # noqa: BLE001
+                logger.error("Failed to capture pane %s: %s", window_id, e)
                 return None
 
         return await asyncio.to_thread(_sync_capture)
@@ -235,16 +235,16 @@ class TmuxManager:
                 try:
                     window = session.windows.get(window_id=window_id)
                     if not window:
-                        logger.error(f"Window {window_id} not found")
+                        logger.error("Window %s not found", window_id)
                         return False
                     pane = window.active_pane
                     if not pane:
-                        logger.error(f"No active pane in window {window_id}")
+                        logger.error("No active pane in window %s", window_id)
                         return False
                     pane.send_keys(chars, enter=False, literal=True)
                     return True
-                except Exception as e:
-                    logger.error(f"Failed to send keys to window {window_id}: {e}")
+                except Exception as e:  # noqa: BLE001
+                    logger.error("Failed to send keys to window %s: %s", window_id, e)
                     return False
 
             def _send_enter() -> bool:
@@ -260,8 +260,8 @@ class TmuxManager:
                         return False
                     pane.send_keys("", enter=True, literal=False)
                     return True
-                except Exception as e:
-                    logger.error(f"Failed to send Enter to window {window_id}: {e}")
+                except Exception as e:  # noqa: BLE001
+                    logger.error("Failed to send Enter to window %s: %s", window_id, e)
                     return False
 
             # Claude Code's ! command mode: send "!" first so the TUI
@@ -290,19 +290,19 @@ class TmuxManager:
             try:
                 window = session.windows.get(window_id=window_id)
                 if not window:
-                    logger.error(f"Window {window_id} not found")
+                    logger.error("Window %s not found", window_id)
                     return False
 
                 pane = window.active_pane
                 if not pane:
-                    logger.error(f"No active pane in window {window_id}")
+                    logger.error("No active pane in window %s", window_id)
                     return False
 
                 pane.send_keys(text, enter=enter, literal=literal)
                 return True
 
-            except Exception as e:
-                logger.error(f"Failed to send keys to window {window_id}: {e}")
+            except Exception as e:  # noqa: BLE001
+                logger.error("Failed to send keys to window %s: %s", window_id, e)
                 return False
 
         return await asyncio.to_thread(_sync_send_keys)
@@ -321,8 +321,8 @@ class TmuxManager:
                 window.kill()
                 logger.info("Killed window %s", window_id)
                 return True
-            except Exception as e:
-                logger.error(f"Failed to kill window {window_id}: {e}")
+            except Exception as e:  # noqa: BLE001
+                logger.error("Failed to kill window %s: %s", window_id, e)
                 return False
 
         return await asyncio.to_thread(_sync_kill)
@@ -391,8 +391,8 @@ class TmuxManager:
                     wid,
                 )
 
-            except Exception as e:
-                logger.error(f"Failed to create window: {e}")
+            except Exception as e:  # noqa: BLE001
+                logger.error("Failed to create window: %s", e)
                 return False, f"Failed to create window: {e}", "", ""
 
         return await asyncio.to_thread(_create_and_start)

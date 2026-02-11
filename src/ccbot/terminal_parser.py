@@ -96,6 +96,9 @@ UI_PATTERNS: list[UIPattern] = [
 
 _RE_LONG_DASH = re.compile(r"^─{5,}$")
 
+# Minimum number of "─" characters to recognize a line as a separator
+_MIN_SEPARATOR_WIDTH = 20
+
 
 def _shorten_separators(text: str) -> str:
     """Replace lines of 5+ ─ characters with exactly ─────."""
@@ -214,7 +217,7 @@ def strip_pane_chrome(lines: list[str]) -> list[str]:
     search_start = max(0, len(lines) - 10)
     for i in range(search_start, len(lines)):
         stripped = lines[i].strip()
-        if len(stripped) >= 20 and all(c == "─" for c in stripped):
+        if len(stripped) >= _MIN_SEPARATOR_WIDTH and all(c == "─" for c in stripped):
             return lines[:i]
     return lines
 

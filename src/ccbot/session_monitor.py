@@ -30,6 +30,8 @@ from .utils import read_cwd_from_jsonl
 
 logger = logging.getLogger(__name__)
 
+_MSG_PREVIEW_LENGTH = 80
+
 
 @dataclass
 class SessionInfo:
@@ -167,7 +169,7 @@ class SessionMonitor:
                             )
 
                 except (json.JSONDecodeError, OSError) as e:
-                    logger.debug(f"Error reading index {index_file}: {e}")
+                    logger.debug("Error reading index %s: %s", index_file, e)
 
             # Pick up un-indexed .jsonl files
             try:
@@ -199,7 +201,7 @@ class SessionMonitor:
                         )
                     )
             except OSError as e:
-                logger.debug(f"Error scanning jsonl files in {project_dir}: {e}")
+                logger.debug("Error scanning jsonl files in %s: %s", project_dir, e)
 
         return sessions
 
@@ -305,7 +307,7 @@ class SessionMonitor:
                     )
                     self.state.update_session(tracked)
                     self._file_mtimes[session_info.session_id] = current_mtime
-                    logger.info(f"Started tracking session: {session_info.session_id}")
+                    logger.info("Started tracking session: %s", session_info.session_id)
                     continue
 
                 # Check mtime to see if file has changed
@@ -327,8 +329,9 @@ class SessionMonitor:
 
                 if new_entries:
                     logger.debug(
-                        f"Read {len(new_entries)} new entries for "
-                        f"session {session_info.session_id}"
+                        "Read %d new entries for session %s",
+                        len(new_entries),
+                        session_info.session_id,
                     )
 
                 # Parse new entries using the shared logic, carrying over pending tools
@@ -360,7 +363,9 @@ class SessionMonitor:
                 self.state.update_session(tracked)
 
             except OSError as e:
-                logger.debug(f"Error processing session {session_info.session_id}: {e}")
+                logger.debug(
+                    "Error processing session %s: %s", session_info.session_id, e
+                )
 
         self.state.save_if_dirty()
         return new_messages
@@ -393,13 +398,13 @@ class SessionMonitor:
         active_session_ids = {v["session_id"] for v in current_map.values()}
 
         stale_sessions = []
-        for session_id in self.state.tracked_sessions.keys():
+        for session_id in self.state.tracked_sessions:
             if session_id not in active_session_ids:
                 stale_sessions.append(session_id)
 
         if stale_sessions:
             logger.info(
-                f"[Startup cleanup] Removing {len(stale_sessions)} stale sessions"
+                "[Startup cleanup] Removing %d stale sessions", len(stale_sessions)
             )
             for session_id in stale_sessions:
                 self.state.remove_session(session_id)
@@ -463,7 +468,7 @@ class SessionMonitor:
                 )
                 try:
                     await self._new_window_callback(event)
-                except Exception as e:
+                except Exception as e:  # noqa: BLE001
                     logger.error("New window callback error for %s: %s", window_id, e)
 
         # Update last known map
@@ -500,16 +505,18 @@ class SessionMonitor:
 
                 for msg in new_messages:
                     status = "complete" if msg.is_complete else "streaming"
-                    preview = msg.text[:80] + ("..." if len(msg.text) > 80 else "")
+                    preview = msg.text[:_MSG_PREVIEW_LENGTH] + (
+                        "..." if len(msg.text) > _MSG_PREVIEW_LENGTH else ""
+                    )
                     logger.info("[%s] session=%s: %s", status, msg.session_id, preview)
                     if self._message_callback:
                         try:
                             await self._message_callback(msg)
-                        except Exception as e:
-                            logger.error(f"Message callback error: {e}")
+                        except Exception as e:  # noqa: BLE001
+                            logger.error("Message callback error: %s", e)
 
-            except Exception as e:
-                logger.error(f"Monitor loop error: {e}")
+            except Exception as e:  # noqa: BLE001
+                logger.error("Monitor loop error: %s", e)
 
             await asyncio.sleep(self.poll_interval)
 

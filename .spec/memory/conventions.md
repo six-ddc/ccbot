@@ -7,4 +7,4 @@
 - Handlers live in `src/ccbot/handlers/`, core modules in `src/ccbot/`
 - Callback data constants in `handlers/callback_data.py`, prefixed `CB_`
 - Tests mirror source structure under `tests/ccbot/`
-- Python 3.12+, managed with `uv`
+- Python 3.14+, managed with `uv`

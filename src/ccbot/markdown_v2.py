@@ -36,6 +36,9 @@ def _escape_mdv2(text: str) -> str:
 # Leaves room for surrounding text within Telegram's 4096 char message limit.
 _EXPQUOTE_MAX_RENDERED = 3800
 
+# Minimum characters to bother including a partial line during truncation
+_MIN_PARTIAL_LINE_LEN = 20
+
 
 def _render_expandable_quote(m: re.Match[str]) -> str:
     """Render an expandable blockquote block in raw MarkdownV2.
@@ -58,7 +61,7 @@ def _render_expandable_quote(m: re.Match[str]) -> str:
         if total_len + line_cost > budget:
             # Try to fit a partial line
             remaining = budget - total_len - 2  # -2 for ">" and "\n"
-            if remaining > 20:
+            if remaining > _MIN_PARTIAL_LINE_LEN:
                 built.append(f">{line[:remaining]}")
             truncated = True
             break

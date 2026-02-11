@@ -32,6 +32,9 @@ _CLAUDE_SETTINGS_FILE = Path.home() / ".claude" / "settings.json"
 # The hook command suffix for detection
 _HOOK_COMMAND_SUFFIX = "ccbot hook"
 
+# Expected number of parts when parsing "session_name:@id:window_name"
+_TMUX_FORMAT_PARTS = 3
+
 
 def _find_ccbot_path() -> str:
     """Find the full path to the ccbot executable.
@@ -208,7 +211,7 @@ def hook_main() -> None:
     raw_output = result.stdout.strip()
     # Expected format: "session_name:@id:window_name"
     parts = raw_output.split(":", 2)
-    if len(parts) < 3:
+    if len(parts) < _TMUX_FORMAT_PARTS:
         logger.warning(
             "Failed to parse session:window_id:window_name from tmux (pane=%s, output=%s)",
             pane_id,

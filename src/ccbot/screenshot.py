@@ -184,10 +184,11 @@ def _apply_ansi_codes(style: TextStyle, codes: str) -> TextStyle:
                         # Approximate 256 colors (simplified)
                         new_style.fg_color = _approximate_256_color(color_idx)
                     i += 2
-            elif i + 1 < len(parts) and parts[i + 1] == 2:  # RGB color
-                if i + 4 < len(parts):
-                    new_style.fg_color = (parts[i + 2], parts[i + 3], parts[i + 4])
-                    i += 4
+            elif (
+                i + 1 < len(parts) and parts[i + 1] == 2 and i + 4 < len(parts)
+            ):  # RGB color
+                new_style.fg_color = (parts[i + 2], parts[i + 3], parts[i + 4])
+                i += 4
         elif code == 39:  # Default foreground
             new_style.fg_color = _DEFAULT_FG
         elif 40 <= code <= 47:  # Background color
@@ -201,10 +202,11 @@ def _apply_ansi_codes(style: TextStyle, codes: str) -> TextStyle:
                     else:
                         new_style.bg_color = _approximate_256_color(color_idx)
                     i += 2
-            elif i + 1 < len(parts) and parts[i + 1] == 2:  # RGB color
-                if i + 4 < len(parts):
-                    new_style.bg_color = (parts[i + 2], parts[i + 3], parts[i + 4])
-                    i += 4
+            elif (
+                i + 1 < len(parts) and parts[i + 1] == 2 and i + 4 < len(parts)
+            ):  # RGB color
+                new_style.bg_color = (parts[i + 2], parts[i + 3], parts[i + 4])
+                i += 4
         elif code == 49:  # Default background
             new_style.bg_color = None
         elif 90 <= code <= 97:  # Bright foreground color
