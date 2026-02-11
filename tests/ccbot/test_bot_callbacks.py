@@ -1,5 +1,7 @@
 """Tests for bot.py table-driven interactive key dispatch."""
 
+import pytest
+
 from ccbot.bot import _INTERACTIVE_KEY_MAP, _INTERACTIVE_PREFIXES
 from ccbot.handlers.callback_data import (
     CB_ASK_DOWN,
@@ -28,14 +30,22 @@ class TestInteractiveKeyMap:
         }
         assert set(_INTERACTIVE_KEY_MAP.keys()) == expected
 
-    def test_esc_does_not_refresh(self) -> None:
-        _, refresh = _INTERACTIVE_KEY_MAP[CB_ASK_ESC]
-        assert refresh is False
-
-    def test_navigation_keys_refresh(self) -> None:
-        for prefix in (CB_ASK_UP, CB_ASK_DOWN, CB_ASK_LEFT, CB_ASK_RIGHT):
-            _, refresh = _INTERACTIVE_KEY_MAP[prefix]
-            assert refresh is True, f"{prefix} should refresh"
+    @pytest.mark.parametrize(
+        ("prefix", "expected_refresh"),
+        [
+            pytest.param(CB_ASK_ESC, False, id="esc-no-refresh"),
+            pytest.param(CB_ASK_UP, True, id="up-refreshes"),
+            pytest.param(CB_ASK_DOWN, True, id="down-refreshes"),
+            pytest.param(CB_ASK_LEFT, True, id="left-refreshes"),
+            pytest.param(CB_ASK_RIGHT, True, id="right-refreshes"),
+            pytest.param(CB_ASK_ENTER, True, id="enter-refreshes"),
+            pytest.param(CB_ASK_SPACE, True, id="space-refreshes"),
+            pytest.param(CB_ASK_TAB, True, id="tab-refreshes"),
+        ],
+    )
+    def test_key_refresh_behavior(self, prefix: str, expected_refresh: bool) -> None:
+        _, refresh = _INTERACTIVE_KEY_MAP[prefix]
+        assert refresh is expected_refresh
 
     def test_refresh_in_prefixes_but_not_map(self) -> None:
         assert CB_ASK_REFRESH in _INTERACTIVE_PREFIXES
