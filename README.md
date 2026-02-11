@@ -1,7 +1,5 @@
 # CCBot
 
-[中文文档](README_CN.md)
-
 Control Claude Code sessions remotely via Telegram — monitor, interact, and manage AI coding sessions running in tmux.
 
 https://github.com/user-attachments/assets/15ffb38e-5eb9-4720-93b9-412e4961dc93
@@ -138,7 +136,7 @@ uv run ccbot
 
 | Command       | Description                     |
 | ------------- | ------------------------------- |
-| `/start`      | Show welcome message            |
+| `/new`        | Create new Claude session       |
 | `/history`    | Message history for this topic  |
 | `/screenshot` | Capture terminal screenshot     |
 | `/esc`        | Send Escape to interrupt Claude |
@@ -224,12 +222,12 @@ The window must be in the `ccbot` tmux session (configurable via `TMUX_SESSION_N
 
 ## Data Storage
 
-| Path                            | Description                                                             |
-| ------------------------------- | ----------------------------------------------------------------------- |
-| `$CCBOT_DIR/state.json`         | Thread bindings, window states, display names, and per-user read offsets |
+| Path                            | Description                                                                        |
+| ------------------------------- | ---------------------------------------------------------------------------------- |
+| `$CCBOT_DIR/state.json`         | Thread bindings, window states, display names, and per-user read offsets           |
 | `$CCBOT_DIR/session_map.json`   | Hook-generated `{tmux_session:window_id: {session_id, cwd, window_name}}` mappings |
-| `$CCBOT_DIR/monitor_state.json` | Monitor byte offsets per session (prevents duplicate notifications)     |
-| `~/.claude/projects/`           | Claude Code session data (read-only)                                    |
+| `$CCBOT_DIR/monitor_state.json` | Monitor byte offsets per session (prevents duplicate notifications)                |
+| `~/.claude/projects/`           | Claude Code session data (read-only)                                               |
 
 ## File Structure
 

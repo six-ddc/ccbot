@@ -1,7 +1,7 @@
 ---
 id: TASK-005
 title: Rename /start to /new
-status: todo
+status: done
 req: REQ-002
 epic: EPIC-002
 ---

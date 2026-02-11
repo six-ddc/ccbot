@@ -4,7 +4,7 @@ Registers all command/callback/message handlers and manages the bot lifecycle.
 Each Telegram topic maps 1:1 to a tmux window (Claude session).
 
 Core responsibilities:
-  - Command handlers: /start, /history, /screenshot, /esc, /kill,
+  - Command handlers: /new (+ /start alias), /history, /screenshot, /esc, /kill,
     plus forwarding unknown /commands to Claude Code via tmux.
   - Callback query handler: directory browser, history pagination,
     interactive UI navigation, screenshot refresh.
@@ -159,7 +159,7 @@ def _get_thread_id(update: Update) -> int | None:
 # --- Command handlers ---
 
 
-async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+async def new_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         if update.message:
@@ -1379,7 +1379,7 @@ async def post_init(application: Application) -> None:
     await application.bot.delete_my_commands()
 
     bot_commands = [
-        BotCommand("start", "Show welcome message"),
+        BotCommand("new", "Create new Claude session"),
         BotCommand("history", "Message history for this topic"),
         BotCommand("screenshot", "Terminal screenshot with control keys"),
         BotCommand("esc", "Send Escape to interrupt Claude"),
@@ -1444,7 +1444,8 @@ def create_bot() -> Application:
         .build()
     )
 
-    application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("new", new_command))
+    application.add_handler(CommandHandler("start", new_command))  # compat alias
     application.add_handler(CommandHandler("history", history_command))
     application.add_handler(CommandHandler("screenshot", screenshot_command))
     application.add_handler(CommandHandler("esc", esc_command))
