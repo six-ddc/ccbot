@@ -117,7 +117,7 @@ from .handlers.response_builder import build_response_parts
 from .handlers.status_polling import status_poll_loop
 from .screenshot import text_to_image
 from .session import session_manager
-from .session_monitor import NewMessage, SessionMonitor
+from .session_monitor import NewMessage, NewWindowEvent, SessionMonitor
 from .terminal_parser import extract_bash_output
 from .tmux_manager import tmux_manager
 
@@ -227,6 +227,39 @@ async def screenshot_command(
         filename="screenshot.png",
         reply_markup=keyboard,
     )
+
+
+async def kill_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Kill the tmux window bound to this topic and unbind all users."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    thread_id = _get_thread_id(update)
+    wid = session_manager.resolve_window_for_thread(user.id, thread_id)
+    if not wid:
+        await safe_reply(update.message, "❌ No session bound to this topic.")
+        return
+
+    display = session_manager.get_display_name(wid)
+
+    # Kill the tmux window (graceful if already gone)
+    w = await tmux_manager.find_window_by_id(wid)
+    if w:
+        await tmux_manager.kill_window(w.window_id)
+
+    # Unbind ALL users bound to this window (snapshot to avoid mutation during iteration)
+    for uid, tid, bound_wid in list(session_manager.iter_thread_bindings()):
+        if bound_wid == wid:
+            session_manager.unbind_thread(uid, tid)
+            await clear_topic_state(uid, tid, context.bot)
+
+    await safe_reply(
+        update.message, f"🗑 Killed window '{display}' and unbound all users."
+    )
+    logger.info("kill_command: killed window %s (%s), user=%d", wid, display, user.id)
 
 
 async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1272,6 +1305,71 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                     pass
 
 
+# --- Auto-create topic for new tmux windows ---
+
+
+async def _handle_new_window(event: NewWindowEvent, bot: Bot) -> None:
+    """Create a Telegram forum topic for a newly detected tmux window.
+
+    Skips if the window is already bound to a topic. Creates one topic per
+    unique group chat, binds all users in that chat.
+    """
+
+    # Check if this window is already bound to any topic
+    for _, _, bound_wid in session_manager.iter_thread_bindings():
+        if bound_wid == event.window_id:
+            logger.debug(
+                "New window %s already bound, skipping topic creation", event.window_id
+            )
+            return
+
+    topic_name = event.window_name or Path(event.cwd).name or event.window_id
+
+    # Collect unique chat_ids from existing bindings
+    seen_chats: set[int] = set()
+    for uid, tid, _ in session_manager.iter_thread_bindings():
+        chat_id = session_manager.resolve_chat_id(uid, tid)
+        if chat_id != uid:  # Only group chats (not fallback to user_id)
+            seen_chats.add(chat_id)
+
+    if not seen_chats:
+        logger.debug(
+            "No group chats found for auto-topic creation (window %s)", event.window_id
+        )
+        return
+
+    for chat_id in seen_chats:
+        try:
+            topic = await bot.create_forum_topic(chat_id=chat_id, name=topic_name)
+            logger.info(
+                "Auto-created topic '%s' (thread=%d) in chat %d for window %s",
+                topic_name,
+                topic.message_thread_id,
+                chat_id,
+                event.window_id,
+            )
+            # Bind all users that have bindings in this chat
+            for uid, tid, _ in session_manager.iter_thread_bindings():
+                if session_manager.resolve_chat_id(uid, tid) == chat_id:
+                    session_manager.bind_thread(
+                        uid,
+                        topic.message_thread_id,
+                        event.window_id,
+                        window_name=topic_name,
+                    )
+                    session_manager.set_group_chat_id(
+                        uid, topic.message_thread_id, chat_id
+                    )
+                    break  # One binding per chat is enough to establish the route
+        except Exception as e:
+            logger.error(
+                "Failed to create topic for window %s in chat %d: %s",
+                event.window_id,
+                chat_id,
+                e,
+            )
+
+
 # --- App lifecycle ---
 
 
@@ -1285,6 +1383,7 @@ async def post_init(application: Application) -> None:
         BotCommand("history", "Message history for this topic"),
         BotCommand("screenshot", "Terminal screenshot with control keys"),
         BotCommand("esc", "Send Escape to interrupt Claude"),
+        BotCommand("kill", "Kill session and unbind this topic"),
     ]
     # Add Claude Code slash commands
     for cmd_name, desc in CC_COMMANDS.items():
@@ -1301,6 +1400,11 @@ async def post_init(application: Application) -> None:
         await handle_new_message(msg, application.bot)
 
     monitor.set_message_callback(message_callback)
+
+    async def new_window_callback(event: NewWindowEvent) -> None:
+        await _handle_new_window(event, application.bot)
+
+    monitor.set_new_window_callback(new_window_callback)
     monitor.start()
     session_monitor = monitor
     logger.info("Session monitor started")
@@ -1344,6 +1448,7 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("history", history_command))
     application.add_handler(CommandHandler("screenshot", screenshot_command))
     application.add_handler(CommandHandler("esc", esc_command))
+    application.add_handler(CommandHandler("kill", kill_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Topic closed event — auto-kill associated window
     application.add_handler(

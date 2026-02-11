@@ -27,7 +27,7 @@ import logging
 from dataclasses import dataclass, field
 from pathlib import Path
 from collections.abc import Iterator
-from typing import Any
+from typing import Any, Self
 
 import aiofiles
 
@@ -48,12 +48,15 @@ def parse_session_map(raw: dict[str, Any], prefix: str) -> dict[str, dict[str, s
     for key, info in raw.items():
         if not key.startswith(prefix):
             continue
+        if not isinstance(info, dict):
+            continue
         window_name = key[len(prefix) :]
         session_id = info.get("session_id", "")
         if session_id:
             result[window_name] = {
                 "session_id": session_id,
                 "cwd": info.get("cwd", ""),
+                "window_name": info.get("window_name", ""),
             }
     return result
 
@@ -82,7 +85,7 @@ class WindowState:
         return d
 
     @classmethod
-    def from_dict(cls, data: dict[str, Any]) -> "WindowState":
+    def from_dict(cls, data: dict[str, Any]) -> Self:
         return cls(
             session_id=data.get("session_id", ""),
             cwd=data.get("cwd", ""),

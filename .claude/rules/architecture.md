@@ -7,6 +7,7 @@
 │  - /history: Paginated message history (default: latest page)      │
 │  - /screenshot: Capture tmux pane as PNG                           │
 │  - /esc: Send Escape to interrupt Claude                           │
+│  - /kill: Kill tmux window and unbind all users                    │
 │  - Send text → Claude Code via tmux keystrokes                     │
 │  - Forward /commands to Claude Code                                │
 │  - Create sessions via directory browser in unbound topics         │
@@ -90,7 +91,7 @@ State files (~/.ccbot/ or $CCBOT_DIR/):
 
 ## Key Design Decisions
 
-- **Topic-centric** — Each Telegram topic binds to one tmux window. No centralized session list; topics *are* the session list.
+- **Topic-centric** — Each Telegram topic binds to one tmux window. No centralized session list; topics _are_ the session list.
 - **Window ID-centric** — All internal state keyed by tmux window ID (e.g. `@0`, `@12`), not window names. Window IDs are guaranteed unique within a tmux server session. Window names are kept as display names via `window_display_names` map. Same directory can have multiple windows.
 - **Hook-based session tracking** — Claude Code `SessionStart` hook writes `session_map.json`; monitor reads it each poll cycle to auto-detect session changes.
 - **Tool use ↔ tool result pairing** — `tool_use_id` tracked across poll cycles; tool result edits the original tool_use Telegram message in-place.

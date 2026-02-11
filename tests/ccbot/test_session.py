@@ -178,3 +178,23 @@ class TestParseSessionMap:
         raw = {"ccbot:win-a": {"session_id": "s1", "cwd": "/home/user/proj"}}
         result = parse_session_map(raw, "ccbot:")
         assert result["win-a"]["cwd"] == "/home/user/proj"
+
+    @pytest.mark.parametrize(
+        "bad_value",
+        [
+            pytest.param("a string", id="string-value"),
+            pytest.param(42, id="int-value"),
+            pytest.param(None, id="none-value"),
+            pytest.param(["a", "list"], id="list-value"),
+        ],
+    )
+    def test_non_dict_values_skipped(self, bad_value) -> None:
+        from ccbot.session import parse_session_map
+
+        raw = {
+            "ccbot:good": {"session_id": "s1", "cwd": "/a"},
+            "ccbot:bad": bad_value,
+        }
+        result = parse_session_map(raw, "ccbot:")
+        assert "good" in result
+        assert "bad" not in result
