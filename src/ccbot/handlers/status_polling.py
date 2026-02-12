@@ -21,7 +21,7 @@ import logging
 import time
 
 from telegram import Bot
-from telegram.error import BadRequest
+from telegram.error import BadRequest, TelegramError
 
 from ..session import session_manager
 from ..terminal_parser import is_interactive_ui, parse_status_line
@@ -33,6 +33,9 @@ from .interactive_ui import (
 )
 from .cleanup import clear_topic_state
 from .message_queue import enqueue_status_update, get_message_queue
+
+# Top-level loop resilience: catch any error to keep polling alive
+_LoopError = (TelegramError, OSError, RuntimeError, ValueError)
 
 logger = logging.getLogger(__name__)
 
@@ -140,7 +143,7 @@ async def status_poll_loop(bot: Bot) -> None:
                                 wid,
                                 e,
                             )
-                    except Exception as e:  # noqa: BLE001
+                    except TelegramError as e:
                         logger.debug(
                             "Topic probe error for %s: %s",
                             wid,
@@ -163,14 +166,14 @@ async def status_poll_loop(bot: Bot) -> None:
                         wid,
                         thread_id=thread_id,
                     )
-                except Exception as e:  # noqa: BLE001
+                except (TelegramError, OSError) as e:
                     logger.debug(
                         "Status update error for user %s thread %s: %s",
                         user_id,
                         thread_id,
                         e,
                     )
-        except Exception as e:  # noqa: BLE001
+        except _LoopError as e:
             logger.error("Status poll loop error: %s", e)
 
         await asyncio.sleep(STATUS_POLL_INTERVAL)

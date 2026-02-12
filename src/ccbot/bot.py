@@ -103,6 +103,8 @@ from .tmux_manager import tmux_manager
 
 logger = logging.getLogger(__name__)
 
+_CommandRefreshError = (TelegramError, OSError)
+
 # Session monitor instance
 session_monitor: SessionMonitor | None = None
 
@@ -566,7 +568,7 @@ async def post_init(application: Application) -> None:
         if context.bot:
             try:
                 await register_commands(context.bot)
-            except Exception:
+            except _CommandRefreshError:
                 logger.exception("Failed to refresh CC commands, keeping previous menu")
 
     if application.job_queue:

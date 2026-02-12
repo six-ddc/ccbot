@@ -28,7 +28,14 @@ from .tmux_manager import tmux_manager
 from .transcript_parser import TranscriptParser
 from .utils import read_cwd_from_jsonl
 
+_CallbackError = (OSError, RuntimeError)
+# Top-level loop resilience: catch any error to keep monitoring alive
+_LoopError = (OSError, RuntimeError, json.JSONDecodeError, ValueError)
+
 logger = logging.getLogger(__name__)
+
+_PathResolveError = (OSError, ValueError)
+_SessionMapError = (json.JSONDecodeError, OSError)
 
 _MSG_PREVIEW_LENGTH = 80
 
@@ -118,7 +125,7 @@ class SessionMonitor:
         for w in windows:
             try:
                 cwds.add(str(Path(w.cwd).resolve()))
-            except (OSError, ValueError):
+            except _PathResolveError:
                 cwds.add(w.cwd)
         return cwds
 
@@ -153,7 +160,7 @@ class SessionMonitor:
 
                         try:
                             norm_pp = str(Path(project_path).resolve())
-                        except (OSError, ValueError):
+                        except _PathResolveError:
                             norm_pp = project_path
                         if norm_pp not in active_cwds:
                             continue
@@ -188,7 +195,7 @@ class SessionMonitor:
 
                     try:
                         norm_fp = str(Path(file_project_path).resolve())
-                    except (OSError, ValueError):
+                    except _PathResolveError:
                         norm_fp = file_project_path
 
                     if norm_fp not in active_cwds:
@@ -388,7 +395,7 @@ class SessionMonitor:
                 raw = json.loads(content)
                 prefix = f"{config.tmux_session_name}:"
                 return parse_session_map(raw, prefix)
-            except (json.JSONDecodeError, OSError):
+            except _SessionMapError:
                 pass
         return {}
 
@@ -468,7 +475,7 @@ class SessionMonitor:
                 )
                 try:
                     await self._new_window_callback(event)
-                except Exception as e:  # noqa: BLE001
+                except _CallbackError as e:
                     logger.error("New window callback error for %s: %s", window_id, e)
 
         # Update last known map
@@ -512,10 +519,10 @@ class SessionMonitor:
                     if self._message_callback:
                         try:
                             await self._message_callback(msg)
-                        except Exception as e:  # noqa: BLE001
+                        except _CallbackError as e:
                             logger.error("Message callback error: %s", e)
 
-            except Exception as e:  # noqa: BLE001
+            except _LoopError as e:
                 logger.error("Monitor loop error: %s", e)
 
             await asyncio.sleep(self.poll_interval)

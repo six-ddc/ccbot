@@ -1,7 +1,7 @@
 ---
 id: TASK-026
 title: Harden exception strategy and logging
-status: todo
+status: done
 priority: normal
 req: REQ-006
 epic: EPIC-006

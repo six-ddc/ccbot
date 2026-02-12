@@ -32,6 +32,9 @@ from .callback_data import CB_STATUS_ESC, CB_STATUS_SCREENSHOT
 from .message_sender import NO_LINK_PREVIEW, rate_limit_send_message
 import contextlib
 
+# Top-level loop resilience: catch any error to keep the worker alive
+_LoopError = (TelegramError, OSError, RuntimeError, ValueError)
+
 logger = logging.getLogger(__name__)
 
 # Merge limit for content messages
@@ -230,7 +233,7 @@ async def _message_queue_worker(bot: Bot, user_id: int) -> None:
                     "Flood control for user %s, pausing %ss", user_id, retry_secs
                 )
                 await asyncio.sleep(retry_secs)
-            except Exception as e:  # noqa: BLE001
+            except (TelegramError, OSError) as e:
                 logger.error(
                     "Error processing message task for user %s: %s", user_id, e
                 )
@@ -239,7 +242,7 @@ async def _message_queue_worker(bot: Bot, user_id: int) -> None:
         except asyncio.CancelledError:
             logger.info("Message queue worker cancelled for user %s", user_id)
             break
-        except Exception as e:  # noqa: BLE001
+        except _LoopError as e:
             logger.error("Unexpected error in queue worker for user %s: %s", user_id, e)
 
 
@@ -357,7 +360,7 @@ async def _convert_status_to_content(
     msg_id, stored_wid, _last_text = info
     if stored_wid != window_id:
         # Different window, just delete the old status
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(TelegramError):
             await bot.delete_message(chat_id=chat_id, message_id=msg_id)
         return None
 
@@ -412,7 +415,7 @@ async def _process_status_update_task(
     from telegram.constants import ChatAction
 
     if "esc to interrupt" in status_text.lower():
-        with contextlib.suppress(Exception):
+        with contextlib.suppress(TelegramError):
             await bot.send_chat_action(chat_id=chat_id, action=ChatAction.TYPING)
 
     current_info = _status_msg_info.get(skey)

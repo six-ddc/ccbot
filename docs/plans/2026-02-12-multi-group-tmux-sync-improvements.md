@@ -121,10 +121,10 @@ Replace broad `except Exception` with specific types, standardize logging.
 
 **Steps:**
 
-- [ ] Run `/spec:work` on TASK-026
-- [ ] Audit and replace broad exception handlers
-- [ ] Standardize logging format/levels
-- [ ] Run `make check` - must pass
+- [x] Run `/spec:work` on TASK-026
+- [x] Audit and replace broad exception handlers
+- [x] Standardize logging format/levels
+- [x] Run `make check` - must pass
 
 ### Task 6: TASK-027 - Quality gates Stage B+C
 

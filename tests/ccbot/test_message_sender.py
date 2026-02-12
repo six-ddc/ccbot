@@ -5,7 +5,7 @@ from unittest.mock import AsyncMock, patch
 
 import pytest
 from telegram import Message
-from telegram.error import RetryAfter
+from telegram.error import RetryAfter, TelegramError
 
 from ccbot.handlers.message_sender import (
     MESSAGE_SEND_INTERVAL,
@@ -81,7 +81,7 @@ class TestSendWithFallback:
     async def test_fallback_to_plain(self) -> None:
         bot = AsyncMock()
         sent = AsyncMock(spec=Message)
-        bot.send_message.side_effect = [Exception("parse error"), sent]
+        bot.send_message.side_effect = [TelegramError("parse error"), sent]
 
         result = await _send_with_fallback(bot, 123, "hello")
         assert result is sent
@@ -90,7 +90,10 @@ class TestSendWithFallback:
 
     async def test_both_fail_returns_none(self) -> None:
         bot = AsyncMock()
-        bot.send_message.side_effect = [Exception("md fail"), Exception("plain fail")]
+        bot.send_message.side_effect = [
+            TelegramError("md fail"),
+            TelegramError("plain fail"),
+        ]
 
         result = await _send_with_fallback(bot, 123, "hello")
         assert result is None
