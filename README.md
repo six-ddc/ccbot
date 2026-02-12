@@ -6,85 +6,109 @@
 [![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
-Control Claude Code sessions remotely via Telegram — monitor, interact, and manage AI coding sessions running in tmux.
-
-## Contents
-
-- [Why CCBot?](#why-ccbot)
-- [Features](#features)
-- [Quick Start](#quick-start)
-- [Documentation](#documentation)
-- [Credits](#credits)
-- [License](#license)
+Control [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions from your phone. CCBot bridges Telegram to tmux — monitor output, respond to prompts, and manage sessions without touching your computer.
 
 ## Why CCBot?
 
-Claude Code runs in your terminal. When you step away from your computer — commuting, on the couch, or just away from your desk — the session keeps working, but you lose visibility and control.
+Claude Code runs in your terminal. When you step away — commuting, on the couch, or just away from your desk — the session keeps working, but you lose visibility and control.
 
-CCBot solves this by letting you **seamlessly continue the same session from Telegram**. The key insight is that it operates on **tmux**, not the Claude Code SDK. Your Claude Code process stays exactly where it is, in a tmux window on your machine. CCBot simply reads its output and sends keystrokes to it. This means:
+CCBot fixes this. The key insight: it operates on **tmux**, not the Claude Code SDK. Your Claude Code process stays exactly where it is, in a tmux window on your machine. CCBot reads its output and sends keystrokes to it. This means:
 
-- **Switch from desktop to phone mid-conversation** — Claude is working on a refactor? Walk away, keep monitoring and responding from Telegram.
-- **Switch back to desktop anytime** — Since the tmux session was never interrupted, just `tmux attach` and you're back in the terminal with full scrollback and context.
-- **Run multiple sessions in parallel** — Each Telegram topic maps to a separate tmux window, so you can juggle multiple projects from one chat group.
+- **Desktop to phone, mid-conversation** — Claude is working on a refactor? Walk away and keep monitoring from Telegram
+- **Phone back to desktop, anytime** — `tmux attach` and you're back in the terminal with full scrollback
+- **Multiple sessions in parallel** — Each Telegram topic maps to a separate tmux window
 
-Other Telegram bots for Claude Code typically wrap the Claude Code SDK to create separate API sessions. Those sessions are isolated — you can't resume them in your terminal. CCBot takes a different approach: it's just a thin control layer over tmux, so the terminal remains the source of truth and you never lose the ability to switch back.
+Other Telegram bots for Claude Code wrap the SDK to create isolated API sessions that can't be resumed in your terminal. CCBot is different — it's a thin control layer over tmux, so the terminal remains the source of truth.
+
+## How It Works
+
+```
+Telegram Group                  Your Machine
+┌──────────────┐               ┌──────────────────────┐
+│ Topic: api   │──── text ────▶│ tmux window @0       │
+│              │◀─ responses ──│  └─ claude (running)  │
+├──────────────┤               ├──────────────────────┤
+│ Topic: ui    │──── text ────▶│ tmux window @1       │
+│              │◀─ responses ──│  └─ claude (running)  │
+└──────────────┘               └──────────────────────┘
+  1 topic = 1 window = 1 session
+```
+
+Each Telegram Forum topic binds to one tmux window running one Claude Code instance. Messages you type in the topic are sent as keystrokes to the tmux pane; Claude's output is parsed from session transcripts and delivered back as Telegram messages.
 
 ## Features
 
-- **Topic-based sessions** — Each Telegram topic maps 1:1 to a tmux window and Claude session
-- **Real-time notifications** — Assistant responses, thinking content, tool use/result, and local command output
-- **Interactive UI** — Navigate AskUserQuestion, ExitPlanMode, and Permission Prompts via inline keyboard
-- **Send messages** — Forward text to Claude Code via tmux keystrokes
-- **Slash command forwarding** — Any `/command` is forwarded to Claude Code (e.g. `/clear`, `/compact`, `/cost`)
-- **Sessions dashboard** — Overview of all active sessions with status and quick actions
-- **Message history** — Browse conversation history with pagination (newest first)
-- **Auto-sync tmux windows** — Create a tmux window and start Claude manually; the bot auto-creates a matching Telegram topic
-- **Auto-discovery** — Claude Code skills and custom commands appear in the Telegram menu automatically
-- **Persistent state** — Thread bindings and read offsets survive restarts
+**Session control**
+
+- Send messages and `/commands` directly to Claude Code (`/clear`, `/compact`, `/cost`, etc.)
+- Interactive prompts (AskUserQuestion, ExitPlanMode, Permission) rendered as inline keyboards
+- Terminal screenshots — capture the current pane as a PNG image
+- Sessions dashboard (`/sessions`) — overview of all sessions with status and kill buttons
+
+**Real-time monitoring**
+
+- Assistant responses, thinking content, tool use/result pairs, and command output
+- Live status line with spinner text (what Claude is currently doing)
+- MarkdownV2 formatting with automatic plain text fallback
+
+**Session management**
+
+- Directory browser for creating new sessions from Telegram
+- Auto-sync: create a tmux window manually and the bot auto-creates a matching topic
+- Fresh/Continue/Resume recovery when a session dies
+- Message history with paginated browsing (`/history`)
+- Persistent state — bindings and read offsets survive restarts
+
+**Extensibility**
+
+- Auto-discovers Claude Code skills and custom commands into the Telegram menu
+- Multi-instance support — run separate bots per Telegram group on the same machine
+- Configurable via environment variables
 
 ## Quick Start
 
-### 1. Prerequisites
+### Prerequisites
 
-- **tmux** — must be installed and available in PATH
-- **Claude Code** — the CLI tool (`claude`) must be installed
+- **Python 3.14+**
+- **tmux** — installed and in PATH
+- **Claude Code** — the `claude` CLI installed and authenticated
 
-### 2. Install
+### Install
 
 ```bash
-# Using Homebrew (macOS)
+# macOS (Homebrew)
 brew install alexei-led/tap/ccbot
 
-# From PyPI (recommended for Linux)
+# PyPI
 uv tool install ccbot
 
-# Or using pipx
+# Or with pipx
 pipx install ccbot
-
-# Or from source
-uv tool install git+https://github.com/alexei-led/ccbot.git
 ```
 
-### 3. Configure
+### Configure
 
-Create a Telegram bot via [@BotFather](https://t.me/BotFather), then enable **Threaded Mode** (BotFather > your bot > Settings > Bot Settings).
-
-Create `~/.ccbot/.env`:
+1. Create a Telegram bot via [@BotFather](https://t.me/BotFather)
+2. Enable **Topics** in your bot (BotFather > Bot Settings > Groups > Topics in Groups > Enable)
+3. Add the bot to a Telegram group that has Topics enabled
+4. Create `~/.ccbot/.env`:
 
 ```ini
 TELEGRAM_BOT_TOKEN=your_bot_token_here
 ALLOWED_USERS=your_telegram_user_id
 ```
 
-### 4. Install the session hook
+> Get your user ID from [@userinfobot](https://t.me/userinfobot) on Telegram.
+
+### Install the session hook
 
 ```bash
 ccbot hook --install
 ```
 
-This lets the bot auto-track which Claude session runs in each tmux window.
+This registers a Claude Code `SessionStart` hook so the bot can auto-track which session runs in each tmux window.
 
-### 5. Run
+### Run
 
 ```bash
 ccbot
@@ -92,16 +116,27 @@ ccbot
 
 Open your Telegram group, create a new topic, send a message — a directory browser appears. Pick a project directory and you're connected to Claude Code.
 
+## Configuration
+
+| Variable                | Default        | Description                       |
+| ----------------------- | -------------- | --------------------------------- |
+| `TELEGRAM_BOT_TOKEN`    | _(required)_   | Bot token from @BotFather         |
+| `ALLOWED_USERS`         | _(required)_   | Comma-separated Telegram user IDs |
+| `CCBOT_DIR`             | `~/.ccbot`     | Config and state directory        |
+| `TMUX_SESSION_NAME`     | `ccbot`        | tmux session name                 |
+| `CLAUDE_COMMAND`        | `claude`       | Command to launch Claude Code     |
+| `CCBOT_GROUP_ID`        | _(all groups)_ | Restrict to one Telegram group    |
+| `CCBOT_INSTANCE_NAME`   | hostname       | Display label for this instance   |
+| `MONITOR_POLL_INTERVAL` | `2.0`          | Seconds between transcript polls  |
+
 ## Documentation
 
-| Guide                        | Description                                           |
-| ---------------------------- | ----------------------------------------------------- |
-| **[Guides](docs/guides.md)** | Multi-instance setup, manual tmux usage, data storage |
+See **[docs/guides.md](docs/guides.md)** for advanced topics: multi-instance setup, manual tmux usage, data storage, and environment variables.
 
 ## Credits
 
-CCBot is a maintained fork of [ccbot](https://github.com/six-ddc/ccbot) by [six-ddc](https://github.com/six-ddc). See [FORK.md](FORK.md) for details on the fork history and divergences.
+CCBot is a maintained fork of [ccbot](https://github.com/six-ddc/ccbot) by [six-ddc](https://github.com/six-ddc). See [FORK.md](FORK.md) for the fork history and divergences.
 
 ## License
 
-[MIT](LICENSE) — see LICENSE file for details.
+[MIT](LICENSE)
