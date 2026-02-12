@@ -24,16 +24,35 @@ Other Telegram bots for Claude Code wrap the SDK to create isolated API sessions
 
 ## How It Works
 
-```
-Telegram Group                  Your Machine
-┌──────────────┐               ┌──────────────────────┐
-│ Topic: api   │──── text ────▶│ tmux window @0       │
-│              │◀─ responses ──│  └─ claude (running)  │
-├──────────────┤               ├──────────────────────┤
-│ Topic: ui    │──── text ────▶│ tmux window @1       │
-│              │◀─ responses ──│  └─ claude (running)  │
-└──────────────┘               └──────────────────────┘
-  1 topic = 1 window = 1 session
+```mermaid
+graph LR
+  subgraph phone["📱 Telegram Group"]
+    T1["💬 Topic: api"]
+    T2["💬 Topic: ui"]
+    T3["💬 Topic: docs"]
+  end
+
+  subgraph machine["🖥️ Your Machine — tmux"]
+    W1["⚡ window @0\nclaude ↻ running"]
+    W2["⚡ window @1\nclaude ↻ running"]
+    W3["⚡ window @2\nclaude ↻ running"]
+  end
+
+  T1 -- "text →" --> W1
+  W1 -. "← responses" .-> T1
+  T2 -- "text →" --> W2
+  W2 -. "← responses" .-> T2
+  T3 -- "text →" --> W3
+  W3 -. "← responses" .-> T3
+
+  style phone fill:#e8f4fd,stroke:#0088cc,stroke-width:2px,color:#333
+  style machine fill:#f0faf0,stroke:#2ea44f,stroke-width:2px,color:#333
+  style T1 fill:#fff,stroke:#0088cc,stroke-width:1px,color:#333
+  style T2 fill:#fff,stroke:#0088cc,stroke-width:1px,color:#333
+  style T3 fill:#fff,stroke:#0088cc,stroke-width:1px,color:#333
+  style W1 fill:#fff,stroke:#2ea44f,stroke-width:1px,color:#333
+  style W2 fill:#fff,stroke:#2ea44f,stroke-width:1px,color:#333
+  style W3 fill:#fff,stroke:#2ea44f,stroke-width:1px,color:#333
 ```
 
 Each Telegram Forum topic binds to one tmux window running one Claude Code instance. Messages you type in the topic are sent as keystrokes to the tmux pane; Claude's output is parsed from session transcripts and delivered back as Telegram messages.
