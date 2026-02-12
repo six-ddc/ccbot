@@ -38,3 +38,6 @@ coverage.json
 .claude/settings.local.json
 
 # Spec (keep .spec/ tracked)
+
+# ralphex progress logs
+progress*.txt

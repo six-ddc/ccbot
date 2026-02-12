@@ -17,7 +17,7 @@ import time
 from typing import Any
 
 from telegram import Bot, LinkPreviewOptions, Message
-from telegram.error import RetryAfter
+from telegram.error import RetryAfter, TelegramError
 
 from ..markdown_v2 import convert_markdown
 
@@ -64,12 +64,12 @@ async def _send_with_fallback(
         )
     except RetryAfter:
         raise
-    except Exception:  # noqa: BLE001
+    except TelegramError:
         try:
             return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
         except RetryAfter:
             raise
-        except Exception as e:  # noqa: BLE001
+        except TelegramError as e:
             logger.error("Failed to send message to %s: %s", chat_id, e)
             return None
 
@@ -102,7 +102,7 @@ async def safe_reply(message: Message, text: str, **kwargs: Any) -> Message:
         )
     except RetryAfter:
         raise
-    except Exception:  # noqa: BLE001
+    except TelegramError:
         return await message.reply_text(text, **kwargs)
 
 
@@ -117,12 +117,12 @@ async def safe_edit(target: Any, text: str, **kwargs: Any) -> None:
         )
     except RetryAfter:
         raise
-    except Exception:  # noqa: BLE001
+    except TelegramError:
         try:
             await target.edit_message_text(text, **kwargs)
         except RetryAfter:
             raise
-        except Exception as e:  # noqa: BLE001
+        except TelegramError as e:
             logger.error("Failed to edit message: %s", e)
 
 
@@ -146,10 +146,10 @@ async def safe_send(
         )
     except RetryAfter:
         raise
-    except Exception:  # noqa: BLE001
+    except TelegramError:
         try:
             await bot.send_message(chat_id=chat_id, text=text, **kwargs)
         except RetryAfter:
             raise
-        except Exception as e:  # noqa: BLE001
+        except TelegramError as e:
             logger.error("Failed to send message to %s: %s", chat_id, e)

@@ -1,7 +1,7 @@
 ---
 id: TASK-018
 title: Publish Python package (PyPI)
-status: todo
+status: done
 req: REQ-005
 epic: EPIC-005
 ---

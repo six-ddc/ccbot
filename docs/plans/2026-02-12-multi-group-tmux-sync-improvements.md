@@ -208,8 +208,8 @@ Fork attribution, GitHub metadata, PyPI packaging, CI/CD, README, LICENSE.
 
 **Steps:**
 
-- [ ] Execute each via `/spec:work` in order
-- [ ] Run `make check` after each - must pass
+- [x] Execute each via `/spec:work` in order
+- [x] Run `make check` after each - must pass
 
 ---
 

@@ -1,7 +1,7 @@
 ---
 id: TASK-031
 title: Update LICENSE and create CHANGELOG
-status: todo
+status: done
 epic: EPIC-007
 ---
 

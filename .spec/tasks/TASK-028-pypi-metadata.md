@@ -1,7 +1,7 @@
 ---
 id: TASK-028
 title: Configure hatch-vcs and PyPI metadata
-status: todo
+status: done
 epic: EPIC-007
 ---
 

@@ -1,6 +1,8 @@
-name: Check
+name: CI
 on:
   push:
+    branches:
+      - main
   pull_request:
     branches:
       - main
@@ -10,19 +12,21 @@ jobs:
     strategy:
       matrix:
         python-version:
-          - "3.12"
           - "3.13"
+          - "3.14"
     steps:
-      - uses: actions/checkout@v5
+      - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: astral-sh/setup-uv@v5
         with:
           python-version: ${{ matrix.python-version }}
       - run: uv sync --all-extras
-      - name: Formatter
-        run: |
-          uv run ruff check src/ tests/
-          uv run ruff format --check src/ tests/
+      - name: Format check
+        run: uv run ruff format --check src/ tests/
       - name: Lint
+        run: uv run ruff check src/ tests/
+      - name: Type check
         run: uv run pyright src/ccbot/
       - name: Test
         run: uv run pytest --tb=short -q

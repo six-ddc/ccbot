@@ -1,20 +1,21 @@
 # CCBot
 
+[![CI](https://github.com/alexei-led/ccbot/actions/workflows/ci.yml/badge.svg)](https://github.com/alexei-led/ccbot/actions/workflows/ci.yml)
+[![PyPI](https://img.shields.io/pypi/v/ccbot)](https://pypi.org/project/ccbot/)
+[![Python](https://img.shields.io/pypi/pyversions/ccbot)](https://pypi.org/project/ccbot/)
+[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
+
 Control Claude Code sessions remotely via Telegram — monitor, interact, and manage AI coding sessions running in tmux.
 
 ## Contents
 
-- [CCBot](#ccbot)
-  - [Contents](#contents)
-  - [Why CCBot?](#why-ccbot)
-  - [Features](#features)
-  - [Quick Start](#quick-start)
-    - [1. Prerequisites](#1-prerequisites)
-    - [2. Install](#2-install)
-    - [3. Configure](#3-configure)
-    - [4. Install the session hook](#4-install-the-session-hook)
-    - [5. Run](#5-run)
-  - [Documentation](#documentation)
+- [Why CCBot?](#why-ccbot)
+- [Features](#features)
+- [Quick Start](#quick-start)
+- [Documentation](#documentation)
+- [Credits](#credits)
+- [License](#license)
 
 ## Why CCBot?
 
@@ -50,11 +51,14 @@ Other Telegram bots for Claude Code typically wrap the Claude Code SDK to create
 ### 2. Install
 
 ```bash
-# Using uv (recommended)
-uv tool install git+https://github.com/six-ddc/ccmux.git
+# From PyPI (recommended)
+uv tool install ccbot
 
 # Or using pipx
-pipx install git+https://github.com/six-ddc/ccmux.git
+pipx install ccbot
+
+# Or from source
+uv tool install git+https://github.com/alexei-led/ccbot.git
 ```
 
 ### 3. Configure
@@ -89,3 +93,11 @@ Open your Telegram group, create a new topic, send a message — a directory bro
 | Guide                        | Description                                           |
 | ---------------------------- | ----------------------------------------------------- |
 | **[Guides](docs/guides.md)** | Multi-instance setup, manual tmux usage, data storage |
+
+## Credits
+
+CCBot is a maintained fork of [ccbot](https://github.com/six-ddc/ccbot) by [six-ddc](https://github.com/six-ddc). See [FORK.md](FORK.md) for details on the fork history and divergences.
+
+## License
+
+[MIT](LICENSE) — see LICENSE file for details.

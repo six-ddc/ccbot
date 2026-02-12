@@ -1,7 +1,7 @@
 ---
 id: TASK-030
 title: Rewrite README with badges and credits
-status: todo
+status: done
 epic: EPIC-007
 ---
 

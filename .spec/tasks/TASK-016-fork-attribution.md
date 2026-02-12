@@ -1,7 +1,7 @@
 ---
 id: TASK-016
 title: Add fork attribution and rationale
-status: todo
+status: done
 req: REQ-005
 epic: EPIC-005
 depends: [TASK-015]

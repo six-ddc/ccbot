@@ -1,7 +1,7 @@
 ---
 id: TASK-029
 title: Create CI and release workflows
-status: todo
+status: done
 epic: EPIC-007
 ---
 
