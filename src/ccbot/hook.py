@@ -169,6 +169,7 @@ def hook_main() -> None:
 
     session_id = payload.get("session_id", "")
     cwd = payload.get("cwd", "")
+    transcript_path = payload.get("transcript_path", "")
     event = payload.get("hook_event_name", "")
 
     if not session_id or not event:
@@ -255,6 +256,7 @@ def hook_main() -> None:
                     "session_id": session_id,
                     "cwd": cwd,
                     "window_name": window_name,
+                    "transcript_path": transcript_path,
                 }
 
                 # Clean up old-format key ("session:window_name") if it exists.

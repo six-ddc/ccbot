@@ -278,102 +278,136 @@ class SessionMonitor:
             logger.error("Error reading session file %s: %s", file_path, e)
         return new_entries
 
-    async def check_for_updates(self, active_session_ids: set[str]) -> list[NewMessage]:
+    async def _process_session_file(
+        self, session_id: str, file_path: Path, new_messages: list[NewMessage]
+    ) -> None:
+        """Process a single session file for new messages.
+
+        Handles tracking initialization, mtime checking, incremental reading,
+        and parsing. Appends any new messages to the provided list.
+        """
+        tracked = self.state.get_session(session_id)
+
+        if tracked is None:
+            # For new sessions, initialize offset to end of file
+            # to avoid re-processing old messages
+            try:
+                st = file_path.stat()
+                file_size, current_mtime = st.st_size, st.st_mtime
+            except OSError:
+                file_size = 0
+                current_mtime = 0.0
+            tracked = TrackedSession(
+                session_id=session_id,
+                file_path=str(file_path),
+                last_byte_offset=file_size,
+            )
+            self.state.update_session(tracked)
+            self._file_mtimes[session_id] = current_mtime
+            logger.info("Started tracking session: %s", session_id)
+            return
+
+        # Check mtime to see if file has changed
+        try:
+            current_mtime = file_path.stat().st_mtime
+        except OSError:
+            return
+
+        last_mtime = self._file_mtimes.get(session_id, 0.0)
+        if current_mtime <= last_mtime:
+            return
+
+        # File changed, read new content from last offset
+        new_entries = await self._read_new_lines(tracked, file_path)
+        self._file_mtimes[session_id] = current_mtime
+
+        if new_entries:
+            logger.debug(
+                "Read %d new entries for session %s",
+                len(new_entries),
+                session_id,
+            )
+
+        # Parse new entries using the shared logic, carrying over pending tools
+        carry = self._pending_tools.get(session_id, {})
+        parsed_entries, remaining = TranscriptParser.parse_entries(
+            new_entries,
+            pending_tools=carry,
+        )
+        if remaining:
+            self._pending_tools[session_id] = remaining
+        else:
+            self._pending_tools.pop(session_id, None)
+
+        for entry in parsed_entries:
+            if not entry.text:
+                continue
+            new_messages.append(
+                NewMessage(
+                    session_id=session_id,
+                    text=entry.text,
+                    is_complete=True,
+                    content_type=entry.content_type,
+                    tool_use_id=entry.tool_use_id,
+                    role=entry.role,
+                    tool_name=entry.tool_name,
+                )
+            )
+
+        self.state.update_session(tracked)
+
+    async def check_for_updates(
+        self, current_map: dict[str, dict[str, str]]
+    ) -> list[NewMessage]:
         """Check all sessions for new assistant messages.
 
         Reads from last byte offset. Emits both intermediate
         (stop_reason=null) and complete messages.
 
+        Uses two paths:
+        1. Primary: entries with transcript_path are read directly (no scanning).
+        2. Fallback: entries without transcript_path use scan_projects() + session_id match.
+
         Args:
-            active_session_ids: Set of session IDs currently in session_map
+            current_map: Window key -> details from session_map
         """
-        new_messages = []
+        new_messages: list[NewMessage] = []
 
-        # Scan projects to get available session files
-        sessions = await self.scan_projects()
+        # Separate entries with direct transcript_path from those needing scan
+        direct_sessions: list[tuple[str, Path]] = []
+        fallback_session_ids: set[str] = set()
 
-        # Only process sessions that are in session_map
-        for session_info in sessions:
-            if session_info.session_id not in active_session_ids:
-                continue
+        for details in current_map.values():
+            session_id = details["session_id"]
+            transcript_path = details.get("transcript_path", "")
+            if transcript_path:
+                path = Path(transcript_path)
+                if path.exists():
+                    direct_sessions.append((session_id, path))
+                    continue
+            fallback_session_ids.add(session_id)
+
+        # Primary path: read directly from transcript_path
+        for session_id, file_path in direct_sessions:
             try:
-                tracked = self.state.get_session(session_info.session_id)
-
-                if tracked is None:
-                    # For new sessions, initialize offset to end of file
-                    # to avoid re-processing old messages
-                    try:
-                        st = session_info.file_path.stat()
-                        file_size, current_mtime = st.st_size, st.st_mtime
-                    except OSError:
-                        file_size = 0
-                        current_mtime = 0.0
-                    tracked = TrackedSession(
-                        session_id=session_info.session_id,
-                        file_path=str(session_info.file_path),
-                        last_byte_offset=file_size,
-                    )
-                    self.state.update_session(tracked)
-                    self._file_mtimes[session_info.session_id] = current_mtime
-                    logger.info("Started tracking session: %s", session_info.session_id)
-                    continue
-
-                # Check mtime to see if file has changed
-                try:
-                    current_mtime = session_info.file_path.stat().st_mtime
-                except OSError:
-                    continue
-
-                last_mtime = self._file_mtimes.get(session_info.session_id, 0.0)
-                if current_mtime <= last_mtime:
-                    # File hasn't changed, skip reading
-                    continue
-
-                # File changed, read new content from last offset
-                new_entries = await self._read_new_lines(
-                    tracked, session_info.file_path
-                )
-                self._file_mtimes[session_info.session_id] = current_mtime
-
-                if new_entries:
-                    logger.debug(
-                        "Read %d new entries for session %s",
-                        len(new_entries),
-                        session_info.session_id,
-                    )
-
-                # Parse new entries using the shared logic, carrying over pending tools
-                carry = self._pending_tools.get(session_info.session_id, {})
-                parsed_entries, remaining = TranscriptParser.parse_entries(
-                    new_entries,
-                    pending_tools=carry,
-                )
-                if remaining:
-                    self._pending_tools[session_info.session_id] = remaining
-                else:
-                    self._pending_tools.pop(session_info.session_id, None)
-
-                for entry in parsed_entries:
-                    if not entry.text:
-                        continue
-                    new_messages.append(
-                        NewMessage(
-                            session_id=session_info.session_id,
-                            text=entry.text,
-                            is_complete=True,
-                            content_type=entry.content_type,
-                            tool_use_id=entry.tool_use_id,
-                            role=entry.role,
-                            tool_name=entry.tool_name,
-                        )
-                    )
-
-                self.state.update_session(tracked)
-
+                await self._process_session_file(session_id, file_path, new_messages)
             except OSError as e:
-                logger.debug(
-                    "Error processing session %s: %s", session_info.session_id, e
-                )
+                logger.debug("Error processing session %s: %s", session_id, e)
+
+        # Fallback path: scan projects for sessions without transcript_path
+        if fallback_session_ids:
+            sessions = await self.scan_projects()
+            for session_info in sessions:
+                if session_info.session_id not in fallback_session_ids:
+                    continue
+                try:
+                    await self._process_session_file(
+                        session_info.session_id, session_info.file_path, new_messages
+                    )
+                except OSError as e:
+                    logger.debug(
+                        "Error processing session %s: %s", session_info.session_id, e
+                    )
 
         self.state.save_if_dirty()
         return new_messages
@@ -506,10 +540,35 @@ class SessionMonitor:
 
                 # Detect session_map changes and cleanup replaced/removed sessions
                 current_map = await self._detect_and_cleanup_changes()
-                active_session_ids = {v["session_id"] for v in current_map.values()}
+
+                # Detect unbound tmux windows (no Claude Code yet)
+                all_windows = await tmux_manager.list_windows()
+                known_window_ids = set(current_map.keys())
+                for window in all_windows:
+                    if window.window_id in known_window_ids:
+                        continue
+                    already_bound = any(
+                        wid == window.window_id
+                        for _, _, wid in session_manager.iter_thread_bindings()
+                    )
+                    if not already_bound and self._new_window_callback:
+                        event = NewWindowEvent(
+                            window_id=window.window_id,
+                            session_id="",
+                            window_name=window.window_name,
+                            cwd=window.cwd,
+                        )
+                        try:
+                            await self._new_window_callback(event)
+                        except _CallbackError as e:
+                            logger.error(
+                                "New window callback error for %s: %s",
+                                window.window_id,
+                                e,
+                            )
 
                 # Check for new messages (all I/O is async)
-                new_messages = await self.check_for_updates(active_session_ids)
+                new_messages = await self.check_for_updates(current_map)
 
                 for msg in new_messages:
                     status = "complete" if msg.is_complete else "streaming"

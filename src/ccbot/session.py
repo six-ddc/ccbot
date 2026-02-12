@@ -57,6 +57,7 @@ def parse_session_map(raw: dict[str, Any], prefix: str) -> dict[str, dict[str, s
                 "session_id": session_id,
                 "cwd": info.get("cwd", ""),
                 "window_name": info.get("window_name", ""),
+                "transcript_path": info.get("transcript_path", ""),
             }
     return result
 
@@ -69,11 +70,13 @@ class WindowState:
         session_id: Associated Claude session ID (empty if not yet detected)
         cwd: Working directory for direct file path construction
         window_name: Display name of the window
+        transcript_path: Direct path to JSONL transcript file (from hook payload)
     """
 
     session_id: str = ""
     cwd: str = ""
     window_name: str = ""
+    transcript_path: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -82,6 +85,8 @@ class WindowState:
         }
         if self.window_name:
             d["window_name"] = self.window_name
+        if self.transcript_path:
+            d["transcript_path"] = self.transcript_path
         return d
 
     @classmethod
@@ -90,6 +95,7 @@ class WindowState:
             session_id=data.get("session_id", ""),
             cwd=data.get("cwd", ""),
             window_name=data.get("window_name", ""),
+            transcript_path=data.get("transcript_path", ""),
         )
 
 
@@ -460,6 +466,7 @@ class SessionManager:
             new_sid = info.get("session_id", "")
             new_cwd = info.get("cwd", "")
             new_wname = info.get("window_name", "")
+            new_transcript = info.get("transcript_path", "")
             if not new_sid:
                 continue
             state = self.get_window_state(window_id)
@@ -472,6 +479,9 @@ class SessionManager:
                 )
                 state.session_id = new_sid
                 state.cwd = new_cwd
+                changed = True
+            if new_transcript and state.transcript_path != new_transcript:
+                state.transcript_path = new_transcript
                 changed = True
             # Update display name
             if new_wname:

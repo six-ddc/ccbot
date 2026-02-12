@@ -184,7 +184,8 @@ class TestReadNewLines:
 
 
 class TestCheckForUpdates:
-    async def test_new_session_initializes_to_eof(self, tmp_path) -> None:
+    async def test_new_session_initializes_to_eof_fallback(self, tmp_path) -> None:
+        """Fallback path: entries without transcript_path use scan_projects."""
         projects_path = tmp_path / "projects"
         work_dir = tmp_path / "myproj"
         work_dir.mkdir()
@@ -212,6 +213,9 @@ class TestCheckForUpdates:
             projects_path=projects_path,
             state_file=tmp_path / "ms.json",
         )
+        current_map = {
+            "@0": {"session_id": "sess-new", "cwd": resolved, "window_name": "proj"},
+        }
         with patch.object(
             monitor,
             "_get_active_cwds",
@@ -219,10 +223,34 @@ class TestCheckForUpdates:
             new_callable=AsyncMock,
             return_value={resolved},
         ):
-            msgs = await monitor.check_for_updates({"sess-new"})
+            msgs = await monitor.check_for_updates(current_map)
 
         assert msgs == []
         tracked = monitor.state.get_session("sess-new")
+        assert tracked is not None
+        assert tracked.last_byte_offset == session_file.stat().st_size
+
+    async def test_new_session_initializes_to_eof_direct(self, tmp_path) -> None:
+        """Primary path: entries with transcript_path are read directly."""
+        session_file = tmp_path / "transcript.jsonl"
+        session_file.write_text('{"type":"summary"}\n')
+
+        monitor = SessionMonitor(
+            projects_path=tmp_path / "projects",
+            state_file=tmp_path / "ms.json",
+        )
+        current_map = {
+            "@0": {
+                "session_id": "sess-direct",
+                "cwd": "/proj",
+                "window_name": "proj",
+                "transcript_path": str(session_file),
+            },
+        }
+        msgs = await monitor.check_for_updates(current_map)
+
+        assert msgs == []
+        tracked = monitor.state.get_session("sess-direct")
         assert tracked is not None
         assert tracked.last_byte_offset == session_file.stat().st_size
 
@@ -262,6 +290,9 @@ class TestCheckForUpdates:
         monitor.state.update_session(tracked)
         monitor._file_mtimes["sess-1"] = session_file.stat().st_mtime
 
+        current_map = {
+            "@0": {"session_id": "sess-1", "cwd": resolved, "window_name": "proj"},
+        }
         with (
             patch.object(
                 monitor,
@@ -274,9 +305,41 @@ class TestCheckForUpdates:
                 monitor, "_read_new_lines", spec=True, new_callable=AsyncMock
             ) as mock_read,
         ):
-            await monitor.check_for_updates({"sess-1"})
+            await monitor.check_for_updates(current_map)
 
         mock_read.assert_not_called()
+
+    async def test_direct_path_reads_new_content(self, tmp_path) -> None:
+        """Primary path reads new content from transcript_path."""
+        session_file = tmp_path / "transcript.jsonl"
+        line = '{"type":"assistant","message":{"content":[{"type":"text","text":"hello"}]}}\n'
+        session_file.write_text(line)
+
+        monitor = SessionMonitor(
+            projects_path=tmp_path / "projects",
+            state_file=tmp_path / "ms.json",
+        )
+        # Pre-track at offset 0 so it reads the content
+        tracked = TrackedSession(
+            session_id="sess-d",
+            file_path=str(session_file),
+            last_byte_offset=0,
+        )
+        monitor.state.update_session(tracked)
+
+        current_map = {
+            "@1": {
+                "session_id": "sess-d",
+                "cwd": "/proj",
+                "window_name": "proj",
+                "transcript_path": str(session_file),
+            },
+        }
+        msgs = await monitor.check_for_updates(current_map)
+
+        assert len(msgs) == 1
+        assert msgs[0].session_id == "sess-d"
+        assert "hello" in msgs[0].text
 
 
 class TestScanProjects:
