@@ -2,9 +2,9 @@
 
 ## Multi-Instance Setup
 
-Multiple ccbot instances can share a single Telegram bot token, each owning a different Telegram group. When `CCBOT_GROUP_ID` is set, an instance silently ignores updates from other groups.
+Run multiple ccbot instances on the same machine, each owning a different Telegram group. All instances can share a single bot token.
 
-**Example: two instances on the same machine**
+**Example: work + personal instances**
 
 Instance 1 (`~/.ccbot-work/.env`):
 
@@ -35,21 +35,38 @@ CCBOT_DIR=~/.ccbot-work ccbot &
 CCBOT_DIR=~/.ccbot-personal ccbot &
 ```
 
+Each instance uses a separate tmux session, config directory, and state. When `CCBOT_GROUP_ID` is set, an instance silently ignores updates from other groups.
+
 Without `CCBOT_GROUP_ID`, a single instance processes all groups (the default).
 
-To find your group's chat ID, add [@userinfobot](https://t.me/userinfobot) or [@RawDataBot](https://t.me/RawDataBot) to the group — it will reply with the chat ID (a negative number like `-1001234567890`).
+> To find your group's chat ID, add [@RawDataBot](https://t.me/RawDataBot) to the group — it replies with the chat ID (a negative number like `-1001234567890`).
 
-## Creating Sessions Manually
+## Creating Sessions from the Terminal
 
-Besides creating sessions through Telegram, you can create tmux windows directly:
+Besides creating sessions through Telegram topics, you can create tmux windows directly:
 
 ```bash
+# Attach to the ccbot tmux session
 tmux attach -t ccbot
+
+# Create a new window for your project
 tmux new-window -n myproject -c ~/Code/myproject
+
+# Start Claude Code
 claude
 ```
 
-The window must be in the `ccbot` tmux session (configurable via `TMUX_SESSION_NAME`). The hook will register it automatically when Claude starts, and the bot will create a matching Telegram topic. When `CCBOT_GROUP_ID` is set, this works even on a fresh instance with no existing bindings.
+The window must be in the ccbot tmux session (configurable via `TMUX_SESSION_NAME`). When Claude starts, the SessionStart hook registers it automatically and the bot creates a matching Telegram topic.
+
+This works even on a fresh instance with no existing topic bindings (cold-start).
+
+## Session Recovery
+
+When a Claude Code session exits or crashes, the bot detects the dead window and offers recovery options via inline buttons:
+
+- **Fresh** — Kill the old window, create a new one in the same directory
+- **Continue** — Start a new Claude session using `--continue` to resume the last conversation
+- **Resume** — Browse and select a past session to resume from
 
 ## Data Storage
 
@@ -61,4 +78,35 @@ All state files live in `$CCBOT_DIR` (`~/.ccbot/` by default):
 | `session_map.json`   | Hook-generated window → session mappings                    |
 | `monitor_state.json` | Byte offsets per session (prevents duplicate notifications) |
 
-Claude Code session transcripts are read from `~/.claude/projects/` (read-only).
+Claude Code session transcripts are read from `~/.claude/projects/` (read-only). The bot never writes to Claude's data directory.
+
+## Running as a Service
+
+For persistent operation, run ccbot as a systemd service or under a process manager:
+
+```bash
+# systemd user service (~/.config/systemd/user/ccbot.service)
+[Unit]
+Description=CCBot - Telegram bridge for Claude Code
+After=network.target
+
+[Service]
+ExecStart=%h/.local/bin/ccbot
+Restart=on-failure
+RestartSec=5
+Environment=CCBOT_DIR=%h/.ccbot
+
+[Install]
+WantedBy=default.target
+```
+
+```bash
+systemctl --user enable ccbot
+systemctl --user start ccbot
+```
+
+On macOS, you can use a launchd plist or simply run in a detached tmux session:
+
+```bash
+tmux new-session -d -s ccbot-daemon 'ccbot'
+```
