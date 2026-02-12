@@ -52,7 +52,10 @@ Other Telegram bots for Claude Code typically wrap the Claude Code SDK to create
 ### 2. Install
 
 ```bash
-# From PyPI (recommended)
+# Using Homebrew (macOS)
+brew install alexei-led/tap/ccbot
+
+# From PyPI (recommended for Linux)
 uv tool install ccbot
 
 # Or using pipx

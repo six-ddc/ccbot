@@ -19,3 +19,13 @@ jobs:
       - run: uv build
       - name: Publish to PyPI
         uses: pypa/gh-action-pypi-publish@release/v1
+  update-homebrew:
+    needs: publish
+    runs-on: ubuntu-latest
+    steps:
+      - uses: mislav/bump-homebrew-formula-pr@v3
+        with:
+          formula-name: ccbot
+          homebrew-tap: alexei-led/homebrew-tap
+        env:
+          COMMITTER_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
