@@ -2,8 +2,10 @@
 
 [![CI](https://github.com/alexei-led/ccbot/actions/workflows/ci.yml/badge.svg?branch=main)](https://github.com/alexei-led/ccbot/actions/workflows/ci.yml)
 [![PyPI](https://img.shields.io/pypi/v/ccbot)](https://pypi.org/project/ccbot/)
+[![Downloads](https://img.shields.io/pypi/dm/ccbot)](https://pypi.org/project/ccbot/)
 [![Python](https://img.shields.io/pypi/pyversions/ccbot)](https://pypi.org/project/ccbot/)
-[![License: MIT](https://img.shields.io/badge/License-MIT-blue.svg)](LICENSE)
+[![Typed](https://img.shields.io/pypi/types/ccbot)](https://pypi.org/project/ccbot/)
+[![License](https://img.shields.io/github/license/alexei-led/ccbot)](LICENSE)
 [![Ruff](https://img.shields.io/endpoint?url=https://raw.githubusercontent.com/astral-sh/ruff/main/assets/badge/v2.json)](https://github.com/astral-sh/ruff)
 
 Control [Claude Code](https://docs.anthropic.com/en/docs/claude-code) sessions from your phone. CCBot bridges Telegram to tmux — monitor output, respond to prompts, and manage sessions without touching your computer.
