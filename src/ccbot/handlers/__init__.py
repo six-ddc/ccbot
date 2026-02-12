@@ -9,4 +9,5 @@ This package contains the Telegram bot handlers split by functionality:
   - interactive_ui: Interactive UI (AskUserQuestion, Permission Prompt, etc.)
   - status_polling: Terminal status line polling
   - response_builder: Build paginated response messages
+  - text_handler: Text message routing (UI guards, unbound/dead window, forwarding)
 """

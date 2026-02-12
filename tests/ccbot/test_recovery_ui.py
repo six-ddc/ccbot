@@ -118,10 +118,13 @@ def _no_group():
         yield mock_config
 
 
+_TH = "ccbot.handlers.text_handler"
+
+
 class TestTextHandlerDeadWindow:
-    @patch("ccbot.bot.tmux_manager")
-    @patch("ccbot.bot.session_manager")
-    @patch("ccbot.bot.safe_reply", new_callable=AsyncMock)
+    @patch(f"{_TH}.tmux_manager")
+    @patch(f"{_TH}.session_manager")
+    @patch(f"{_TH}.safe_reply", new_callable=AsyncMock)
     async def test_dead_window_shows_recovery_ui(
         self,
         mock_safe_reply: AsyncMock,
@@ -139,7 +142,7 @@ class TestTextHandlerDeadWindow:
         update = _make_update()
         ctx = _make_context()
 
-        with patch("ccbot.bot.Path") as mock_path:
+        with patch(f"{_TH}.Path") as mock_path:
             mock_path.return_value.is_dir.return_value = True
             mock_path.cwd.return_value = mock_path.return_value
             await text_handler(update, ctx)
@@ -154,9 +157,9 @@ class TestTextHandlerDeadWindow:
         assert "no longer running" in msg_text
         assert "recover" in msg_text.lower()
 
-    @patch("ccbot.bot.tmux_manager")
-    @patch("ccbot.bot.session_manager")
-    @patch("ccbot.bot.safe_reply", new_callable=AsyncMock)
+    @patch(f"{_TH}.tmux_manager")
+    @patch(f"{_TH}.session_manager")
+    @patch(f"{_TH}.safe_reply", new_callable=AsyncMock)
     async def test_dead_window_stores_pending_message(
         self,
         mock_safe_reply: AsyncMock,
@@ -175,7 +178,7 @@ class TestTextHandlerDeadWindow:
         user_data: dict = {}
         ctx = _make_context(user_data)
 
-        with patch("ccbot.bot.Path") as mock_path:
+        with patch(f"{_TH}.Path") as mock_path:
             mock_path.return_value.is_dir.return_value = True
             mock_path.cwd.return_value = mock_path.return_value
             await text_handler(update, ctx)
@@ -184,10 +187,10 @@ class TestTextHandlerDeadWindow:
         assert user_data["_pending_thread_id"] == 42
         assert user_data["_recovery_window_id"] == "@0"
 
-    @patch("ccbot.bot.tmux_manager")
-    @patch("ccbot.bot.session_manager")
-    @patch("ccbot.bot.safe_reply", new_callable=AsyncMock)
-    @patch("ccbot.bot.build_directory_browser")
+    @patch(f"{_TH}.tmux_manager")
+    @patch(f"{_TH}.session_manager")
+    @patch(f"{_TH}.safe_reply", new_callable=AsyncMock)
+    @patch(f"{_TH}.build_directory_browser")
     async def test_dead_window_no_cwd_falls_back_to_browser(
         self,
         mock_browser: MagicMock,
@@ -207,7 +210,7 @@ class TestTextHandlerDeadWindow:
         update = _make_update()
         ctx = _make_context()
 
-        with patch("ccbot.bot.Path") as mock_path:
+        with patch(f"{_TH}.Path") as mock_path:
             mock_path.return_value.is_dir.return_value = False
             mock_path.cwd.return_value = mock_path.return_value
             str_mock = MagicMock(return_value="/cwd")
@@ -217,10 +220,10 @@ class TestTextHandlerDeadWindow:
         mock_sm.unbind_thread.assert_called_once()
         mock_browser.assert_called_once()
 
-    @patch("ccbot.bot.tmux_manager")
-    @patch("ccbot.bot.session_manager")
-    @patch("ccbot.bot.safe_reply", new_callable=AsyncMock)
-    @patch("ccbot.bot.build_directory_browser")
+    @patch(f"{_TH}.tmux_manager")
+    @patch(f"{_TH}.session_manager")
+    @patch(f"{_TH}.safe_reply", new_callable=AsyncMock)
+    @patch(f"{_TH}.build_directory_browser")
     async def test_dead_window_invalid_cwd_falls_back_to_browser(
         self,
         mock_browser: MagicMock,
@@ -240,7 +243,7 @@ class TestTextHandlerDeadWindow:
         update = _make_update()
         ctx = _make_context()
 
-        with patch("ccbot.bot.Path") as mock_path:
+        with patch(f"{_TH}.Path") as mock_path:
             mock_path.return_value.is_dir.return_value = False
             mock_path.cwd.return_value = mock_path.return_value
             str_mock = MagicMock(return_value="/cwd")
@@ -249,9 +252,9 @@ class TestTextHandlerDeadWindow:
 
         mock_sm.unbind_thread.assert_called_once()
 
-    @patch("ccbot.bot.tmux_manager")
-    @patch("ccbot.bot.session_manager")
-    @patch("ccbot.bot.safe_reply", new_callable=AsyncMock)
+    @patch(f"{_TH}.tmux_manager")
+    @patch(f"{_TH}.session_manager")
+    @patch(f"{_TH}.safe_reply", new_callable=AsyncMock)
     async def test_dead_window_does_not_unbind(
         self,
         mock_safe_reply: AsyncMock,
@@ -269,7 +272,7 @@ class TestTextHandlerDeadWindow:
         update = _make_update()
         ctx = _make_context()
 
-        with patch("ccbot.bot.Path") as mock_path:
+        with patch(f"{_TH}.Path") as mock_path:
             mock_path.return_value.is_dir.return_value = True
             mock_path.cwd.return_value = mock_path.return_value
             await text_handler(update, ctx)

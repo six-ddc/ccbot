@@ -68,25 +68,10 @@ from .handlers.interactive_callbacks import (
     handle_interactive_callback,
     match_interactive_prefix as _match_interactive_prefix,
 )
-from .handlers.recovery_callbacks import (
-    build_recovery_keyboard as _build_recovery_keyboard,
-    handle_recovery_callback,
-)
+from .handlers.recovery_callbacks import handle_recovery_callback
 from .handlers.screenshot_callbacks import handle_screenshot_callback
 from .handlers.window_callbacks import handle_window_callback
-from .handlers.directory_browser import (
-    BROWSE_DIRS_KEY,
-    BROWSE_PAGE_KEY,
-    BROWSE_PATH_KEY,
-    STATE_BROWSING_DIRECTORY,
-    STATE_KEY,
-    STATE_SELECTING_WINDOW,
-    UNBOUND_WINDOWS_KEY,
-    build_directory_browser,
-    build_window_picker,
-    clear_browse_state,
-    clear_window_picker_state,
-)
+from .handlers.directory_browser import clear_browse_state
 from .handlers.cleanup import clear_topic_state
 from .handlers.history import send_history
 from .handlers.sessions_dashboard import (
@@ -100,33 +85,23 @@ from .handlers.interactive_ui import (
     clear_interactive_mode,
     clear_interactive_msg,
     get_interactive_msg_id,
-    get_interactive_window,
     handle_interactive_ui,
     set_interactive_mode,
 )
 from .handlers.message_queue import (
-    clear_status_msg_info,
     enqueue_content_message,
     get_message_queue,
     shutdown_workers,
 )
-from .handlers.message_sender import (
-    NO_LINK_PREVIEW,
-    rate_limit_send_message,
-    safe_reply,
-)
-from .markdown_v2 import convert_markdown
+from .handlers.message_sender import safe_reply
 from .handlers.response_builder import build_response_parts
 from .handlers.status_polling import status_poll_loop
+from .handlers.text_handler import handle_text_message
 from .session import session_manager
 from .session_monitor import NewMessage, NewWindowEvent, SessionMonitor
-from .terminal_parser import extract_bash_output
 from .tmux_manager import tmux_manager
 
 logger = logging.getLogger(__name__)
-
-# Maximum characters for bash output before truncation (fits Telegram 4096-char limit)
-_BASH_OUTPUT_LIMIT = 3800
 
 # Session monitor instance
 session_monitor: SessionMonitor | None = None
@@ -287,96 +262,6 @@ async def unsupported_content_handler(
     )
 
 
-# Active bash capture tasks: (user_id, thread_id) -> asyncio.Task
-_bash_capture_tasks: dict[tuple[int, int], asyncio.Task[None]] = {}
-
-
-def _cancel_bash_capture(user_id: int, thread_id: int) -> None:
-    """Cancel any running bash capture for this topic."""
-    key = (user_id, thread_id)
-    task = _bash_capture_tasks.pop(key, None)
-    if task and not task.done():
-        task.cancel()
-
-
-async def _capture_bash_output(
-    bot: Bot,
-    user_id: int,
-    thread_id: int,
-    window_id: str,
-    command: str,
-) -> None:
-    """Background task: capture ``!`` bash command output from tmux pane.
-
-    Sends the first captured output as a new message, then edits it
-    in-place as more output appears.  Stops after 30 s or when cancelled
-    (e.g. user sends a new message, which pushes content down).
-    """
-    try:
-        # Wait for the command to start producing output
-        await asyncio.sleep(2.0)
-
-        chat_id = session_manager.resolve_chat_id(user_id, thread_id)
-        msg_id: int | None = None
-        last_output: str = ""
-
-        for _ in range(30):
-            raw = await tmux_manager.capture_pane(window_id)
-            if raw is None:
-                return
-
-            output = extract_bash_output(raw, command)
-            if not output:
-                await asyncio.sleep(1.0)
-                continue
-
-            # Skip edit if nothing changed
-            if output == last_output:
-                await asyncio.sleep(1.0)
-                continue
-
-            last_output = output
-
-            # Truncate to fit Telegram's 4096-char limit
-            if len(output) > _BASH_OUTPUT_LIMIT:
-                output = "\u2026 " + output[-_BASH_OUTPUT_LIMIT:]
-
-            if msg_id is None:
-                # First capture — send a new message
-                sent = await rate_limit_send_message(
-                    bot,
-                    chat_id,
-                    output,
-                    message_thread_id=thread_id,
-                )
-                if sent:
-                    msg_id = sent.message_id
-            else:
-                # Subsequent captures — edit in place
-                try:
-                    await bot.edit_message_text(
-                        chat_id=chat_id,
-                        message_id=msg_id,
-                        text=convert_markdown(output),
-                        parse_mode="MarkdownV2",
-                        link_preview_options=NO_LINK_PREVIEW,
-                    )
-                except TelegramError:
-                    with contextlib.suppress(TelegramError):
-                        await bot.edit_message_text(
-                            chat_id=chat_id,
-                            message_id=msg_id,
-                            text=output,
-                            link_preview_options=NO_LINK_PREVIEW,
-                        )
-
-            await asyncio.sleep(1.0)
-    except asyncio.CancelledError:
-        return
-    finally:
-        _bash_capture_tasks.pop((user_id, thread_id), None)
-
-
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
@@ -387,180 +272,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if not update.message or not update.message.text:
         return
 
-    # Store group chat_id for forum topic message routing
-    chat = update.message.chat
-    thread_id = _get_thread_id(update)
-    if chat.type in ("group", "supergroup") and thread_id is not None:
-        session_manager.set_group_chat_id(user.id, thread_id, chat.id)
-
-    text = update.message.text
-
-    # Ignore text in window picker mode (only for the same thread)
-    if context.user_data and context.user_data.get(STATE_KEY) == STATE_SELECTING_WINDOW:
-        pending_tid = context.user_data.get("_pending_thread_id")
-        if pending_tid == thread_id:
-            await safe_reply(
-                update.message,
-                "Please use the window picker above, or tap Cancel.",
-            )
-            return
-        # Stale picker state from a different thread — clear it
-        clear_window_picker_state(context.user_data)
-        context.user_data.pop("_pending_thread_id", None)
-        context.user_data.pop("_pending_thread_text", None)
-
-    # Ignore text in directory browsing mode (only for the same thread)
-    if (
-        context.user_data
-        and context.user_data.get(STATE_KEY) == STATE_BROWSING_DIRECTORY
-    ):
-        pending_tid = context.user_data.get("_pending_thread_id")
-        if pending_tid == thread_id:
-            await safe_reply(
-                update.message,
-                "Please use the directory browser above, or tap Cancel.",
-            )
-            return
-        # Stale browsing state from a different thread — clear it
-        clear_browse_state(context.user_data)
-        context.user_data.pop("_pending_thread_id", None)
-        context.user_data.pop("_pending_thread_text", None)
-
-    # Must be in a named topic
-    if thread_id is None:
-        await safe_reply(
-            update.message,
-            "\u274c Please use a named topic. Create a new topic to start a session.",
-        )
-        return
-
-    wid = session_manager.get_window_for_thread(user.id, thread_id)
-    if wid is None:
-        # Unbound topic — check for unbound windows first
-        all_windows = await tmux_manager.list_windows()
-        bound_ids = {wid for _, _, wid in session_manager.iter_thread_bindings()}
-        unbound = [
-            (w.window_id, w.window_name, w.cwd)
-            for w in all_windows
-            if w.window_id not in bound_ids
-        ]
-        logger.debug(
-            "Window picker check: all=%s, bound=%s, unbound=%s",
-            [w.window_name for w in all_windows],
-            bound_ids,
-            [name for _, name, _ in unbound],
-        )
-
-        if unbound:
-            # Show window picker
-            logger.info(
-                "Unbound topic: showing window picker (%d unbound windows, user=%d, thread=%d)",
-                len(unbound),
-                user.id,
-                thread_id,
-            )
-            msg_text, keyboard, win_ids = build_window_picker(unbound)
-            if context.user_data is not None:
-                context.user_data[STATE_KEY] = STATE_SELECTING_WINDOW
-                context.user_data[UNBOUND_WINDOWS_KEY] = win_ids
-                context.user_data["_pending_thread_id"] = thread_id
-                context.user_data["_pending_thread_text"] = text
-            await safe_reply(update.message, msg_text, reply_markup=keyboard)
-            return
-
-        # No unbound windows — show directory browser to create a new session
-        logger.info(
-            "Unbound topic: showing directory browser (user=%d, thread=%d)",
-            user.id,
-            thread_id,
-        )
-        start_path = str(Path.cwd())
-        msg_text, keyboard, subdirs = build_directory_browser(start_path)
-        if context.user_data is not None:
-            context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
-            context.user_data[BROWSE_PATH_KEY] = start_path
-            context.user_data[BROWSE_PAGE_KEY] = 0
-            context.user_data[BROWSE_DIRS_KEY] = subdirs
-            context.user_data["_pending_thread_id"] = thread_id
-            context.user_data["_pending_thread_text"] = text
-        await safe_reply(update.message, msg_text, reply_markup=keyboard)
-        return
-
-    # Bound topic — forward to bound window
-    w = await tmux_manager.find_window_by_id(wid)
-    if not w:
-        display = session_manager.get_display_name(wid)
-        ws = session_manager.get_window_state(wid)
-        cwd = ws.cwd if ws.cwd else ""
-
-        if not cwd or not Path(cwd).is_dir():
-            # No valid cwd — unbind and fall back to directory browser
-            logger.info(
-                "Dead window %s (no valid cwd), falling back to directory browser"
-                " (user=%d, thread=%d)",
-                wid,
-                user.id,
-                thread_id,
-            )
-            session_manager.unbind_thread(user.id, thread_id)
-            start_path = str(Path.cwd())
-            msg_text, keyboard, subdirs = build_directory_browser(start_path)
-            if context.user_data is not None:
-                context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
-                context.user_data[BROWSE_PATH_KEY] = start_path
-                context.user_data[BROWSE_PAGE_KEY] = 0
-                context.user_data[BROWSE_DIRS_KEY] = subdirs
-                context.user_data["_pending_thread_id"] = thread_id
-                context.user_data["_pending_thread_text"] = text
-            await safe_reply(update.message, msg_text, reply_markup=keyboard)
-            return
-
-        # Show recovery UI
-        logger.info(
-            "Dead window %s (%s), showing recovery UI (user=%d, thread=%d)",
-            wid,
-            display,
-            user.id,
-            thread_id,
-        )
-        if context.user_data is not None:
-            context.user_data["_pending_thread_id"] = thread_id
-            context.user_data["_pending_thread_text"] = text
-            context.user_data["_recovery_window_id"] = wid
-        keyboard = _build_recovery_keyboard(wid)
-        await safe_reply(
-            update.message,
-            f"\u26a0 Window `{display}` is no longer running.\n"
-            f"\U0001f4c2 `{cwd}`\n\n"
-            "How would you like to recover?",
-            reply_markup=keyboard,
-        )
-        return
-
-    await update.message.chat.send_action(ChatAction.TYPING)
-    clear_status_msg_info(user.id, thread_id)
-
-    # Cancel any running bash capture — new message pushes pane content down
-    _cancel_bash_capture(user.id, thread_id)
-
-    success, message = await session_manager.send_to_window(wid, text)
-    if not success:
-        await safe_reply(update.message, f"\u274c {message}")
-        return
-
-    # Start background capture for ! bash command output
-    if text.startswith("!") and len(text) > 1:
-        bash_cmd = text[1:]  # strip leading "!"
-        task = asyncio.create_task(
-            _capture_bash_output(context.bot, user.id, thread_id, wid, bash_cmd)
-        )
-        _bash_capture_tasks[(user.id, thread_id)] = task
-
-    # If in interactive mode, refresh the UI after sending text
-    interactive_window = get_interactive_window(user.id, thread_id)
-    if interactive_window and interactive_window == wid:
-        await asyncio.sleep(0.2)
-        await handle_interactive_ui(context.bot, user.id, wid, thread_id)
+    await handle_text_message(update, context)
 
 
 # --- Callback query handler (thin dispatcher) ---
