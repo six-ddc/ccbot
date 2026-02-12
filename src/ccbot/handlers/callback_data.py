@@ -62,5 +62,10 @@ CB_RECOVERY_RESUME = "rec:r:"  # rec:r:<window_id>
 CB_RECOVERY_PICK = "rec:p:"  # rec:p:<index> (resume picker selection)
 CB_RECOVERY_CANCEL = "rec:x"  # cancel recovery
 
+# Resume command (browse all sessions)
+CB_RESUME_PICK = "res:p:"  # res:p:<index> (session selection)
+CB_RESUME_PAGE = "res:pg:"  # res:pg:<page> (pagination)
+CB_RESUME_CANCEL = "res:x"  # cancel resume browser
+
 # Screenshot control keys
 CB_KEYS_PREFIX = "kb:"  # kb:<key_id>:<window>

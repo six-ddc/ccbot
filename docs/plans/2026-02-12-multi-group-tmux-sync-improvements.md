@@ -178,10 +178,10 @@ Enable C901, PLR0911, PLR0912, PLR0915, N ruff rules, fix violations.
 
 **Steps:**
 
-- [ ] Run `/spec:work` on TASK-011
-- [ ] Implement standalone resume command
-- [ ] Write tests
-- [ ] Run `make check` - must pass
+- [x] Run `/spec:work` on TASK-011
+- [x] Implement standalone resume command
+- [x] Write tests
+- [x] Run `make check` - must pass
 
 ---
 

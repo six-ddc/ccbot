@@ -1,7 +1,7 @@
 ---
 id: TASK-011
 title: Implement /resume command
-status: todo
+status: done
 req: REQ-003
 epic: EPIC-003
 depends: [TASK-010]

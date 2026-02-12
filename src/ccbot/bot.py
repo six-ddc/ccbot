@@ -4,7 +4,7 @@ Registers all command/callback/message handlers and manages the bot lifecycle.
 Each Telegram topic maps 1:1 to a tmux window (Claude session).
 
 Core responsibilities:
-  - Command handlers: /new (+ /start alias), /history, /sessions,
+  - Command handlers: /new (+ /start alias), /history, /sessions, /resume,
     plus forwarding unknown /commands to Claude Code via tmux.
   - Callback query handler: thin dispatcher routing to dedicated handler modules.
   - Topic-based routing: each named topic binds to one tmux window.
@@ -50,6 +50,9 @@ from .handlers.callback_data import (
     CB_RECOVERY_FRESH,
     CB_RECOVERY_PICK,
     CB_RECOVERY_RESUME,
+    CB_RESUME_CANCEL,
+    CB_RESUME_PAGE,
+    CB_RESUME_PICK,
     CB_SCREENSHOT_REFRESH,
     CB_SESSIONS_KILL,
     CB_SESSIONS_KILL_CONFIRM,
@@ -70,6 +73,7 @@ from .handlers.interactive_callbacks import (
     match_interactive_prefix as _match_interactive_prefix,
 )
 from .handlers.recovery_callbacks import handle_recovery_callback
+from .handlers.resume_command import handle_resume_command_callback, resume_command
 from .handlers.screenshot_callbacks import handle_screenshot_callback
 from .handlers.window_callbacks import handle_window_callback
 from .handlers.directory_browser import clear_browse_state
@@ -307,6 +311,7 @@ _CB_RECOVERY = (
     CB_RECOVERY_PICK,
     CB_RECOVERY_CANCEL,
 )
+_CB_RESUME = (CB_RESUME_PICK, CB_RESUME_PAGE, CB_RESUME_CANCEL)
 
 
 async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -363,6 +368,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     # Recovery UI
     elif data.startswith(_CB_RECOVERY):
         await handle_recovery_callback(query, user.id, data, update, context)
+
+    # Resume command UI
+    elif data.startswith(_CB_RESUME):
+        await handle_resume_command_callback(query, user.id, data, update, context)
 
     # Sessions dashboard
     elif data == CB_SESSIONS_REFRESH:
@@ -644,6 +653,9 @@ def create_bot() -> Application:
     )
     application.add_handler(
         CommandHandler("sessions", sessions_command, filters=_group_filter)
+    )
+    application.add_handler(
+        CommandHandler("resume", resume_command, filters=_group_filter)
     )
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Topic closed event — auto-kill associated window

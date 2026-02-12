@@ -35,11 +35,14 @@ _BOT_COMMANDS: list[tuple[str, str]] = [
     ("new", "Create new Claude session"),
     ("history", "Message history for this topic"),
     ("sessions", "Sessions dashboard"),
+    ("resume", "Browse and resume past sessions"),
 ]
 
 # Telegram limits: max 100 commands, descriptions max 256 chars
 _MAX_TELEGRAM_COMMANDS = 100
 _MAX_DESCRIPTION_LEN = 256
+
+_FrontmatterReadError = (OSError, UnicodeDecodeError)
 
 
 @dataclass(frozen=True, slots=True)
@@ -77,7 +80,7 @@ def parse_frontmatter(path: Path) -> dict[str, str]:
     """
     try:
         text = path.read_text(encoding="utf-8")
-    except (OSError, UnicodeDecodeError):
+    except _FrontmatterReadError:
         return {}
 
     if not text.startswith("---"):
