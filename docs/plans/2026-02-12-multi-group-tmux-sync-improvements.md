@@ -86,10 +86,10 @@ Verify the full flow: hook writes session_map -> monitor detects -> topic create
 
 **Steps:**
 
-- [ ] Create spec task via `/spec:new` for e2e sync test
-- [ ] Write integration test covering: session_map update -> monitor poll -> \_handle_new_window -> topic creation -> binding verification
-- [ ] Test with and without `CCBOT_GROUP_ID` set
-- [ ] Run `make check` - must pass
+- [x] Create spec task via `/spec:new` for e2e sync test
+- [x] Write integration test covering: session_map update -> monitor poll -> \_handle_new_window -> topic creation -> binding verification
+- [x] Test with and without `CCBOT_GROUP_ID` set
+- [x] Run `make check` - must pass
 
 ---
 
