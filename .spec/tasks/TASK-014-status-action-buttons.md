@@ -1,7 +1,7 @@
 ---
 id: TASK-014
 title: Quick action buttons on status messages
-status: todo
+status: done
 req: REQ-004
 epic: EPIC-004
 depends: [TASK-007]

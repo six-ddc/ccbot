@@ -33,6 +33,7 @@ from .interactive_ui import (
 )
 from .cleanup import clear_topic_state
 from .message_queue import enqueue_status_update, get_message_queue
+from .topic_emoji import update_topic_emoji
 
 # Top-level loop resilience: catch any error to keep polling alive
 _LoopError = (TelegramError, OSError, RuntimeError, ValueError)
@@ -101,7 +102,17 @@ async def update_status_message(
             status_line,
             thread_id=thread_id,
         )
-    # If no status line, keep existing status message (don't clear on transient state)
+        # Update topic emoji to active (Claude is working)
+        if thread_id is not None:
+            chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+            display = session_manager.get_display_name(window_id)
+            await update_topic_emoji(bot, chat_id, thread_id, "active", display)
+    else:
+        # No status line = idle (window alive but Claude not working)
+        if thread_id is not None:
+            chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+            display = session_manager.get_display_name(window_id)
+            await update_topic_emoji(bot, chat_id, thread_id, "idle", display)
 
 
 async def status_poll_loop(bot: Bot) -> None:
@@ -155,6 +166,12 @@ async def status_poll_loop(bot: Bot) -> None:
                     # Skip dead windows — recovery UI handles them on next user message
                     w = await tmux_manager.find_window_by_id(wid)
                     if not w:
+                        # Mark topic as dead
+                        chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+                        display = session_manager.get_display_name(wid)
+                        await update_topic_emoji(
+                            bot, chat_id, thread_id, "dead", display
+                        )
                         continue
 
                     queue = get_message_queue(user_id)

@@ -1,8 +1,9 @@
 """Sessions dashboard — /sessions command showing all bound sessions.
 
 Displays a summary of all thread-bound sessions for the current user
-with alive/dead status indicators, per-session Kill buttons (two-step
-confirmation), and refresh/new-session actions.
+with alive/dead status indicators, per-session action buttons (Esc,
+Screenshot, Kill with two-step confirmation), cwd details, and
+refresh/new-session actions.
 
 Key functions:
   - sessions_command(): /sessions command handler
@@ -30,14 +31,18 @@ from .callback_data import (
     CB_SESSIONS_KILL_CONFIRM,
     CB_SESSIONS_NEW,
     CB_SESSIONS_REFRESH,
+    CB_STATUS_ESC,
+    CB_STATUS_SCREENSHOT,
 )
 from .cleanup import clear_topic_state
 from .message_sender import safe_edit, safe_reply
 
 logger = logging.getLogger(__name__)
 
-_REFRESH_BTN = InlineKeyboardButton("🔄 Refresh", callback_data=CB_SESSIONS_REFRESH)
-_NEW_BTN = InlineKeyboardButton("➕ New Session", callback_data=CB_SESSIONS_NEW)
+_REFRESH_BTN = InlineKeyboardButton(
+    "\U0001f504 Refresh", callback_data=CB_SESSIONS_REFRESH
+)
+_NEW_BTN = InlineKeyboardButton("\u2795 New Session", callback_data=CB_SESSIONS_NEW)
 
 
 async def _build_dashboard(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
@@ -55,24 +60,39 @@ async def _build_dashboard(user_id: int) -> tuple[str, InlineKeyboardMarkup]:
     live_ids = {w.window_id for w in all_windows}
 
     lines: list[str] = []
-    kill_buttons: list[list[InlineKeyboardButton]] = []
+    action_rows: list[list[InlineKeyboardButton]] = []
     for _thread_id, window_id in sorted(bindings.items()):
         display_name = session_manager.get_display_name(window_id)
+        ws = session_manager.get_window_state(window_id)
         alive = window_id in live_ids
-        status = "🟢" if alive else "⚫"
-        lines.append(f"{status} {display_name}")
+        status = "\U0001f7e2" if alive else "\u26ab"
+
+        # Session line with cwd detail
+        line = f"{status} {display_name}"
+        if ws.cwd:
+            line += f"\n    {ws.cwd}"
+        lines.append(line)
+
         if alive:
-            kill_buttons.append(
+            action_rows.append(
                 [
                     InlineKeyboardButton(
-                        f"🗑 Kill {display_name}",
+                        "\u238b Esc",
+                        callback_data=f"{CB_STATUS_ESC}{window_id}"[:64],
+                    ),
+                    InlineKeyboardButton(
+                        "\U0001f4f8",
+                        callback_data=f"{CB_STATUS_SCREENSHOT}{window_id}"[:64],
+                    ),
+                    InlineKeyboardButton(
+                        f"\U0001f5d1 Kill {display_name}",
                         callback_data=f"{CB_SESSIONS_KILL}{window_id}"[:64],
-                    )
+                    ),
                 ]
             )
 
     text = "Sessions\n\n" + "\n".join(lines)
-    rows = kill_buttons + [[_REFRESH_BTN, _NEW_BTN]]
+    rows = action_rows + [[_REFRESH_BTN, _NEW_BTN]]
     return text, InlineKeyboardMarkup(rows)
 
 
@@ -105,7 +125,7 @@ async def handle_sessions_kill(
         [
             [
                 InlineKeyboardButton(
-                    f"⚠ Confirm kill {display}",
+                    f"\u26a0 Confirm kill {display}",
                     callback_data=f"{CB_SESSIONS_KILL_CONFIRM}{window_id}"[:64],
                 ),
             ],
@@ -144,4 +164,6 @@ async def handle_sessions_kill_confirm(
 
     # Re-render dashboard
     text, keyboard = await _build_dashboard(user_id)
-    await safe_edit(query, f"🗑 Killed '{display}'\n\n{text}", reply_markup=keyboard)
+    await safe_edit(
+        query, f"\U0001f5d1 Killed '{display}'\n\n{text}", reply_markup=keyboard
+    )

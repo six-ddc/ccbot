@@ -4,12 +4,18 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ccbot.handlers.callback_data import CB_SESSIONS_NEW, CB_SESSIONS_REFRESH
+from ccbot.handlers.callback_data import (
+    CB_SESSIONS_NEW,
+    CB_SESSIONS_REFRESH,
+    CB_STATUS_ESC,
+    CB_STATUS_SCREENSHOT,
+)
 from ccbot.handlers.sessions_dashboard import (
     _build_dashboard,
     handle_sessions_refresh,
     sessions_command,
 )
+from ccbot.session import WindowState
 
 
 @pytest.fixture(autouse=True)
@@ -21,6 +27,7 @@ def _patch_deps():
     ):
         mock_sm.get_all_thread_windows.return_value = {}
         mock_sm.get_display_name.side_effect = lambda wid: wid
+        mock_sm.get_window_state.side_effect = lambda wid: WindowState()
         mock_tm.list_windows = AsyncMock(return_value=[])
         mock_cfg.is_user_allowed.return_value = True
         yield mock_sm, mock_tm, mock_cfg
@@ -38,10 +45,35 @@ class TestBuildDashboard:
         mock_sm, mock_tm, _ = _patch_deps
         mock_sm.get_all_thread_windows.return_value = {42: "@0"}
         mock_sm.get_display_name.side_effect = lambda wid: "myproject"
+        mock_sm.get_window_state.side_effect = lambda wid: WindowState(
+            cwd="/home/user/myproject"
+        )
         mock_tm.list_windows = AsyncMock(return_value=[MagicMock(window_id="@0")])
 
         text, _kb = await _build_dashboard(100)
         assert "\U0001f7e2 myproject" in text
+
+    async def test_alive_session_shows_cwd(self, _patch_deps) -> None:
+        mock_sm, mock_tm, _ = _patch_deps
+        mock_sm.get_all_thread_windows.return_value = {42: "@0"}
+        mock_sm.get_display_name.side_effect = lambda wid: "myproject"
+        mock_sm.get_window_state.side_effect = lambda wid: WindowState(
+            cwd="/home/user/myproject"
+        )
+        mock_tm.list_windows = AsyncMock(return_value=[MagicMock(window_id="@0")])
+
+        text, _kb = await _build_dashboard(100)
+        assert "/home/user/myproject" in text
+
+    async def test_no_cwd_shows_no_path(self, _patch_deps) -> None:
+        mock_sm, mock_tm, _ = _patch_deps
+        mock_sm.get_all_thread_windows.return_value = {42: "@0"}
+        mock_sm.get_display_name.side_effect = lambda wid: "myproject"
+        mock_sm.get_window_state.side_effect = lambda wid: WindowState(cwd="")
+        mock_tm.list_windows = AsyncMock(return_value=[MagicMock(window_id="@0")])
+
+        text, _kb = await _build_dashboard(100)
+        assert "    " not in text
 
     async def test_dead_session(self, _patch_deps) -> None:
         mock_sm, mock_tm, _ = _patch_deps
@@ -77,6 +109,35 @@ class TestBuildDashboard:
         assert any("New" in label for label in labels)
         assert CB_SESSIONS_REFRESH in data
         assert CB_SESSIONS_NEW in data
+
+    async def test_alive_session_has_esc_button(self, _patch_deps) -> None:
+        mock_sm, mock_tm, _ = _patch_deps
+        mock_sm.get_all_thread_windows.return_value = {42: "@0"}
+        mock_tm.list_windows = AsyncMock(return_value=[MagicMock(window_id="@0")])
+
+        _text, keyboard = await _build_dashboard(100)
+        data = [btn.callback_data for row in keyboard.inline_keyboard for btn in row]
+        assert any(d.startswith(CB_STATUS_ESC) for d in data)
+
+    async def test_alive_session_has_screenshot_button(self, _patch_deps) -> None:
+        mock_sm, mock_tm, _ = _patch_deps
+        mock_sm.get_all_thread_windows.return_value = {42: "@0"}
+        mock_tm.list_windows = AsyncMock(return_value=[MagicMock(window_id="@0")])
+
+        _text, keyboard = await _build_dashboard(100)
+        data = [btn.callback_data for row in keyboard.inline_keyboard for btn in row]
+        assert any(d.startswith(CB_STATUS_SCREENSHOT) for d in data)
+
+    async def test_dead_session_no_action_buttons(self, _patch_deps) -> None:
+        mock_sm, mock_tm, _ = _patch_deps
+        mock_sm.get_all_thread_windows.return_value = {42: "@0"}
+        mock_sm.get_display_name.side_effect = lambda wid: "deadproject"
+        mock_tm.list_windows = AsyncMock(return_value=[])
+
+        _text, keyboard = await _build_dashboard(100)
+        data = [btn.callback_data for row in keyboard.inline_keyboard for btn in row]
+        assert not any(d.startswith(CB_STATUS_ESC) for d in data)
+        assert not any(d.startswith(CB_STATUS_SCREENSHOT) for d in data)
 
 
 class TestSessionsCommand:

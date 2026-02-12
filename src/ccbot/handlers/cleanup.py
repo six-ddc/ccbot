@@ -13,6 +13,7 @@ from telegram import Bot
 
 from .interactive_ui import clear_interactive_msg
 from .message_queue import clear_status_msg_info, clear_tool_msg_ids_for_topic
+from .topic_emoji import clear_topic_emoji_state
 from .user_state import PENDING_THREAD_ID, PENDING_THREAD_TEXT
 
 
@@ -32,6 +33,7 @@ async def clear_topic_state(
       - _status_msg_info (status message tracking)
       - _tool_msg_ids (tool_use -> message_id mapping)
       - _interactive_msgs and _interactive_mode (interactive UI state)
+      - _topic_states (topic emoji tracking)
       - user_data pending state (PENDING_THREAD_ID, PENDING_THREAD_TEXT)
     """
     # Clear status message tracking
@@ -42,6 +44,12 @@ async def clear_topic_state(
 
     # Clear interactive UI state (also deletes message from chat)
     await clear_interactive_msg(user_id, bot, thread_id)
+
+    # Clear topic emoji tracking (needs chat_id; use 0 as fallback)
+    from ..session import session_manager
+
+    chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+    clear_topic_emoji_state(chat_id, thread_id)
 
     # Clear pending thread state from user_data
     if user_data is not None and user_data.get(PENDING_THREAD_ID) == thread_id:

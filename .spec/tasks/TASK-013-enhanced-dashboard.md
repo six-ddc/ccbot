@@ -1,7 +1,7 @@
 ---
 id: TASK-013
 title: Enhanced /sessions dashboard with actions
-status: todo
+status: done
 req: REQ-004
 epic: EPIC-004
 depends: [TASK-006, TASK-007]

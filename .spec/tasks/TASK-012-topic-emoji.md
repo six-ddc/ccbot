@@ -1,7 +1,7 @@
 ---
 id: TASK-012
 title: Topic emoji status updates
-status: todo
+status: done
 req: REQ-004
 epic: EPIC-004
 ---
