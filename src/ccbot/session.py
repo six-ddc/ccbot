@@ -441,19 +441,20 @@ class SessionManager:
         old_format_sids: set[str] = set()
         changed = False
 
+        old_format_keys: list[str] = []
         for key, info in session_map.items():
             # Only process entries for our tmux session
             if not key.startswith(prefix):
                 continue
             window_id = key[len(prefix) :]
-            # Old-format key (window_name instead of window_id): don't create
-            # window_states entries with window_name keys, but remember the
-            # session_id so migrated states survive the stale cleanup below.
+            # Old-format key (window_name instead of window_id): remember the
+            # session_id so migrated window_states survive stale cleanup,
+            # then mark for removal from session_map.json.
             if not self._is_window_id(window_id):
                 sid = info.get("session_id", "")
                 if sid:
                     old_format_sids.add(sid)
-                logger.debug("Skipping old-format session_map key: %s", key)
+                old_format_keys.append(key)
                 continue
             valid_wids.add(window_id)
             new_sid = info.get("session_id", "")
@@ -493,6 +494,14 @@ class SessionManager:
             logger.info("Removing stale window_state: %s", wid)
             del self.window_states[wid]
             changed = True
+
+        # Purge old-format keys from session_map.json so they don't
+        # get logged every poll cycle.
+        if old_format_keys:
+            for key in old_format_keys:
+                logger.info("Removing old-format session_map key: %s", key)
+                del session_map[key]
+            atomic_write_json(config.session_map_file, session_map)
 
         if changed:
             self._save_state()

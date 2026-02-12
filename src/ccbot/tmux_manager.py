@@ -18,13 +18,19 @@ from dataclasses import dataclass
 from pathlib import Path
 
 import libtmux
+from libtmux._internal.query_list import ObjectDoesNotExist
 from libtmux.exc import LibTmuxException
 
 from .config import config
 
 logger = logging.getLogger(__name__)
 
-_TmuxError = (LibTmuxException, OSError, subprocess.CalledProcessError)
+_TmuxError = (
+    LibTmuxException,
+    ObjectDoesNotExist,
+    OSError,
+    subprocess.CalledProcessError,
+)
 
 
 @dataclass

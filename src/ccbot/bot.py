@@ -592,8 +592,9 @@ async def post_init(application: Application) -> None:
             except _CommandRefreshError:
                 logger.exception("Failed to refresh CC commands, keeping previous menu")
 
-    if application.job_queue:
-        application.job_queue.run_repeating(_refresh_commands, interval=600, first=600)
+    jq = getattr(application, "job_queue", None)
+    if jq is not None:
+        jq.run_repeating(_refresh_commands, interval=600, first=600)
 
     # Re-resolve stale window IDs from persisted state against live tmux windows
     await session_manager.resolve_stale_ids()
@@ -614,7 +615,7 @@ async def post_init(application: Application) -> None:
     logger.info("Session monitor started")
 
     # Start status polling task (routed through PTB error handler)
-    _status_poll_task = application.create_task(status_poll_loop(application.bot))
+    _status_poll_task = asyncio.create_task(status_poll_loop(application.bot))
     logger.info("Status polling task started")
 
 
