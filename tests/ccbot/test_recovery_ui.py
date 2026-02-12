@@ -705,11 +705,14 @@ class TestRecoveryResumePickCallback:
 
 
 class TestRecoveryBackCallback:
+    @patch(f"{_RC}.session_manager")
     @patch(f"{_RC}.safe_edit", new_callable=AsyncMock)
     async def test_back_shows_recovery_menu(
         self,
         mock_safe_edit: AsyncMock,
+        mock_sm: MagicMock,
     ) -> None:
+        mock_sm.get_window_state.return_value = MagicMock(cwd="/tmp/project")
         update = _make_callback_update(data=f"{CB_RECOVERY_BACK}@0")
         user_data = _recovery_user_data()
         ctx = _make_context(user_data)

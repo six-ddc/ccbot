@@ -313,17 +313,8 @@ async def _handle_back(
 ) -> None:
     """Handle CB_RECOVERY_BACK: return to the recovery options menu."""
     window_id = data[len(CB_RECOVERY_BACK) :]
-    thread_id = get_thread_id(update)
-    if thread_id is None:
-        await query.answer("Stale recovery", show_alert=True)
-        return
-    pending_tid = (
-        context.user_data.get(PENDING_THREAD_ID) if context.user_data else None
-    )
-    stored_wid = (
-        context.user_data.get(RECOVERY_WINDOW_ID) if context.user_data else None
-    )
-    if pending_tid is None or thread_id != pending_tid or stored_wid != window_id:
+    validated = _validate_recovery_state(window_id, update, context)
+    if validated is None:
         await query.answer("Stale recovery (topic mismatch)", show_alert=True)
         return
     kb = build_recovery_keyboard(window_id)
