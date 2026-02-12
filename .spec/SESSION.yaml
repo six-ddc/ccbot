@@ -1,5 +1,0 @@
-# Session state - auto-managed by specctl
-task: TASK-009-dead-window-detection
-step: planning
-started: 2026-02-11T15:02:59Z
-base_commit: 39d03dc
