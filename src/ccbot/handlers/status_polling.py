@@ -14,11 +14,14 @@ Key components:
   - TOPIC_CHECK_INTERVAL: Topic existence probe frequency (60 seconds)
   - status_poll_loop: Background polling task
   - update_status_message: Poll and enqueue status updates
+  - clear_dead_notification: Clear dead window notification tracking
+  - Proactive recovery: sends recovery keyboard when a window dies
 """
 
 import asyncio
 import logging
 import time
+from pathlib import Path
 
 from telegram import Bot
 from telegram.error import BadRequest, TelegramError
@@ -33,6 +36,8 @@ from .interactive_ui import (
 )
 from .cleanup import clear_topic_state
 from .message_queue import enqueue_status_update, get_message_queue
+from .message_sender import rate_limit_send_message
+from .recovery_callbacks import build_recovery_keyboard
 from .topic_emoji import update_topic_emoji
 
 # Top-level loop resilience: catch any error to keep polling alive
@@ -45,6 +50,21 @@ STATUS_POLL_INTERVAL = 1.0  # seconds - faster response (rate limiting at send l
 
 # Topic existence probe interval
 TOPIC_CHECK_INTERVAL = 60.0  # seconds
+
+# Track which (user_id, thread_id, window_id) tuples have been notified about death
+_dead_notified: set[tuple[int, int, str]] = set()
+
+
+def clear_dead_notification(user_id: int, thread_id: int) -> None:
+    """Remove dead notification tracking for a topic (called on cleanup)."""
+    _dead_notified.difference_update(
+        {k for k in _dead_notified if k[0] == user_id and k[1] == thread_id}
+    )
+
+
+def reset_dead_notification_state() -> None:
+    """Reset all dead notification tracking (for testing)."""
+    _dead_notified.clear()
 
 
 async def update_status_message(
@@ -163,7 +183,11 @@ async def status_poll_loop(bot: Bot) -> None:
 
             for user_id, thread_id, wid in list(session_manager.iter_thread_bindings()):
                 try:
-                    # Skip dead windows — recovery UI handles them on next user message
+                    # Already notified about this dead window — skip tmux check
+                    dead_key = (user_id, thread_id, wid)
+                    if dead_key in _dead_notified:
+                        continue
+
                     w = await tmux_manager.find_window_by_id(wid)
                     if not w:
                         # Mark topic as dead
@@ -172,6 +196,34 @@ async def status_poll_loop(bot: Bot) -> None:
                         await update_topic_emoji(
                             bot, chat_id, thread_id, "dead", display
                         )
+                        # Send proactive recovery notification (once per death)
+                        window_state = session_manager.get_window_state(wid)
+                        cwd = window_state.cwd or ""
+                        try:
+                            dir_exists = cwd and await asyncio.to_thread(
+                                Path(cwd).is_dir
+                            )
+                        except OSError:
+                            dir_exists = False
+                        if dir_exists:
+                            keyboard = build_recovery_keyboard(wid)
+                            text = (
+                                f"\u26a0 Session `{display}` ended.\n"
+                                f"\U0001f4c2 `{cwd}`\n\n"
+                                "Tap a button or send a message to recover."
+                            )
+                        else:
+                            text = f"\u26a0 Session `{display}` ended."
+                            keyboard = None
+                        sent = await rate_limit_send_message(
+                            bot,
+                            chat_id,
+                            text,
+                            message_thread_id=thread_id,
+                            reply_markup=keyboard,
+                        )
+                        if sent:
+                            _dead_notified.add(dead_key)
                         continue
 
                     queue = get_message_queue(user_id)
@@ -190,7 +242,7 @@ async def status_poll_loop(bot: Bot) -> None:
                         thread_id,
                         e,
                     )
-        except _LoopError as e:
-            logger.error("Status poll loop error: %s", e)
+        except _LoopError:
+            logger.exception("Status poll loop error")
 
         await asyncio.sleep(STATUS_POLL_INTERVAL)

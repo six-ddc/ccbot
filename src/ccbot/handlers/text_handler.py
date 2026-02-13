@@ -7,21 +7,14 @@ Each step returns True if it handled the request (stop) or False to continue.
 The orchestrator (handle_text_message) calls steps in sequence.
 """
 
-from __future__ import annotations
-
 import asyncio
 import contextlib
 import logging
 from pathlib import Path
-from typing import TYPE_CHECKING
-
-from telegram import Bot, Update
+from telegram import Bot, Message, Update
 from telegram.constants import ChatAction
 from telegram.error import TelegramError
 from telegram.ext import ContextTypes
-
-if TYPE_CHECKING:
-    from telegram import Message
 
 from .callback_helpers import get_thread_id as _get_thread_id
 from .directory_browser import (
@@ -284,6 +277,9 @@ async def _handle_dead_window(
             thread_id,
         )
         session_manager.unbind_thread(user_id, thread_id)
+        from .status_polling import clear_dead_notification
+
+        clear_dead_notification(user_id, thread_id)
         start_path = str(Path.cwd())
         msg_text, keyboard, subdirs = build_directory_browser(start_path)
         if user_data is not None:

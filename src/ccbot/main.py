@@ -2,11 +2,13 @@
 
 Handles two execution modes:
   1. `ccbot hook` — delegates to hook.hook_main() for Claude Code hook processing.
-  2. Default — configures logging, initializes tmux session, and starts the
-     Telegram bot polling loop via bot.create_bot().
+  2. Default — configures logging (respects CCBOT_LOG_LEVEL env var),
+     initializes tmux session, and starts the Telegram bot polling loop
+     via bot.create_bot().
 """
 
 import logging
+import os
 import sys
 
 
@@ -18,12 +20,13 @@ def main() -> None:
         hook_main()
         return
 
+    log_level = os.environ.get("CCBOT_LOG_LEVEL", "INFO").upper()
     logging.basicConfig(
-        format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
         level=logging.WARNING,
     )
 
-    # Import config before enabling DEBUG — avoid leaking debug logs on config errors
+    # Import config before enabling ccbot loggers — avoid leaking debug logs on config errors
     try:
         from .config import config
     except ValueError as e:
@@ -40,7 +43,14 @@ def main() -> None:
         print("Get your user ID from @userinfobot on Telegram.")
         sys.exit(1)
 
-    logging.getLogger("ccbot").setLevel(logging.DEBUG)
+    numeric_level = getattr(logging, log_level, None)
+    if not isinstance(numeric_level, int):
+        logging.warning("Invalid CCBOT_LOG_LEVEL=%r, defaulting to INFO", log_level)
+        numeric_level = logging.INFO
+    logging.getLogger("ccbot").setLevel(numeric_level)
+    # Silence chatty third-party loggers
+    for name in ("httpx", "httpcore", "telegram.ext"):
+        logging.getLogger(name).setLevel(logging.WARNING)
     logger = logging.getLogger(__name__)
 
     from .tmux_manager import tmux_manager

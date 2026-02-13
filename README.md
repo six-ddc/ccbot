@@ -148,6 +148,7 @@ Open your Telegram group, create a new topic, send a message — a directory bro
 | `CLAUDE_COMMAND`        | `claude`       | Command to launch Claude Code     |
 | `CCBOT_GROUP_ID`        | _(all groups)_ | Restrict to one Telegram group    |
 | `CCBOT_INSTANCE_NAME`   | hostname       | Display label for this instance   |
+| `CCBOT_LOG_LEVEL`       | `INFO`         | Log level for ccbot loggers       |
 | `MONITOR_POLL_INTERVAL` | `2.0`          | Seconds between transcript polls  |
 
 ## Documentation

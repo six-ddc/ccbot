@@ -85,8 +85,8 @@ class MonitorState:
             logger.debug(
                 "Saved %d tracked sessions to state", len(self.tracked_sessions)
             )
-        except OSError as e:
-            logger.error("Failed to save state file: %s", e)
+        except OSError:
+            logger.exception("Failed to save state file")
 
     def get_session(self, session_id: str) -> TrackedSession | None:
         """Get tracked session by ID."""

@@ -200,7 +200,7 @@ async def _message_queue_worker(bot: Bot, user_id: int) -> None:
     """Process message tasks for a user sequentially."""
     queue = _message_queues[user_id]
     lock = _queue_locks[user_id]
-    logger.info("Message queue worker started for user %s", user_id)
+    logger.debug("Message queue worker started for user %s", user_id)
 
     while True:
         try:
@@ -236,17 +236,22 @@ async def _message_queue_worker(bot: Bot, user_id: int) -> None:
                     "Flood control for user %s, pausing %ss", user_id, retry_secs
                 )
                 await asyncio.sleep(retry_secs)
-            except (TelegramError, OSError) as e:
-                logger.error(
-                    "Error processing message task for user %s: %s", user_id, e
+            except TelegramError, OSError:
+                logger.exception(
+                    "Error processing message task for user %s (thread %s)",
+                    user_id,
+                    task.thread_id,
                 )
             finally:
                 queue.task_done()
         except asyncio.CancelledError:
-            logger.info("Message queue worker cancelled for user %s", user_id)
+            logger.debug("Message queue worker cancelled for user %s", user_id)
             break
-        except _LoopError as e:
-            logger.error("Unexpected error in queue worker for user %s: %s", user_id, e)
+        except _LoopError:
+            logger.exception(
+                "Unexpected error in queue worker for user %s",
+                user_id,
+            )
 
 
 def _send_kwargs(thread_id: int | None) -> dict[str, int]:
@@ -360,7 +365,7 @@ async def _convert_status_to_content(
     thread_id: int | None = thread_id_or_0 if thread_id_or_0 != 0 else None
     chat_id = session_manager.resolve_chat_id(user_id, thread_id)
 
-    msg_id, stored_wid, _last_text = info
+    msg_id, stored_wid, _ = info
     if stored_wid != window_id:
         # Different window, just delete the old status
         with contextlib.suppress(TelegramError):
@@ -617,7 +622,7 @@ def clear_tool_msg_ids_for_topic(user_id: int, thread_id: int | None = None) -> 
 
 async def shutdown_workers() -> None:
     """Stop all queue workers (called during bot shutdown)."""
-    for user_id, worker in list(_queue_workers.items()):
+    for _user_id, worker in list(_queue_workers.items()):
         worker.cancel()
         with contextlib.suppress(asyncio.CancelledError):
             await worker

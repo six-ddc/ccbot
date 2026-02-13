@@ -567,12 +567,11 @@ async def _handle_new_window(event: NewWindowEvent, bot: Bot) -> None:
                 session_manager.set_group_chat_id(
                     first_user_id, topic.message_thread_id, chat_id
                 )
-        except TelegramError as e:
-            logger.error(
-                "Failed to create topic for window %s in chat %d: %s",
+        except TelegramError:
+            logger.exception(
+                "Failed to create topic for window %s in chat %d",
                 event.window_id,
                 chat_id,
-                e,
             )
 
 

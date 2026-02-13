@@ -274,8 +274,8 @@ class SessionMonitor:
 
                 session.last_byte_offset = safe_offset
 
-        except OSError as e:
-            logger.error("Error reading session file %s: %s", file_path, e)
+        except OSError:
+            logger.exception("Error reading session file %s", file_path)
         return new_entries
 
     async def _process_session_file(
@@ -304,7 +304,7 @@ class SessionMonitor:
             )
             self.state.update_session(tracked)
             self._file_mtimes[session_id] = current_mtime
-            logger.info("Started tracking session: %s", session_id)
+            logger.debug("Started tracking session: %s", session_id)
             return
 
         # Check mtime to see if file has changed
@@ -510,8 +510,8 @@ class SessionMonitor:
                 )
                 try:
                     await self._new_window_callback(event)
-                except _CallbackError as e:
-                    logger.error("New window callback error for %s: %s", window_id, e)
+                except _CallbackError:
+                    logger.exception("New window callback error for %s", window_id)
 
         # Update last known map
         self._last_session_map = current_map
@@ -560,11 +560,10 @@ class SessionMonitor:
                         )
                         try:
                             await self._new_window_callback(event)
-                        except _CallbackError as e:
-                            logger.error(
-                                "New window callback error for %s: %s",
+                        except _CallbackError:
+                            logger.exception(
+                                "New window callback error for %s",
                                 window.window_id,
-                                e,
                             )
 
                 # Check for new messages (all I/O is async)
@@ -575,15 +574,18 @@ class SessionMonitor:
                     preview = msg.text[:_MSG_PREVIEW_LENGTH] + (
                         "..." if len(msg.text) > _MSG_PREVIEW_LENGTH else ""
                     )
-                    logger.info("[%s] session=%s: %s", status, msg.session_id, preview)
+                    logger.debug("[%s] session=%s: %s", status, msg.session_id, preview)
                     if self._message_callback:
                         try:
                             await self._message_callback(msg)
-                        except _CallbackError as e:
-                            logger.error("Message callback error: %s", e)
+                        except _CallbackError:
+                            logger.exception(
+                                "Message callback error for session=%s",
+                                msg.session_id,
+                            )
 
-            except _LoopError as e:
-                logger.error("Monitor loop error: %s", e)
+            except _LoopError:
+                logger.exception("Monitor loop error")
 
             await asyncio.sleep(self.poll_interval)
 

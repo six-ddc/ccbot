@@ -256,7 +256,7 @@ class SessionManager:
                     )
                     new_id = live_by_name.get(display)
                     if new_id:
-                        logger.info(
+                        logger.debug(
                             "Re-resolved stale window_id %s -> %s (name=%s)",
                             key,
                             new_id,
@@ -268,7 +268,7 @@ class SessionManager:
                         self.window_display_names.pop(key, None)
                         changed = True
                     else:
-                        logger.info(
+                        logger.debug(
                             "Dropping stale window_state: %s (name=%s)", key, display
                         )
                         changed = True
@@ -276,13 +276,13 @@ class SessionManager:
                 # Old format: key is window_name
                 new_id = live_by_name.get(key)
                 if new_id:
-                    logger.info("Migrating window_state key %s -> %s", key, new_id)
+                    logger.debug("Migrating window_state key %s -> %s", key, new_id)
                     window_state.window_name = key
                     new_window_states[new_id] = window_state
                     self.window_display_names[new_id] = key
                     changed = True
                 else:
-                    logger.info(
+                    logger.debug(
                         "Dropping old-format window_state: %s (no live window)", key
                     )
                     changed = True
@@ -299,7 +299,7 @@ class SessionManager:
                         display = self.window_display_names.get(val, val)
                         new_id = live_by_name.get(display)
                         if new_id:
-                            logger.info(
+                            logger.debug(
                                 "Re-resolved thread binding %s -> %s (name=%s)",
                                 val,
                                 new_id,
@@ -309,7 +309,7 @@ class SessionManager:
                             self.window_display_names[new_id] = display
                             changed = True
                         else:
-                            logger.info(
+                            logger.debug(
                                 "Dropping stale thread binding: user=%d, thread=%d, wid=%s",
                                 uid,
                                 tid,
@@ -320,12 +320,12 @@ class SessionManager:
                     # Old format: val is window_name
                     new_id = live_by_name.get(val)
                     if new_id:
-                        logger.info("Migrating thread binding %s -> %s", val, new_id)
+                        logger.debug("Migrating thread binding %s -> %s", val, new_id)
                         new_bindings[tid] = new_id
                         self.window_display_names[new_id] = val
                         changed = True
                     else:
-                        logger.info(
+                        logger.debug(
                             "Dropping old-format thread binding: user=%d, thread=%d, name=%s",
                             uid,
                             tid,
@@ -839,8 +839,8 @@ class SessionManager:
                     data = TranscriptParser.parse_line(line)
                     if data:
                         entries.append(data)
-        except OSError as e:
-            logger.error("Error reading session file %s: %s", file_path, e)
+        except OSError:
+            logger.exception("Error reading session file %s", file_path)
             return [], 0
 
         parsed_entries, _ = TranscriptParser.parse_entries(entries)

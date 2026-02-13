@@ -11,8 +11,6 @@ Key functions:
   - scan_all_sessions: discover all resumable sessions across all projects
 """
 
-from __future__ import annotations
-
 import json
 import logging
 from dataclasses import dataclass
@@ -253,6 +251,9 @@ async def _handle_pick(
     old_window_id = session_manager.get_window_for_thread(user_id, thread_id)
     if old_window_id:
         session_manager.unbind_thread(user_id, thread_id)
+        from .status_polling import clear_dead_notification
+
+        clear_dead_notification(user_id, thread_id)
 
     success, message, created_wname, created_wid = await tmux_manager.create_window(
         cwd, claude_args=f"--resume {session_id}"

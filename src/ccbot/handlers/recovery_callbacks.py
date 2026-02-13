@@ -11,8 +11,6 @@ Handles inline keyboard callbacks for dead window recovery:
 Key function: handle_recovery_callback (uniform callback handler signature).
 """
 
-from __future__ import annotations
-
 import json
 import logging
 from dataclasses import dataclass
@@ -204,11 +202,19 @@ def _validate_recovery_state(
 ) -> tuple[int, str, str] | None:
     """Validate common recovery preconditions.
 
+    Supports two paths:
+      1. Text-handler path: PENDING_THREAD_ID and RECOVERY_WINDOW_ID in user_data.
+      2. Proactive notification path: no user_data state, validate via binding.
+
     Returns (thread_id, old_window_id, cwd) on success, or None on failure
     (caller should return early and call query.answer).
     """
     thread_id = get_thread_id(update)
     if thread_id is None:
+        return None
+
+    user_id = update.effective_user.id if update.effective_user else None
+    if user_id is None:
         return None
 
     pending_tid = (
@@ -217,8 +223,20 @@ def _validate_recovery_state(
     stored_wid = (
         context.user_data.get(RECOVERY_WINDOW_ID) if context.user_data else None
     )
-    if pending_tid is None or thread_id != pending_tid or stored_wid != data_suffix:
-        return None
+
+    if pending_tid is not None:
+        # Text-handler path: validate stored state
+        if thread_id != pending_tid or stored_wid != data_suffix:
+            return None
+    else:
+        # Proactive notification path: validate via session_manager binding
+        bound_wid = session_manager.get_window_for_thread(user_id, thread_id)
+        if bound_wid != data_suffix:
+            return None
+        # Set up recovery state for downstream handlers
+        if context.user_data is not None:
+            context.user_data[PENDING_THREAD_ID] = thread_id
+            context.user_data[RECOVERY_WINDOW_ID] = data_suffix
 
     ws = session_manager.get_window_state(data_suffix)
     cwd = ws.cwd or ""
@@ -252,8 +270,11 @@ async def _create_and_bind_window(
 
     Returns True on success, False on failure.
     """
-    # Unbind old dead window
+    # Unbind old dead window and clear dead-notification tracking
     session_manager.unbind_thread(user_id, thread_id)
+    from .status_polling import clear_dead_notification
+
+    clear_dead_notification(user_id, thread_id)
 
     success, message, created_wname, created_wid = await tmux_manager.create_window(
         cwd, claude_args=claude_args
@@ -496,12 +517,18 @@ async def _handle_cancel(
     context: ContextTypes.DEFAULT_TYPE,
 ) -> None:
     """Handle CB_RECOVERY_CANCEL: cancel recovery."""
+    thread_id = get_thread_id(update)
+    if thread_id is None:
+        await query.answer("Stale recovery (topic mismatch)", show_alert=True)
+        return
+
     pending_tid = (
         context.user_data.get(PENDING_THREAD_ID) if context.user_data else None
     )
-    if pending_tid is None or get_thread_id(update) != pending_tid:
+    if pending_tid is not None and thread_id != pending_tid:
         await query.answer("Stale recovery (topic mismatch)", show_alert=True)
         return
+
     _clear_recovery_state(context.user_data)
     await safe_edit(query, "Cancelled. Send a message to try again.")
     await query.answer("Cancelled")

@@ -25,7 +25,8 @@ logger = logging.getLogger(__name__)
 # Emoji prefixes for session states
 EMOJI_ACTIVE = "\U0001f7e2"  # Green circle
 EMOJI_IDLE = "\U0001f4a4"  # Zzz / sleeping
-EMOJI_DEAD = "\u26ab"  # Black circle
+EMOJI_DEAD = "\u274c"  # Cross mark
+_EMOJI_DEAD_OLD = "\u26ab"  # Legacy dead emoji (black circle, pre-2026-02)
 
 # Debounce: state must be stable for this many seconds before updating topic name.
 # Prevents rapid active↔idle toggling from flooding chat with rename messages.
@@ -132,7 +133,7 @@ async def update_topic_emoji(
 
 def strip_emoji_prefix(name: str) -> str:
     """Remove known emoji prefix from a topic name."""
-    for emoji in (EMOJI_ACTIVE, EMOJI_IDLE, EMOJI_DEAD):
+    for emoji in (EMOJI_ACTIVE, EMOJI_IDLE, EMOJI_DEAD, _EMOJI_DEAD_OLD):
         prefix = f"{emoji} "
         if name.startswith(prefix):
             return name[len(prefix) :]

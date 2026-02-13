@@ -95,7 +95,7 @@ def _install_hook() -> int:
         try:
             settings = json.loads(settings_file.read_text())
         except (json.JSONDecodeError, OSError) as e:
-            logger.error("Error reading %s: %s", settings_file, e)
+            logger.exception("Error reading %s", settings_file)
             print(f"Error reading {settings_file}: {e}", file=sys.stderr)
             return 1
 
@@ -125,7 +125,7 @@ def _install_hook() -> int:
             json.dumps(settings, indent=2, ensure_ascii=False) + "\n"
         )
     except OSError as e:
-        logger.error("Error writing %s: %s", settings_file, e)
+        logger.exception("Error writing %s", settings_file)
         print(f"Error writing {settings_file}: {e}", file=sys.stderr)
         return 1
 
@@ -277,5 +277,5 @@ def hook_main() -> None:
                 )
             finally:
                 fcntl.flock(lock_f, fcntl.LOCK_UN)
-    except OSError as e:
-        logger.error("Failed to write session_map: %s", e)
+    except OSError:
+        logger.exception("Failed to write session_map")
