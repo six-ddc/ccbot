@@ -57,6 +57,10 @@ class Config:
         # Hook-based session map file
         self.session_map_file = Path.home() / ".ccbot" / "session_map.json"
 
+        # Gemini API for voice message transcription (optional)
+        self.gemini_api_key: str = os.getenv("GEMINI_API_KEY", "")
+        self.gemini_model: str = os.getenv("GEMINI_MODEL", "gemini-2.0-flash")
+
         # Display user messages in history and real-time notifications
         # When True, user messages are shown with a 👤 prefix
         self.show_user_messages = True

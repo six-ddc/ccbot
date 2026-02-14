@@ -10,6 +10,7 @@ Core responsibilities:
     interactive UI navigation, screenshot refresh.
   - Topic-based routing: each named topic binds to one tmux window.
     Unbound topics trigger the directory browser to create a new session.
+  - Voice/audio messages: transcribed via Gemini API, forwarded as text.
   - Automatic cleanup: closing a topic kills the associated window
     (topic_closed_handler). Unsupported content (images, stickers, etc.)
     is rejected with a warning (unsupported_content_handler).
@@ -111,6 +112,7 @@ from .screenshot import text_to_image
 from .session import session_manager
 from .session_monitor import NewMessage, SessionMonitor
 from .tmux_manager import tmux_manager
+from .voice import transcribe_voice
 
 logger = logging.getLogger(__name__)
 
@@ -368,6 +370,95 @@ async def unsupported_content_handler(
         update.message,
         "⚠ Only text messages are supported. Images, stickers, voice, and other media cannot be forwarded to Claude Code.",
     )
+
+
+async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle voice/audio messages: transcribe via Gemini, forward to Claude."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        if update.message:
+            await safe_reply(update.message, "You are not authorized to use this bot.")
+        return
+
+    if not update.message:
+        return
+
+    voice = update.message.voice or update.message.audio
+    if not voice:
+        return
+
+    chat = update.message.chat
+    thread_id = _get_thread_id(update)
+    if chat.type in ("group", "supergroup") and thread_id is not None:
+        session_manager.set_group_chat_id(user.id, thread_id, chat.id)
+
+    if thread_id is None:
+        await safe_reply(
+            update.message,
+            "Please use a named topic. Create a new topic to start a session.",
+        )
+        return
+
+    wname = session_manager.get_window_for_thread(user.id, thread_id)
+    if wname is None:
+        await safe_reply(
+            update.message,
+            "Please bind this topic to a session first by sending a text message.",
+        )
+        return
+
+    w = await tmux_manager.find_window_by_name(wname)
+    if not w:
+        clear_expected_command(wname)
+        session_manager.unbind_thread(user.id, thread_id)
+        await safe_reply(
+            update.message,
+            f"Window '{wname}' no longer exists. Binding removed.\n"
+            "Send a message to start a new session.",
+        )
+        return
+
+    # Check Gemini API key
+    if not config.gemini_api_key:
+        await safe_reply(
+            update.message,
+            "Voice messages not configured. Set GEMINI_API_KEY in .env.",
+        )
+        return
+
+    # Show transcribing status
+    status_msg = await safe_reply(update.message, "Transcribing...")
+
+    try:
+        tg_file = await context.bot.get_file(voice.file_id)
+        audio_bytes = await tg_file.download_as_bytearray()
+
+        mime = getattr(voice, "mime_type", None) or "audio/ogg"
+        transcription = await transcribe_voice(bytes(audio_bytes), mime)
+    except Exception:
+        logger.exception("Voice transcription failed")
+        if status_msg:
+            try:
+                await status_msg.edit_text("Transcription failed.")
+            except Exception:
+                pass
+        return
+
+    # Show transcription preview
+    preview = transcription[:200] + ("..." if len(transcription) > 200 else "")
+    if status_msg:
+        try:
+            await status_msg.edit_text(f"Voice: {preview}")
+        except Exception:
+            pass
+
+    # Forward to Claude Code
+    await update.message.chat.send_action(ChatAction.TYPING)
+    clear_status_msg_info(user.id, thread_id)
+
+    success, message = await session_manager.send_to_window(wname, transcription)
+    if not success:
+        await safe_reply(update.message, f"{message}")
 
 
 async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -1034,7 +1125,9 @@ def create_bot() -> Application:
     # Forward any other /command to Claude Code
     application.add_handler(MessageHandler(filters.COMMAND, forward_command_handler))
     application.add_handler(MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler))
-    # Catch-all: non-text content (images, stickers, voice, etc.)
+    # Voice/audio messages — transcribe via Gemini and forward to Claude
+    application.add_handler(MessageHandler(filters.VOICE | filters.AUDIO, voice_handler))
+    # Catch-all: non-text content (images, stickers, etc.)
     application.add_handler(MessageHandler(
         ~filters.COMMAND & ~filters.TEXT & ~filters.StatusUpdate.ALL,
         unsupported_content_handler,
