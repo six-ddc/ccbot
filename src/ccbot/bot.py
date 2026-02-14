@@ -427,36 +427,49 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     # Show transcribing status
-    status_msg = await safe_reply(update.message, "Transcribing...")
+    import time
+    t0 = time.monotonic()
+    duration = voice.duration or 0
+    status_msg = await safe_reply(
+        update.message, f"Transcribing ({duration}s audio, model: {config.gemini_model})...",
+    )
 
-    try:
-        tg_file = await context.bot.get_file(voice.file_id)
-        audio_bytes = await tg_file.download_as_bytearray()
-
-        mime = getattr(voice, "mime_type", None) or "audio/ogg"
-        transcription = await transcribe_voice(bytes(audio_bytes), mime)
-    except Exception:
-        logger.exception("Voice transcription failed")
+    async def _edit_status(text: str) -> None:
         if status_msg:
             try:
-                await status_msg.edit_text("Transcription failed.")
+                await status_msg.edit_text(text)
             except Exception:
                 pass
+
+    try:
+        t1 = time.monotonic()
+        tg_file = await context.bot.get_file(voice.file_id)
+        audio_bytes = await tg_file.download_as_bytearray()
+        t2 = time.monotonic()
+        dl_time = t2 - t1
+        logger.info("Voice download: %.2fs (%d bytes)", dl_time, len(audio_bytes))
+
+        mime = getattr(voice, "mime_type", None) or "audio/ogg"
+        result = await transcribe_voice(bytes(audio_bytes), mime)
+        t3 = time.monotonic()
+        api_time = t3 - t2
+        total_time = t3 - t0
+        logger.info("Gemini transcription: %.2fs (total: %.2fs, model: %s)", api_time, total_time, result.model)
+    except Exception:
+        logger.exception("Voice transcription failed")
+        elapsed = time.monotonic() - t0
+        await _edit_status(f"Transcription failed ({elapsed:.1f}s)")
         return
 
-    # Show transcription preview
-    preview = transcription[:200] + ("..." if len(transcription) > 200 else "")
-    if status_msg:
-        try:
-            await status_msg.edit_text(f"Voice: {preview}")
-        except Exception:
-            pass
+    # Show transcription with timing
+    preview = result.text[:200] + ("..." if len(result.text) > 200 else "")
+    await _edit_status(f"Voice ({result.model}, {total_time:.1f}s): {preview}")
 
     # Forward to Claude Code
     await update.message.chat.send_action(ChatAction.TYPING)
     clear_status_msg_info(user.id, thread_id)
 
-    success, message = await session_manager.send_to_window(wname, transcription)
+    success, message = await session_manager.send_to_window(wname, result.text)
     if not success:
         await safe_reply(update.message, f"{message}")
 
