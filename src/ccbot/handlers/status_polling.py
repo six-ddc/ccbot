@@ -44,7 +44,7 @@ from .cleanup import clear_topic_state
 from .message_queue import enqueue_status_update, get_message_queue
 from .message_sender import rate_limit_send_message
 from .recovery_callbacks import build_recovery_keyboard
-from .topic_emoji import clear_topic_emoji_state, update_topic_emoji
+from .topic_emoji import rename_topic, update_topic_emoji
 
 # Top-level loop resilience: catch any error to keep polling alive
 _LoopError = (TelegramError, OSError, RuntimeError, ValueError)
@@ -170,7 +170,7 @@ async def update_status_message(
         if stored_name and w.window_name != stored_name:
             session_manager.set_display_name(window_id, w.window_name)
             chat_id = session_manager.resolve_chat_id(user_id, thread_id)
-            clear_topic_emoji_state(chat_id, thread_id)
+            await rename_topic(bot, chat_id, thread_id, w.window_name)
             logger.info(
                 "Window renamed: %s -> %s (window_id=%s)",
                 stored_name,

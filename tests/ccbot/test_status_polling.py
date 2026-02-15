@@ -170,7 +170,7 @@ class TestAutocloseTimers:
 
 
 class TestWindowRenameSync:
-    async def test_rename_detected_clears_emoji_state(self) -> None:
+    async def test_rename_detected_calls_rename_topic(self) -> None:
         with (
             patch("ccbot.handlers.status_polling.tmux_manager") as mock_tm,
             patch("ccbot.handlers.status_polling.session_manager") as mock_sm,
@@ -188,9 +188,7 @@ class TestWindowRenameSync:
                 "ccbot.handlers.status_polling.parse_status_line",
                 return_value="Working...",
             ),
-            patch(
-                "ccbot.handlers.status_polling.clear_topic_emoji_state"
-            ) as mock_clear,
+            patch("ccbot.handlers.status_polling.rename_topic") as mock_rename,
         ):
             from ccbot.handlers.status_polling import update_status_message
 
@@ -207,7 +205,7 @@ class TestWindowRenameSync:
             await update_status_message(bot, 1, "@0", thread_id=42)
 
             mock_sm.set_display_name.assert_called_once_with("@0", "new-name")
-            mock_clear.assert_called_once_with(-100, 42)
+            mock_rename.assert_called_once_with(bot, -100, 42, "new-name")
 
     async def test_no_rename_when_names_match(self) -> None:
         with (
@@ -227,9 +225,7 @@ class TestWindowRenameSync:
                 "ccbot.handlers.status_polling.parse_status_line",
                 return_value="Working...",
             ),
-            patch(
-                "ccbot.handlers.status_polling.clear_topic_emoji_state"
-            ) as mock_clear,
+            patch("ccbot.handlers.status_polling.rename_topic") as mock_rename,
         ):
             from ccbot.handlers.status_polling import update_status_message
 
@@ -246,4 +242,4 @@ class TestWindowRenameSync:
             await update_status_message(bot, 1, "@0", thread_id=42)
 
             mock_sm.set_display_name.assert_not_called()
-            mock_clear.assert_not_called()
+            mock_rename.assert_not_called()

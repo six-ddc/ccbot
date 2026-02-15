@@ -143,6 +143,58 @@ def strip_emoji_prefix(name: str) -> str:
     return name
 
 
+async def rename_topic(
+    bot: Bot,
+    chat_id: int,
+    thread_id: int,
+    new_display_name: str,
+) -> None:
+    """Rename a topic immediately, preserving its current emoji prefix.
+
+    Called when a tmux window rename is detected. Bypasses the debounce used
+    for emoji state transitions since the name must update promptly.
+    """
+    if chat_id in _disabled_chats:
+        return
+
+    key = (chat_id, thread_id)
+    current_state = _topic_states.get(key)
+
+    emoji = {
+        "active": EMOJI_ACTIVE,
+        "idle": EMOJI_IDLE,
+        "done": EMOJI_DONE,
+        "dead": EMOJI_DEAD,
+    }.get(current_state or "", "")
+
+    clean_name = strip_emoji_prefix(new_display_name)
+    new_name = f"{emoji} {clean_name}" if emoji else clean_name
+
+    try:
+        await bot.edit_forum_topic(
+            chat_id=chat_id,
+            message_thread_id=thread_id,
+            name=new_name,
+        )
+        logger.debug(
+            "Renamed topic: chat=%d thread=%d name='%s'",
+            chat_id,
+            thread_id,
+            new_name,
+        )
+    except BadRequest as e:
+        if "Not enough rights" in str(e):
+            _disabled_chats.add(chat_id)
+            logger.info(
+                "Topic rename disabled for chat %d: insufficient permissions",
+                chat_id,
+            )
+        elif "TOPIC_NOT_MODIFIED" not in str(e):
+            logger.debug("Failed to rename topic: %s", e)
+    except TelegramError as e:
+        logger.debug("Failed to rename topic: %s", e)
+
+
 def clear_topic_emoji_state(chat_id: int, thread_id: int) -> None:
     """Clear emoji tracking for a topic (called on topic cleanup)."""
     key = (chat_id, thread_id)
