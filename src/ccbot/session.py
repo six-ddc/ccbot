@@ -355,6 +355,34 @@ class SessionManager:
 
         self._needs_migration = False
 
+        # Clean up old-format keys from session_map.json
+        await self._cleanup_old_format_session_map_keys()
+
+    async def _cleanup_old_format_session_map_keys(self) -> None:
+        """Remove old-format keys (window_name instead of @window_id) from session_map.json."""
+        if not config.session_map_file.exists():
+            return
+        try:
+            async with aiofiles.open(config.session_map_file, "r") as f:
+                content = await f.read()
+            session_map = json.loads(content)
+        except (json.JSONDecodeError, OSError):
+            return
+
+        prefix = f"{config.tmux_session_name}:"
+        old_keys = [
+            key
+            for key in session_map
+            if key.startswith(prefix) and not self._is_window_id(key[len(prefix) :])
+        ]
+        if not old_keys:
+            return
+
+        for key in old_keys:
+            del session_map[key]
+        atomic_write_json(config.session_map_file, session_map)
+        logger.info("Cleaned up %d old-format session_map keys: %s", len(old_keys), old_keys)
+
     # --- Display name management ---
 
     def get_display_name(self, window_id: str) -> str:
@@ -426,9 +454,6 @@ class SessionManager:
 
         prefix = f"{config.tmux_session_name}:"
         valid_wids: set[str] = set()
-        # Track session_ids from old-format entries so we don't nuke
-        # migrated window_states before the new hook has fired.
-        old_format_sids: set[str] = set()
         changed = False
 
         for key, info in session_map.items():
@@ -436,14 +461,7 @@ class SessionManager:
             if not key.startswith(prefix):
                 continue
             window_id = key[len(prefix) :]
-            # Old-format key (window_name instead of window_id): don't create
-            # window_states entries with window_name keys, but remember the
-            # session_id so migrated states survive the stale cleanup below.
             if not self._is_window_id(window_id):
-                sid = info.get("session_id", "")
-                if sid:
-                    old_format_sids.add(sid)
-                logger.debug("Skipping old-format session_map key: %s", key)
                 continue
             valid_wids.add(window_id)
             new_sid = info.get("session_id", "")
@@ -470,14 +488,8 @@ class SessionManager:
                     changed = True
 
         # Clean up window_states entries not in current session_map.
-        # Protect entries whose session_id is still referenced by old-format
-        # keys — those sessions are valid but haven't re-triggered the hook yet.
         stale_wids = [
-            w
-            for w in self.window_states
-            if w
-            and w not in valid_wids
-            and self.window_states[w].session_id not in old_format_sids
+            w for w in self.window_states if w and w not in valid_wids
         ]
         for wid in stale_wids:
             logger.info("Removing stale window_state: %s", wid)

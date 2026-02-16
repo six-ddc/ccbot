@@ -209,7 +209,17 @@ async def _message_queue_worker(bot: Bot, user_id: int) -> None:
                 logger.warning(
                     f"Flood control for user {user_id}, pausing {retry_secs}s"
                 )
-                await asyncio.sleep(retry_secs)
+                # Log periodically during long waits
+                remaining = retry_secs
+                while remaining > 0:
+                    chunk = min(remaining, 30)
+                    await asyncio.sleep(chunk)
+                    remaining -= chunk
+                    if remaining > 0:
+                        logger.warning(
+                            f"Flood control for user {user_id}, "
+                            f"{remaining}s remaining"
+                        )
             except Exception as e:
                 logger.error(f"Error processing message task for user {user_id}: {e}")
             finally:
