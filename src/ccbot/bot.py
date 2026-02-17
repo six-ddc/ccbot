@@ -4,7 +4,7 @@ Registers all command/callback/message handlers and manages the bot lifecycle.
 Each Telegram topic maps 1:1 to a tmux window (Claude session).
 
 Core responsibilities:
-  - Command handlers: /start, /history, /screenshot, /esc, /unbind,
+  - Command handlers: /start, /history, /screenshot, /esc, /kill, /unbind,
     plus forwarding unknown /commands to Claude Code via tmux.
   - Callback query handler: directory browser, history pagination,
     interactive UI navigation, screenshot refresh.
