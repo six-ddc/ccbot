@@ -534,12 +534,17 @@ class SessionManager:
             if new_transcript and state.transcript_path != new_transcript:
                 state.transcript_path = new_transcript
                 changed = True
-            # Update display name
-            if new_wname:
+            # Initialize display name from session_map only when unknown.
+            # session_map window_name comes from SessionStart and may be stale
+            # after later tmux renames.
+            if (
+                new_wname
+                and not self.window_display_names.get(window_id)
+                and not state.window_name
+            ):
                 state.window_name = new_wname
-                if self.window_display_names.get(window_id) != new_wname:
-                    self.window_display_names[window_id] = new_wname
-                    changed = True
+                self.window_display_names[window_id] = new_wname
+                changed = True
 
         # Clean up window_states entries not in current session_map.
         # Protect entries whose session_id is still referenced by old-format

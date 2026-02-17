@@ -1,5 +1,7 @@
 """Tests for SessionManager pure dict operations."""
 
+import json
+
 import pytest
 
 from ccbot.session import SessionManager
@@ -147,6 +149,63 @@ class TestFindUsersForSession:
     def test_ignores_windows_without_state(self, mgr: SessionManager) -> None:
         mgr.bind_thread(100, 1, "@1")
         assert mgr.find_users_for_session("sid-1") == []
+
+
+class TestLoadSessionMapDisplayName:
+    async def test_preserves_existing_display_name_on_stale_session_map(
+        self, mgr: SessionManager, tmp_path, monkeypatch
+    ) -> None:
+        from ccbot.session import WindowState
+
+        session_map_file = tmp_path / "session_map.json"
+        session_map_file.write_text(
+            json.dumps(
+                {
+                    "ccbot:@1": {
+                        "session_id": "sid-1",
+                        "cwd": "/tmp/project",
+                        "window_name": "bun",
+                    }
+                }
+            )
+        )
+
+        monkeypatch.setattr("ccbot.session.config.session_map_file", session_map_file)
+        monkeypatch.setattr("ccbot.session.config.tmux_session_name", "ccbot")
+
+        mgr.window_display_names["@1"] = "ccbot"
+        mgr.window_states["@1"] = WindowState(
+            session_id="sid-1", cwd="/tmp/project", window_name="ccbot"
+        )
+
+        await mgr.load_session_map()
+
+        assert mgr.get_display_name("@1") == "ccbot"
+        assert mgr.window_states["@1"].window_name == "ccbot"
+
+    async def test_initializes_display_name_when_missing(
+        self, mgr: SessionManager, tmp_path, monkeypatch
+    ) -> None:
+        session_map_file = tmp_path / "session_map.json"
+        session_map_file.write_text(
+            json.dumps(
+                {
+                    "ccbot:@2": {
+                        "session_id": "sid-2",
+                        "cwd": "/tmp/project-2",
+                        "window_name": "project-2",
+                    }
+                }
+            )
+        )
+
+        monkeypatch.setattr("ccbot.session.config.session_map_file", session_map_file)
+        monkeypatch.setattr("ccbot.session.config.tmux_session_name", "ccbot")
+
+        await mgr.load_session_map()
+
+        assert mgr.get_display_name("@2") == "project-2"
+        assert mgr.window_states["@2"].window_name == "project-2"
 
 
 class TestParseSessionMap:
