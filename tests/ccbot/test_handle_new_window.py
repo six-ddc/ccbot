@@ -1,12 +1,13 @@
 """Tests for _handle_new_window auto-topic creation (TASK-032).
 
 Covers cold-start with CCBOT_GROUP_ID, cold-start without it,
-normal flow with existing bindings, and already-bound window skip.
+normal flow with existing bindings, already-bound window skip,
+and RetryAfter backoff behavior.
 """
 
 from unittest.mock import AsyncMock, MagicMock, patch
 
-from telegram.error import TelegramError
+from telegram.error import RetryAfter, TelegramError
 
 from ccbot.bot import _handle_new_window
 from ccbot.session_monitor import NewWindowEvent
@@ -179,6 +180,65 @@ class TestHandleNewWindowErrors:
             mock_config.allowed_users = {12345}
 
             await _handle_new_window(event, bot)
+
+    async def test_retry_after_sets_backoff_and_skips_immediate_retry(self) -> None:
+        event = _make_event()
+        bot = AsyncMock()
+        bot.create_forum_topic = AsyncMock(side_effect=RetryAfter(27))
+
+        with (
+            patch("ccbot.bot.session_manager") as mock_sm,
+            patch("ccbot.bot.config") as mock_config,
+            patch("ccbot.bot._topic_create_retry_until", {}),
+            patch("ccbot.bot.time.monotonic", side_effect=[100.0, 100.0, 101.0]),
+        ):
+            mock_sm.iter_thread_bindings.side_effect = [
+                iter([]),
+                iter([]),
+                iter([]),
+                iter([]),
+            ]
+            mock_config.group_id = -100500
+            mock_config.allowed_users = {12345}
+
+            await _handle_new_window(event, bot)
+            await _handle_new_window(event, bot)
+
+        bot.create_forum_topic.assert_called_once_with(
+            chat_id=-100500, name="my-project"
+        )
+
+    async def test_retries_after_backoff_expires(self) -> None:
+        event = _make_event()
+        bot = AsyncMock()
+        bot.create_forum_topic = AsyncMock(
+            side_effect=[RetryAfter(3), _make_topic(thread_id=42)]
+        )
+
+        with (
+            patch("ccbot.bot.session_manager") as mock_sm,
+            patch("ccbot.bot.config") as mock_config,
+            patch("ccbot.bot._topic_create_retry_until", {}),
+            patch("ccbot.bot.time.monotonic", side_effect=[100.0, 100.0, 106.0]),
+        ):
+            mock_sm.iter_thread_bindings.side_effect = [
+                iter([]),
+                iter([]),
+                iter([]),
+                iter([]),
+                iter([]),
+            ]
+            mock_sm.resolve_chat_id.return_value = 12345
+            mock_config.group_id = -100500
+            mock_config.allowed_users = {12345}
+
+            await _handle_new_window(event, bot)
+            await _handle_new_window(event, bot)
+
+        assert bot.create_forum_topic.call_count == 2
+        mock_sm.bind_thread.assert_called_once_with(
+            12345, 42, "@10", window_name="my-project"
+        )
 
     async def test_topic_name_falls_back_to_cwd_dirname(self) -> None:
         event = _make_event(window_name="", cwd="/home/user/cool-project")

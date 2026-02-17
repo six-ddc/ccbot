@@ -23,11 +23,12 @@ import logging
 import os
 import re
 import signal
+import time
 from pathlib import Path
 
 from telegram import Bot, Update
 from telegram.constants import ChatAction
-from telegram.error import Conflict, TelegramError
+from telegram.error import Conflict, RetryAfter, TelegramError
 from telegram.ext import (
     Application,
     CallbackQueryHandler,
@@ -128,6 +129,11 @@ session_monitor: SessionMonitor | None = None
 
 # Status polling task
 _status_poll_task: asyncio.Task | None = None
+
+# Per-chat backoff for auto topic creation after Telegram flood control.
+# chat_id -> monotonic timestamp when next attempt is allowed.
+_topic_create_retry_until: dict[int, float] = {}
+_TOPIC_CREATE_RETRY_BUFFER_SECONDS = 1
 
 
 def is_user_allowed(user_id: int | None) -> bool:
@@ -570,8 +576,22 @@ async def _handle_new_window(event: NewWindowEvent, bot: Bot) -> None:
             return
 
     for chat_id in seen_chats:
+        retry_until = _topic_create_retry_until.get(chat_id, 0.0)
+        now = time.monotonic()
+        if now < retry_until:
+            wait_seconds = max(1, int(retry_until - now))
+            logger.debug(
+                "Skipping auto-topic creation for chat %d (window %s), "
+                "backoff active for %ss",
+                chat_id,
+                event.window_id,
+                wait_seconds,
+            )
+            continue
+
         try:
             topic = await bot.create_forum_topic(chat_id=chat_id, name=topic_name)
+            _topic_create_retry_until.pop(chat_id, None)
             logger.info(
                 "Auto-created topic '%s' (thread=%d) in chat %d for window %s",
                 topic_name,
@@ -606,6 +626,25 @@ async def _handle_new_window(event: NewWindowEvent, bot: Bot) -> None:
                 session_manager.set_group_chat_id(
                     first_user_id, topic.message_thread_id, chat_id
                 )
+        except RetryAfter as e:
+            retry_after_seconds = (
+                e.retry_after
+                if isinstance(e.retry_after, int)
+                else int(e.retry_after.total_seconds())
+            )
+            retry_after_seconds = max(1, retry_after_seconds)
+            _topic_create_retry_until[chat_id] = (
+                time.monotonic()
+                + retry_after_seconds
+                + _TOPIC_CREATE_RETRY_BUFFER_SECONDS
+            )
+            logger.warning(
+                "Flood control creating topic for window %s in chat %d, "
+                "backing off %ss",
+                event.window_id,
+                chat_id,
+                retry_after_seconds,
+            )
         except TelegramError:
             logger.exception(
                 "Failed to create topic for window %s in chat %d",
