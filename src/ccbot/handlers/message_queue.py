@@ -28,6 +28,7 @@ from telegram.constants import ChatAction
 from telegram.error import RetryAfter
 
 from ..markdown_v2 import convert_markdown
+from ..transcript_parser import TranscriptParser
 from ..terminal_parser import parse_status_line
 from ..tmux_manager import tmux_manager
 from .message_sender import NO_LINK_PREVIEW, send_with_fallback
@@ -294,8 +295,12 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                 raise
             except Exception:
                 try:
-                    # Fallback: strip markdown
-                    plain_text = task.text or full_text
+                    # Fallback: plain text with sentinels stripped
+                    plain_text = (
+                        (task.text or full_text)
+                        .replace(TranscriptParser.EXPANDABLE_QUOTE_START, "")
+                        .replace(TranscriptParser.EXPANDABLE_QUOTE_END, "")
+                    )
                     await bot.edit_message_text(
                         chat_id=user_id,
                         message_id=edit_msg_id,
@@ -387,11 +392,14 @@ async def _convert_status_to_content(
         raise
     except Exception:
         try:
-            # Fallback to plain text
+            # Fallback to plain text with sentinels stripped
+            plain = content_text.replace(
+                TranscriptParser.EXPANDABLE_QUOTE_START, ""
+            ).replace(TranscriptParser.EXPANDABLE_QUOTE_END, "")
             await bot.edit_message_text(
                 chat_id=user_id,
                 message_id=msg_id,
-                text=content_text,
+                text=plain,
                 link_preview_options=NO_LINK_PREVIEW,
             )
             return msg_id

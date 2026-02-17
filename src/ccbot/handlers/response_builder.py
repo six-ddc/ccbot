@@ -2,15 +2,17 @@
 
 Builds paginated response messages from Claude Code output:
   - Handles different content types (text, thinking, tool_use, tool_result)
-  - Converts markdown to Telegram MarkdownV2 format
   - Splits long messages into pages within Telegram's 4096 char limit
   - Truncates thinking content to keep messages compact
+
+Markdown conversion is NOT done here — the send layer (message_sender,
+message_queue) handles convert_markdown() so each message is converted
+exactly once.
 
 Key function:
   - build_response_parts: Build paginated response messages
 """
 
-from ..markdown_v2 import convert_markdown
 from ..telegram_sender import split_message
 from ..transcript_parser import TranscriptParser
 
@@ -23,8 +25,9 @@ def build_response_parts(
 ) -> list[str]:
     """Build paginated response messages for Telegram.
 
-    Returns a list of message strings, each within Telegram's 4096 char limit.
+    Returns a list of raw markdown strings, each within Telegram's 4096 char limit.
     Multi-part messages get a [1/N] suffix.
+    Markdown-to-MarkdownV2 conversion is done by the send layer, not here.
     """
     text = text.strip()
 
@@ -35,7 +38,7 @@ def build_response_parts(
         # User messages are typically short, no special processing needed
         if len(text) > 3000:
             text = text[:3000] + "…"
-        return [convert_markdown(f"{prefix}{text}")]
+        return [f"{prefix}{text}"]
 
     # Truncate thinking content to keep it compact
     if content_type == "thinking" and is_complete:
@@ -65,12 +68,11 @@ def build_response_parts(
     # _render_expandable_quote in markdown_v2.py.
     if TranscriptParser.EXPANDABLE_QUOTE_START in text:
         if prefix:
-            return [convert_markdown(f"{prefix}{separator}{text}")]
-        else:
-            return [convert_markdown(text)]
+            return [f"{prefix}{separator}{text}"]
+        return [text]
 
-    # Split markdown first, then convert each chunk to HTML.
-    # Use conservative max to leave room for HTML tags added by conversion.
+    # Split first, then assemble each chunk.
+    # Use conservative max to leave room for MarkdownV2 expansion at send layer.
     max_text = 3000 - len(prefix) - len(separator)
 
     text_chunks = split_message(text, max_length=max_text)
@@ -78,16 +80,13 @@ def build_response_parts(
 
     if total == 1:
         if prefix:
-            return [convert_markdown(f"{prefix}{separator}{text_chunks[0]}")]
-        else:
-            return [convert_markdown(text_chunks[0])]
+            return [f"{prefix}{separator}{text_chunks[0]}"]
+        return [text_chunks[0]]
 
     parts = []
     for i, chunk in enumerate(text_chunks, 1):
         if prefix:
-            parts.append(
-                convert_markdown(f"{prefix}{separator}{chunk}\n\n[{i}/{total}]")
-            )
+            parts.append(f"{prefix}{separator}{chunk}\n\n[{i}/{total}]")
         else:
-            parts.append(convert_markdown(f"{chunk}\n\n[{i}/{total}]"))
+            parts.append(f"{chunk}\n\n[{i}/{total}]")
     return parts

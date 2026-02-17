@@ -20,8 +20,23 @@ from telegram import Bot, LinkPreviewOptions, Message
 from telegram.error import RetryAfter
 
 from ..markdown_v2 import convert_markdown
+from ..transcript_parser import TranscriptParser
 
 logger = logging.getLogger(__name__)
+
+# Sentinel characters to strip from plain text fallback
+_SENTINELS = (
+    TranscriptParser.EXPANDABLE_QUOTE_START,
+    TranscriptParser.EXPANDABLE_QUOTE_END,
+)
+
+
+def _strip_sentinels(text: str) -> str:
+    """Strip expandable quote sentinel markers for plain text fallback."""
+    for s in _SENTINELS:
+        text = text.replace(s, "")
+    return text
+
 
 # Disable link previews in all messages to reduce visual noise
 NO_LINK_PREVIEW = LinkPreviewOptions(is_disabled=True)
@@ -50,7 +65,9 @@ async def send_with_fallback(
         raise
     except Exception:
         try:
-            return await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+            return await bot.send_message(
+                chat_id=chat_id, text=_strip_sentinels(text), **kwargs
+            )
         except RetryAfter:
             raise
         except Exception as e:
@@ -71,7 +88,7 @@ async def safe_reply(message: Message, text: str, **kwargs: Any) -> Message:
         raise
     except Exception:
         try:
-            return await message.reply_text(text, **kwargs)
+            return await message.reply_text(_strip_sentinels(text), **kwargs)
         except RetryAfter:
             raise
         except Exception as e:
@@ -92,7 +109,7 @@ async def safe_edit(target: Any, text: str, **kwargs: Any) -> None:
         raise
     except Exception:
         try:
-            await target.edit_message_text(text, **kwargs)
+            await target.edit_message_text(_strip_sentinels(text), **kwargs)
         except RetryAfter:
             raise
         except Exception as e:
@@ -121,7 +138,9 @@ async def safe_send(
         raise
     except Exception:
         try:
-            await bot.send_message(chat_id=chat_id, text=text, **kwargs)
+            await bot.send_message(
+                chat_id=chat_id, text=_strip_sentinels(text), **kwargs
+            )
         except RetryAfter:
             raise
         except Exception as e:
