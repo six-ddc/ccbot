@@ -62,10 +62,17 @@ uv sync
 
 **1. Create a Telegram bot and enable Threaded Mode:**
 
+CCBot operates in **Telegram Forum (topics) mode** — each topic represents a separate Claude Code session. For the bot to work properly, you **must** enable Threaded Mode in your bot settings. Without this, the bot cannot respond to messages in topics.
+
+Steps:
+
 1. Chat with [@BotFather](https://t.me/BotFather) to create a new bot and get your bot token
-2. Open @BotFather's profile page, tap **Open App** to launch the mini app
-3. Select your bot, then go to **Settings** > **Bot Settings**
-4. Enable **Threaded Mode**
+2. Open @BotFather's profile page, tap **Open App** (or **Menu**) to launch the bot management interface
+3. Select your bot from the list
+4. Go to **Settings** > **Bot Settings**
+5. Find **Threaded Mode** and toggle it **ON**
+
+> **Important:** Threaded Mode (also called "Topics Mode" or "Forum Mode") allows the bot to receive and reply to messages within specific topics in a Telegram group. If this setting is disabled, the bot will not be able to detect or respond to messages sent in topic threads.
 
 **2. Configure environment variables:**
 
