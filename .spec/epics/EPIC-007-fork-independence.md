@@ -2,7 +2,7 @@
 id: EPIC-007
 title: Fork Independence & PyPI Release
 req: REQ-007
-status: in_progress
+status: done
 ---
 
 # EPIC-007: Fork Independence & PyPI Release

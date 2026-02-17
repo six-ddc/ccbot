@@ -3,6 +3,7 @@ id: EPIC-005
 title: "Phase 0: Standalone Fork Organization"
 reqs: [REQ-005]
 tasks: [TASK-015, TASK-016, TASK-017, TASK-018, TASK-019, TASK-020]
+status: done
 ---
 
 # EPIC-005: Standalone Fork Organization

@@ -3,6 +3,7 @@ id: EPIC-003
 title: "Phase 3: Session Resume"
 reqs: [REQ-003]
 tasks: [TASK-009, TASK-010, TASK-011]
+status: done
 ---
 
 # EPIC-003: Session Resume

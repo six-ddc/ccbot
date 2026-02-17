@@ -3,6 +3,7 @@ id: EPIC-002
 title: "Phase 2: Command Overhaul"
 reqs: [REQ-002]
 tasks: [TASK-004, TASK-005, TASK-006, TASK-007, TASK-008]
+status: done
 ---
 
 # EPIC-002: Command Overhaul

@@ -3,6 +3,7 @@ id: EPIC-001
 title: "Phase 1: Multi-Instance"
 reqs: [REQ-001]
 tasks: [TASK-001, TASK-002, TASK-003]
+status: done
 ---
 
 # EPIC-001: Multi-Instance

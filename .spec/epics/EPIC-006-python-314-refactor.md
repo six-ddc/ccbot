@@ -3,6 +3,7 @@ id: EPIC-006
 title: "Python 3.14 + Architecture Cleanup"
 reqs: [REQ-006]
 tasks: [TASK-021, TASK-022, TASK-023, TASK-024, TASK-025, TASK-026, TASK-027]
+status: done
 ---
 
 # EPIC-006: Python 3.14 + Architecture Cleanup
