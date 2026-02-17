@@ -4,7 +4,7 @@ Registers all command/callback/message handlers and manages the bot lifecycle.
 Each Telegram topic maps 1:1 to a tmux window (Claude session).
 
 Core responsibilities:
-  - Command handlers: /start, /history, /screenshot, /esc, /kill,
+  - Command handlers: /start, /history, /screenshot, /esc, /unbind,
     plus forwarding unknown /commands to Claude Code via tmux.
   - Callback query handler: directory browser, history pagination,
     interactive UI navigation, screenshot refresh.
@@ -227,6 +227,32 @@ async def screenshot_command(
         document=io.BytesIO(png_bytes),
         filename="screenshot.png",
         reply_markup=keyboard,
+    )
+
+
+async def unbind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Unbind this topic from its Claude session without killing the window."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    thread_id = _get_thread_id(update)
+    wid = session_manager.get_window_for_thread(user.id, thread_id)
+    if not wid:
+        await safe_reply(update.message, "❌ No session bound to this topic.")
+        return
+
+    display = session_manager.get_display_name(wid)
+    session_manager.unbind_thread(user.id, thread_id)
+    await clear_topic_state(user.id, thread_id, context.bot, context.user_data)
+
+    await safe_reply(
+        update.message,
+        f"✅ Topic unbound from window '{display}'.\n"
+        "The Claude session is still running in tmux.\n"
+        "Send a message to bind to a new session.",
     )
 
 
@@ -1311,7 +1337,7 @@ async def post_init(application: Application) -> None:
         BotCommand("history", "Message history for this topic"),
         BotCommand("screenshot", "Terminal screenshot with control keys"),
         BotCommand("esc", "Send Escape to interrupt Claude"),
-        BotCommand("kill", "Kill session and delete topic"),
+        BotCommand("unbind", "Unbind topic from session (keeps window running)"),
     ]
     # Add Claude Code slash commands
     for cmd_name, desc in CC_COMMANDS.items():
@@ -1383,6 +1409,7 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("history", history_command))
     application.add_handler(CommandHandler("screenshot", screenshot_command))
     application.add_handler(CommandHandler("esc", esc_command))
+    application.add_handler(CommandHandler("unbind", unbind_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Topic closed event — auto-kill associated window
     application.add_handler(
