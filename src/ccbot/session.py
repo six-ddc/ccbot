@@ -92,6 +92,7 @@ class SessionManager:
     user_window_offsets: user_id -> {window_id -> byte_offset}
     thread_bindings: user_id -> {thread_id -> window_id}
     window_display_names: window_id -> window_name (for display)
+    group_chat_ids: "user_id:thread_id" -> group chat_id (for supergroup routing)
     """
 
     window_states: dict[str, WindowState] = field(default_factory=dict)
@@ -99,6 +100,8 @@ class SessionManager:
     thread_bindings: dict[int, dict[int, str]] = field(default_factory=dict)
     # window_id -> display name (window_name)
     window_display_names: dict[str, str] = field(default_factory=dict)
+    # "user_id:thread_id" -> group chat_id (for supergroup forum topic routing)
+    group_chat_ids: dict[str, int] = field(default_factory=dict)
 
     def __post_init__(self) -> None:
         self._load_state()
@@ -114,6 +117,7 @@ class SessionManager:
                 for uid, bindings in self.thread_bindings.items()
             },
             "window_display_names": self.window_display_names,
+            "group_chat_ids": self.group_chat_ids,
         }
         atomic_write_json(config.state_file, state)
         logger.debug("State saved to %s", config.state_file)
@@ -144,6 +148,9 @@ class SessionManager:
                     for uid, bindings in state.get("thread_bindings", {}).items()
                 }
                 self.window_display_names = state.get("window_display_names", {})
+                self.group_chat_ids = {
+                    k: int(v) for k, v in state.get("group_chat_ids", {}).items()
+                }
 
                 # Detect old format: keys that don't look like window IDs
                 needs_migration = False
@@ -173,6 +180,7 @@ class SessionManager:
                 self.user_window_offsets = {}
                 self.thread_bindings = {}
                 self.window_display_names = {}
+                self.group_chat_ids = {}
                 pass
 
     async def resolve_stale_ids(self) -> None:
@@ -350,6 +358,41 @@ class SessionManager:
     def get_display_name(self, window_id: str) -> str:
         """Get display name for a window_id, fallback to window_id itself."""
         return self.window_display_names.get(window_id, window_id)
+
+    # --- Group chat ID management (supergroup forum topic routing) ---
+
+    def set_group_chat_id(
+        self, user_id: int, thread_id: int | None, chat_id: int
+    ) -> None:
+        """Store the group chat_id for a user+thread combination.
+
+        In supergroups with forum topics, messages must be sent to the group's
+        chat_id (negative number) rather than the user's personal ID.
+        """
+        tid = thread_id or 0
+        key = f"{user_id}:{tid}"
+        if self.group_chat_ids.get(key) != chat_id:
+            self.group_chat_ids[key] = chat_id
+            self._save_state()
+            logger.debug(
+                "Stored group chat_id: user=%d, thread=%s, chat_id=%d",
+                user_id,
+                thread_id,
+                chat_id,
+            )
+
+    def resolve_chat_id(self, user_id: int, thread_id: int | None = None) -> int:
+        """Resolve the correct chat_id for sending messages.
+
+        Returns the stored group chat_id when a thread_id is present and a
+        mapping exists, otherwise falls back to user_id (for private chats).
+        """
+        if thread_id is not None:
+            key = f"{user_id}:{thread_id}"
+            group_id = self.group_chat_ids.get(key)
+            if group_id is not None:
+                return group_id
+        return user_id
 
     async def wait_for_session_map_entry(
         self, window_id: str, timeout: float = 5.0, interval: float = 0.5

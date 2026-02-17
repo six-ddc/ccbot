@@ -18,6 +18,7 @@ import logging
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
+from ..session import session_manager
 from ..terminal_parser import extract_interactive_content, is_interactive_ui
 from ..tmux_manager import tmux_manager
 from .callback_data import (
@@ -152,7 +153,7 @@ async def handle_interactive_ui(
     False otherwise.
     """
     ikey = (user_id, thread_id or 0)
-    chat_id = user_id
+    chat_id = session_manager.resolve_chat_id(user_id, thread_id)
     w = await tmux_manager.find_window_by_id(window_id)
     if not w:
         return False
@@ -243,7 +244,7 @@ async def clear_interactive_msg(
         msg_id,
     )
     if bot and msg_id:
-        chat_id = user_id
+        chat_id = session_manager.resolve_chat_id(user_id, thread_id)
         try:
             await bot.delete_message(chat_id=chat_id, message_id=msg_id)
         except Exception:

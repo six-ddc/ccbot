@@ -141,7 +141,7 @@ async def send_history(
             elif bot is not None and user_id is not None:
                 await safe_send(
                     bot,
-                    user_id,
+                    session_manager.resolve_chat_id(user_id, message_thread_id),
                     text,
                     message_thread_id=message_thread_id,
                     reply_markup=keyboard,
@@ -219,7 +219,7 @@ async def send_history(
         # Direct send mode (for unread catch-up after window switch)
         await safe_send(
             bot,
-            user_id,
+            session_manager.resolve_chat_id(user_id, message_thread_id),
             text,
             message_thread_id=message_thread_id,
             reply_markup=keyboard,

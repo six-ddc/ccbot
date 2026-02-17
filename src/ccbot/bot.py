@@ -360,6 +360,11 @@ async def forward_command_handler(
 
     thread_id = _get_thread_id(update)
 
+    # Capture group chat_id for supergroup forum topic routing
+    chat = update.effective_chat
+    if chat and chat.type in ("group", "supergroup"):
+        session_manager.set_group_chat_id(user.id, thread_id, chat.id)
+
     cmd_text = update.message.text or ""
     # The full text is already a slash command like "/clear" or "/compact foo"
     cc_slash = cmd_text.split("@")[0]  # strip bot mention
@@ -437,7 +442,7 @@ async def _capture_bash_output(
         # Wait for the command to start producing output
         await asyncio.sleep(2.0)
 
-        chat_id = user_id
+        chat_id = session_manager.resolve_chat_id(user_id, thread_id)
         msg_id: int | None = None
         last_output: str = ""
 
@@ -511,6 +516,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     thread_id = _get_thread_id(update)
+
+    # Capture group chat_id for supergroup forum topic routing
+    chat = update.effective_chat
+    if chat and chat.type in ("group", "supergroup"):
+        session_manager.set_group_chat_id(user.id, thread_id, chat.id)
 
     text = update.message.text
 
@@ -663,6 +673,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         return
 
     data = query.data
+
+    # Capture group chat_id for supergroup forum topic routing
+    cb_thread_id = _get_thread_id(update)
+    chat = update.effective_chat
+    if chat and chat.type in ("group", "supergroup"):
+        session_manager.set_group_chat_id(user.id, cb_thread_id, chat.id)
 
     # History: older/newer pagination
     # Format: hp:<page>:<window_id>:<start>:<end> or hn:<page>:<window_id>:<start>:<end>
@@ -853,9 +869,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 )
 
                 # Rename the topic to match the window name
+                resolved_chat = session_manager.resolve_chat_id(
+                    user.id, pending_thread_id
+                )
                 try:
                     await context.bot.edit_forum_topic(
-                        chat_id=user.id,
+                        chat_id=resolved_chat,
                         message_thread_id=pending_thread_id,
                         name=created_wname,
                     )
@@ -890,7 +909,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                         logger.warning("Failed to forward pending text: %s", send_msg)
                         await safe_send(
                             context.bot,
-                            user.id,
+                            resolved_chat,
                             f"❌ Failed to send pending message: {send_msg}",
                             message_thread_id=pending_thread_id,
                         )
@@ -961,9 +980,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         )
 
         # Rename the topic to match the window name
+        resolved_chat = session_manager.resolve_chat_id(user.id, thread_id)
         try:
             await context.bot.edit_forum_topic(
-                chat_id=user.id,
+                chat_id=resolved_chat,
                 message_thread_id=thread_id,
                 name=display,
             )
@@ -990,7 +1010,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 logger.warning("Failed to forward pending text: %s", send_msg)
                 await safe_send(
                     context.bot,
-                    user.id,
+                    resolved_chat,
                     f"❌ Failed to send pending message: {send_msg}",
                     message_thread_id=thread_id,
                 )
