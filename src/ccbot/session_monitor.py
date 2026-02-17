@@ -48,6 +48,7 @@ class NewMessage:
     tool_use_id: str | None = None
     role: str = "assistant"  # "user" or "assistant"
     tool_name: str | None = None  # For tool_use messages, the tool name
+    image_data: list[tuple[str, bytes]] | None = None  # From tool_result images
 
 
 class SessionMonitor:
@@ -327,7 +328,7 @@ class SessionMonitor:
                     self._pending_tools.pop(session_info.session_id, None)
 
                 for entry in parsed_entries:
-                    if not entry.text:
+                    if not entry.text and not entry.image_data:
                         continue
                     # Skip user messages unless show_user_messages is enabled
                     if entry.role == "user" and not config.show_user_messages:
@@ -341,6 +342,7 @@ class SessionMonitor:
                             tool_use_id=entry.tool_use_id,
                             role=entry.role,
                             tool_name=entry.tool_name,
+                            image_data=entry.image_data,
                         )
                     )
 

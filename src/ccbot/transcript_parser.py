@@ -11,11 +11,15 @@ Format reference: https://github.com/desis123/claude-code-viewer
 Key classes: TranscriptParser (static methods), ParsedEntry, ParsedMessage, PendingToolInfo.
 """
 
+import base64
 import difflib
 import json
+import logging
 import re
 from dataclasses import dataclass
 from typing import Any
+
+logger = logging.getLogger(__name__)
 
 
 @dataclass
@@ -40,6 +44,9 @@ class ParsedEntry:
     timestamp: str | None = None  # ISO timestamp from JSONL
     tool_name: str | None = (
         None  # For tool_use entries, the tool name (e.g. "AskUserQuestion")
+    )
+    image_data: list[tuple[str, bytes]] | None = (
+        None  # For tool_result entries with images: (media_type, raw_bytes)
     )
 
 
@@ -236,6 +243,34 @@ class TranscriptParser:
                     parts.append(item)
             return "\n".join(parts)
         return ""
+
+    @staticmethod
+    def extract_tool_result_images(
+        content: list | Any,
+    ) -> list[tuple[str, bytes]] | None:
+        """Extract base64-encoded images from a tool_result content block.
+
+        Returns list of (media_type, raw_bytes) tuples, or None if no images found.
+        """
+        if not isinstance(content, list):
+            return None
+        images: list[tuple[str, bytes]] = []
+        for item in content:
+            if not isinstance(item, dict) or item.get("type") != "image":
+                continue
+            source = item.get("source")
+            if not isinstance(source, dict) or source.get("type") != "base64":
+                continue
+            media_type = source.get("media_type", "image/png")
+            data_str = source.get("data", "")
+            if not data_str:
+                continue
+            try:
+                raw_bytes = base64.b64decode(data_str)
+                images.append((media_type, raw_bytes))
+            except Exception:
+                logger.debug("Failed to decode base64 image in tool_result")
+        return images if images else None
 
     @classmethod
     def parse_message(cls, data: dict) -> ParsedMessage | None:
@@ -560,6 +595,7 @@ class TranscriptParser:
                         tool_use_id = block.get("tool_use_id", "")
                         result_content = block.get("content", "")
                         result_text = cls.extract_tool_result_text(result_content)
+                        result_images = cls.extract_tool_result_images(result_content)
                         is_error = block.get("is_error", False)
                         is_interrupted = result_text == cls._INTERRUPTED_TEXT
                         tool_info = pending_tools.pop(tool_use_id, None)
@@ -618,6 +654,7 @@ class TranscriptParser:
                                     content_type="tool_result",
                                     tool_use_id=_tuid,
                                     timestamp=entry_timestamp,
+                                    image_data=result_images,
                                 )
                             )
                         elif tool_summary:
@@ -663,18 +700,22 @@ class TranscriptParser:
                                     content_type="tool_result",
                                     tool_use_id=_tuid,
                                     timestamp=entry_timestamp,
+                                    image_data=result_images,
                                 )
                             )
-                        elif result_text:
+                        elif result_text or result_images:
                             result.append(
                                 ParsedEntry(
                                     role="assistant",
                                     text=cls._format_tool_result_text(
                                         result_text, tool_name
-                                    ),
+                                    )
+                                    if result_text
+                                    else (tool_summary or ""),
                                     content_type="tool_result",
                                     tool_use_id=_tuid,
                                     timestamp=entry_timestamp,
+                                    image_data=result_images,
                                 )
                             )
 

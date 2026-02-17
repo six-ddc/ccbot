@@ -5,6 +5,7 @@ conversion to MarkdownV2 format and fallback to plain text on failure.
 
 Functions:
   - send_with_fallback: Send with MarkdownV2 → plain text fallback
+  - send_photo: Photo sending (single or media group)
   - safe_reply: Reply with MarkdownV2, fallback to plain text
   - safe_edit: Edit message with MarkdownV2, fallback to plain text
   - safe_send: Send message with MarkdownV2, fallback to plain text
@@ -13,10 +14,11 @@ Rate limiting is handled globally by AIORateLimiter on the Application.
 RetryAfter exceptions are re-raised so callers (queue worker) can handle them.
 """
 
+import io
 import logging
 from typing import Any
 
-from telegram import Bot, LinkPreviewOptions, Message
+from telegram import Bot, InputMediaPhoto, LinkPreviewOptions, Message
 from telegram.error import RetryAfter
 
 from ..markdown_v2 import convert_markdown
@@ -73,6 +75,48 @@ async def send_with_fallback(
         except Exception as e:
             logger.error(f"Failed to send message to {chat_id}: {e}")
             return None
+
+
+async def send_photo(
+    bot: Bot,
+    chat_id: int,
+    image_data: list[tuple[str, bytes]],
+    **kwargs: Any,
+) -> None:
+    """Send photo(s) to chat. Sends as media group if multiple images.
+
+    Rate limiting is handled globally by AIORateLimiter on the Application.
+
+    Args:
+        bot: Telegram Bot instance
+        chat_id: Target chat ID
+        image_data: List of (media_type, raw_bytes) tuples
+        **kwargs: Extra kwargs passed to send_photo/send_media_group
+    """
+    if not image_data:
+        return
+    try:
+        if len(image_data) == 1:
+            _media_type, raw_bytes = image_data[0]
+            await bot.send_photo(
+                chat_id=chat_id,
+                photo=io.BytesIO(raw_bytes),
+                **kwargs,
+            )
+        else:
+            media = [
+                InputMediaPhoto(media=io.BytesIO(raw_bytes))
+                for _media_type, raw_bytes in image_data
+            ]
+            await bot.send_media_group(
+                chat_id=chat_id,
+                media=media,
+                **kwargs,
+            )
+    except RetryAfter:
+        raise
+    except Exception as e:
+        logger.error("Failed to send photo to %d: %s", chat_id, e)
 
 
 async def safe_reply(message: Message, text: str, **kwargs: Any) -> Message:

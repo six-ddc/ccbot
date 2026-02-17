@@ -32,7 +32,7 @@ from ..session import session_manager
 from ..transcript_parser import TranscriptParser
 from ..terminal_parser import parse_status_line
 from ..tmux_manager import tmux_manager
-from .message_sender import NO_LINK_PREVIEW, send_with_fallback
+from .message_sender import NO_LINK_PREVIEW, send_photo, send_with_fallback
 
 logger = logging.getLogger(__name__)
 
@@ -52,6 +52,7 @@ class MessageTask:
     tool_use_id: str | None = None
     content_type: str = "text"
     thread_id: int | None = None  # Telegram topic thread_id for targeted send
+    image_data: list[tuple[str, bytes]] | None = None  # From tool_result images
 
 
 # Per-user message queues and worker tasks
@@ -268,6 +269,23 @@ def _send_kwargs(thread_id: int | None) -> dict[str, int]:
     return {}
 
 
+async def _send_task_images(bot: Bot, chat_id: int, task: MessageTask) -> None:
+    """Send images attached to a task, if any."""
+    if not task.image_data:
+        return
+    logger.info(
+        "Sending %d image(s) in thread %s",
+        len(task.image_data),
+        task.thread_id,
+    )
+    await send_photo(
+        bot,
+        chat_id,
+        task.image_data,
+        **_send_kwargs(task.thread_id),  # type: ignore[arg-type]
+    )
+
+
 async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> None:
     """Process a content message task."""
     wid = task.window_id or ""
@@ -291,6 +309,7 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                     parse_mode="MarkdownV2",
                     link_preview_options=NO_LINK_PREVIEW,
                 )
+                await _send_task_images(bot, chat_id, task)
                 await _check_and_send_status(bot, user_id, wid, task.thread_id)
                 return
             except RetryAfter:
@@ -309,6 +328,7 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                         text=plain_text,
                         link_preview_options=NO_LINK_PREVIEW,
                     )
+                    await _send_task_images(bot, chat_id, task)
                     await _check_and_send_status(bot, user_id, wid, task.thread_id)
                     return
                 except RetryAfter:
@@ -351,7 +371,10 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
     if last_msg_id and task.tool_use_id and task.content_type == "tool_use":
         _tool_msg_ids[(task.tool_use_id, user_id, tid)] = last_msg_id
 
-    # 4. After content, check and send status
+    # 4. Send images if present (from tool_result with base64 image blocks)
+    await _send_task_images(bot, chat_id, task)
+
+    # 5. After content, check and send status
     await _check_and_send_status(bot, user_id, wid, task.thread_id)
 
 
@@ -572,6 +595,7 @@ async def enqueue_content_message(
     content_type: str = "text",
     text: str | None = None,
     thread_id: int | None = None,
+    image_data: list[tuple[str, bytes]] | None = None,
 ) -> None:
     """Enqueue a content message task."""
     logger.debug(
@@ -590,6 +614,7 @@ async def enqueue_content_message(
         tool_use_id=tool_use_id,
         content_type=content_type,
         thread_id=thread_id,
+        image_data=image_data,
     )
     queue.put_nowait(task)
 
