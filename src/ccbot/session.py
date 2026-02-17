@@ -32,6 +32,7 @@ from typing import Any, Self
 import aiofiles
 
 from .config import config
+from .handlers.callback_data import NOTIFICATION_MODES
 from .tmux_manager import tmux_manager
 from .transcript_parser import TranscriptParser
 from .utils import atomic_write_json
@@ -71,12 +72,14 @@ class WindowState:
         cwd: Working directory for direct file path construction
         window_name: Display name of the window
         transcript_path: Direct path to JSONL transcript file (from hook payload)
+        notification_mode: "all" | "errors_only" | "muted"
     """
 
     session_id: str = ""
     cwd: str = ""
     window_name: str = ""
     transcript_path: str = ""
+    notification_mode: str = "all"
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -87,6 +90,8 @@ class WindowState:
             d["window_name"] = self.window_name
         if self.transcript_path:
             d["transcript_path"] = self.transcript_path
+        if self.notification_mode != "all":
+            d["notification_mode"] = self.notification_mode
         return d
 
     @classmethod
@@ -96,6 +101,7 @@ class WindowState:
             cwd=data.get("cwd", ""),
             window_name=data.get("window_name", ""),
             transcript_path=data.get("transcript_path", ""),
+            notification_mode=data.get("notification_mode", "all"),
         )
 
 
@@ -129,11 +135,17 @@ class SessionManager:
     group_chat_ids: dict[str, int] = field(default_factory=dict)
     # window_id -> display name (window_name)
     window_display_names: dict[str, str] = field(default_factory=dict)
+    # User directory favorites: user_id -> {"starred": [...], "mru": [...]}
+    user_dir_favorites: dict[int, dict[str, list[str]]] = field(default_factory=dict)
 
     # Reverse index: (user_id, window_id) -> thread_id for O(1) inbound lookups
     _window_to_thread: dict[tuple[int, str], int] = field(
         default_factory=dict, repr=False
     )
+
+    # Debounced save state (not serialized)
+    _save_timer: asyncio.TimerHandle | None = field(default=None, repr=False)
+    _dirty: bool = field(default=False, repr=False)
 
     def __post_init__(self) -> None:
         self._load_state()
@@ -147,20 +159,55 @@ class SessionManager:
                 self._window_to_thread[(uid, wid)] = tid
 
     def _save_state(self) -> None:
-        state: dict[str, Any] = {
-            "window_states": {k: v.to_dict() for k, v in self.window_states.items()},
-            "user_window_offsets": {
-                str(uid): offsets for uid, offsets in self.user_window_offsets.items()
-            },
-            "thread_bindings": {
-                str(uid): {str(tid): wid for tid, wid in bindings.items()}
-                for uid, bindings in self.thread_bindings.items()
-            },
-            "group_chat_ids": self.group_chat_ids,
-            "window_display_names": self.window_display_names,
-        }
-        atomic_write_json(config.state_file, state)
-        logger.debug("State saved to %s", config.state_file)
+        """Schedule debounced save (0.5s delay, resets on each call)."""
+        self._dirty = True
+        if self._save_timer is not None:
+            self._save_timer.cancel()
+        try:
+            loop = asyncio.get_running_loop()
+            self._save_timer = loop.call_later(0.5, self._do_save_state)
+        except RuntimeError:
+            self._do_save_state()  # No event loop (tests) → immediate
+
+    def _do_save_state(self) -> None:
+        """Actual write via atomic_write_json.
+
+        Called directly or via call_later; exceptions are logged so the timer
+        path never silently swallows save failures.
+        """
+        self._save_timer = None
+        try:
+            state: dict[str, Any] = {
+                "window_states": {
+                    k: v.to_dict() for k, v in self.window_states.items()
+                },
+                "user_window_offsets": {
+                    str(uid): offsets
+                    for uid, offsets in self.user_window_offsets.items()
+                },
+                "thread_bindings": {
+                    str(uid): {str(tid): wid for tid, wid in bindings.items()}
+                    for uid, bindings in self.thread_bindings.items()
+                },
+                "group_chat_ids": self.group_chat_ids,
+                "window_display_names": self.window_display_names,
+                "user_dir_favorites": {
+                    str(uid): favs for uid, favs in self.user_dir_favorites.items()
+                },
+            }
+            atomic_write_json(config.state_file, state)
+            self._dirty = False
+            logger.debug("State saved to %s", config.state_file)
+        except OSError, TypeError, ValueError:
+            logger.exception("Failed to save state")
+
+    def flush_state(self) -> None:
+        """Force immediate save. Call on shutdown."""
+        if self._save_timer is not None:
+            self._save_timer.cancel()
+            self._save_timer = None
+        if self._dirty:
+            self._do_save_state()
 
     def _is_window_id(self, key: str) -> bool:
         """Check if a key looks like a tmux window ID (e.g. '@0', '@12')."""
@@ -189,6 +236,10 @@ class SessionManager:
                 }
                 self.group_chat_ids = state.get("group_chat_ids", {})
                 self.window_display_names = state.get("window_display_names", {})
+                self.user_dir_favorites = {
+                    int(uid): favs
+                    for uid, favs in state.get("user_dir_favorites", {}).items()
+                }
 
                 # Detect old format: keys that don't look like window IDs
                 needs_migration = False
@@ -528,8 +579,70 @@ class SessionManager:
         """Clear session association for a window (e.g., after /clear command)."""
         state = self.get_window_state(window_id)
         state.session_id = ""
+        state.notification_mode = "all"
         self._save_state()
         logger.info("Cleared session for window_id %s", window_id)
+
+    # --- Notification mode ---
+
+    _NOTIFICATION_MODES = NOTIFICATION_MODES
+
+    def get_notification_mode(self, window_id: str) -> str:
+        """Get notification mode for a window (default: 'all')."""
+        state = self.window_states.get(window_id)
+        return state.notification_mode if state else "all"
+
+    def set_notification_mode(self, window_id: str, mode: str) -> None:
+        """Set notification mode for a window."""
+        if mode not in self._NOTIFICATION_MODES:
+            raise ValueError(f"Invalid notification mode: {mode!r}")
+        state = self.get_window_state(window_id)
+        if state.notification_mode != mode:
+            state.notification_mode = mode
+            self._save_state()
+
+    def cycle_notification_mode(self, window_id: str) -> str:
+        """Cycle notification mode: all → errors_only → muted → all. Returns new mode."""
+        current = self.get_notification_mode(window_id)
+        modes = self._NOTIFICATION_MODES
+        idx = modes.index(current) if current in modes else 0
+        new_mode = modes[(idx + 1) % len(modes)]
+        self.set_notification_mode(window_id, new_mode)
+        return new_mode
+
+    # --- User directory favorites ---
+
+    def get_user_starred(self, user_id: int) -> list[str]:
+        """Get starred directories for a user."""
+        return list(self.user_dir_favorites.get(user_id, {}).get("starred", []))
+
+    def get_user_mru(self, user_id: int) -> list[str]:
+        """Get MRU directories for a user."""
+        return list(self.user_dir_favorites.get(user_id, {}).get("mru", []))
+
+    def update_user_mru(self, user_id: int, path: str) -> None:
+        """Insert path at front of MRU list, dedupe, cap at 5."""
+        resolved = str(Path(path).resolve())
+        favs = self.user_dir_favorites.setdefault(user_id, {})
+        mru: list[str] = favs.get("mru", [])
+        mru = [resolved] + [p for p in mru if p != resolved]
+        favs["mru"] = mru[:5]
+        self._save_state()
+
+    def toggle_user_star(self, user_id: int, path: str) -> bool:
+        """Toggle a directory in/out of starred list. Returns True if now starred."""
+        resolved = str(Path(path).resolve())
+        favs = self.user_dir_favorites.setdefault(user_id, {})
+        starred: list[str] = favs.get("starred", [])
+        if resolved in starred:
+            starred.remove(resolved)
+            now_starred = False
+        else:
+            starred.append(resolved)
+            now_starred = True
+        favs["starred"] = starred
+        self._save_state()
+        return now_starred
 
     def _build_session_file_path(self, session_id: str, cwd: str) -> Path | None:
         """Build the direct file path for a session from session_id and cwd."""
