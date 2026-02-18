@@ -73,7 +73,10 @@ UI_PATTERNS: list[UIPattern] = [
     ),
     UIPattern(
         name="PermissionPrompt",
-        top=(re.compile(r"^\s*Do you want to proceed\?"),),
+        top=(
+            re.compile(r"^\s*Do you want to proceed\?"),
+            re.compile(r"^\s*Do you want to make this edit"),
+        ),
         bottom=(re.compile(r"^\s*Esc to cancel"),),
     ),
     UIPattern(
