@@ -37,28 +37,12 @@ jobs:
     permissions:
       contents: write
     steps:
-      - uses: actions/checkout@v6
-        with:
-          fetch-depth: 0
-      - name: Extract release notes
-        run: |
-          python <<'PY'
-          import os
-          import pathlib
-          import re
-
-          version = os.environ["GITHUB_REF_NAME"].lstrip("v")
-          changelog = pathlib.Path("CHANGELOG.md").read_text()
-          pattern = rf"## \[{re.escape(version)}\][^\n]*\n(.*?)(?=\n## \[|\Z)"
-          match = re.search(pattern, changelog, re.DOTALL)
-          if not match:
-            raise SystemExit(f"Version {version} not found in CHANGELOG.md")
-          notes = match.group(1).strip()
-          pathlib.Path("release-notes.md").write_text(notes + "\n")
-          PY
       - name: Publish GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          body_path: release-notes.md
           tag_name: ${{ github.ref_name }}
           name: ${{ github.ref_name }}
+          generate_release_notes: true
+          body: |
+            Automated release for `${{ github.ref_name }}`.
+            Includes published PyPI package and Homebrew formula updates.
