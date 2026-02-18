@@ -1,5 +1,58 @@
 # Guides
 
+## Upgrading
+
+```bash
+uv tool upgrade ccbot                # uv (recommended)
+pipx upgrade ccbot                   # pipx
+brew upgrade ccbot                   # Homebrew
+```
+
+## CLI Reference
+
+```
+ccbot                        # Start the bot
+ccbot status                 # Show running state (no token needed)
+ccbot doctor                 # Validate setup and diagnose issues
+ccbot doctor --fix           # Auto-fix issues (install hook, kill orphans)
+ccbot hook --install         # Install Claude Code SessionStart hook
+ccbot hook --uninstall       # Remove the hook
+ccbot hook --status          # Check if hook is installed
+ccbot --version              # Show version
+ccbot -v                     # Run with debug logging
+```
+
+## Configuration
+
+All settings accept both CLI flags and environment variables. CLI flags take precedence. `TELEGRAM_BOT_TOKEN` is env-only for security (flags are visible in `ps`).
+
+| Variable / Flag                                | Default        | Description                                      |
+| ---------------------------------------------- | -------------- | ------------------------------------------------ |
+| `TELEGRAM_BOT_TOKEN`                           | _(required)_   | Bot token from @BotFather (env only)             |
+| `ALLOWED_USERS` / `--allowed-users`            | _(required)_   | Comma-separated Telegram user IDs                |
+| `CCBOT_DIR` / `--config-dir`                   | `~/.ccbot`     | Config and state directory                       |
+| `TMUX_SESSION_NAME` / `--tmux-session`         | `ccbot`        | tmux session name                                |
+| `CLAUDE_COMMAND` / `--claude-command`          | `claude`       | Command to launch Claude Code                    |
+| `CCBOT_GROUP_ID` / `--group-id`                | _(all groups)_ | Restrict to one Telegram group                   |
+| `CCBOT_INSTANCE_NAME` / `--instance-name`      | hostname       | Display label for this instance                  |
+| `CCBOT_LOG_LEVEL` / `--log-level`              | `INFO`         | Logging level (DEBUG, INFO, WARNING, ERROR)      |
+| `MONITOR_POLL_INTERVAL` / `--monitor-interval` | `2.0`          | Seconds between transcript polls                 |
+| `AUTOCLOSE_DONE_MINUTES` / `--autoclose-done`  | `30`           | Auto-close done topics after N minutes (0=off)   |
+| `AUTOCLOSE_DEAD_MINUTES` / `--autoclose-dead`  | `10`           | Auto-close dead sessions after N minutes (0=off) |
+
+## Auto-Close Behavior
+
+CCBot automatically closes Telegram topics when sessions end, reducing clutter:
+
+- **Done topics** (`--autoclose-done`, default: 30 min) — When Claude finishes a task and the session completes normally, the topic auto-closes after 30 minutes.
+- **Dead sessions** (`--autoclose-dead`, default: 10 min) — When a Claude process crashes or the tmux window is killed externally, the topic auto-closes after 10 minutes.
+
+Set to `0` to disable:
+
+```bash
+ccbot --autoclose-done 0 --autoclose-dead 0
+```
+
 ## Multi-Instance Setup
 
 Run multiple ccbot instances on the same machine, each owning a different Telegram group. All instances can share a single bot token.

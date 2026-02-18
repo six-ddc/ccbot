@@ -97,14 +97,12 @@ Each Telegram Forum topic binds to one tmux window running one Claude Code insta
 ### Install
 
 ```bash
-# macOS (Homebrew)
-brew install alexei-led/tap/ccbot
-
-# PyPI
+# Recommended
 uv tool install ccbot
 
-# Or with pipx
-pipx install ccbot
+# Alternatives
+pipx install ccbot                   # pipx
+brew install alexei-led/tap/ccbot    # Homebrew (macOS)
 ```
 
 ### Configure
@@ -137,23 +135,9 @@ ccbot
 
 Open your Telegram group, create a new topic, send a message — a directory browser appears. Pick a project directory and you're connected to Claude Code.
 
-## Configuration
-
-| Variable                | Default        | Description                       |
-| ----------------------- | -------------- | --------------------------------- |
-| `TELEGRAM_BOT_TOKEN`    | _(required)_   | Bot token from @BotFather         |
-| `ALLOWED_USERS`         | _(required)_   | Comma-separated Telegram user IDs |
-| `CCBOT_DIR`             | `~/.ccbot`     | Config and state directory        |
-| `TMUX_SESSION_NAME`     | `ccbot`        | tmux session name                 |
-| `CLAUDE_COMMAND`        | `claude`       | Command to launch Claude Code     |
-| `CCBOT_GROUP_ID`        | _(all groups)_ | Restrict to one Telegram group    |
-| `CCBOT_INSTANCE_NAME`   | hostname       | Display label for this instance   |
-| `CCBOT_LOG_LEVEL`       | `INFO`         | Log level for ccbot loggers       |
-| `MONITOR_POLL_INTERVAL` | `2.0`          | Seconds between transcript polls  |
-
 ## Documentation
 
-See **[docs/guides.md](docs/guides.md)** for advanced topics: multi-instance setup, manual tmux usage, data storage, and environment variables.
+See **[docs/guides.md](docs/guides.md)** for CLI reference, configuration, upgrading, multi-instance setup, session recovery, and more.
 
 ## Credits
 

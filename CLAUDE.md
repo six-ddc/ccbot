@@ -22,7 +22,9 @@ ccbot hook --status                   # Check if hook is installed
 ccbot --version                       # Show version
 ccbot --help                          # Show all available flags
 ccbot -v                              # Run bot with verbose (DEBUG) logging
-ccbot run --tmux-session my-session   # Run with flag overrides
+ccbot --tmux-session my-session       # Run with flag overrides
+ccbot --autoclose-done 0              # Disable auto-close for done topics
+ccbot --autoclose-dead 0              # Disable auto-close for dead sessions
 ```
 
 ## Core Design Constraints
