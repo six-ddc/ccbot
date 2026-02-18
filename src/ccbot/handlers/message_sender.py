@@ -105,10 +105,17 @@ async def safe_reply(message: Message, text: str, **kwargs: Any) -> Message:
 
 
 async def safe_edit(target: Any, text: str, **kwargs: Any) -> None:
-    """Edit message with MarkdownV2, falling back to plain text on failure."""
+    """Edit message with MarkdownV2, falling back to plain text on failure.
+
+    Accepts either a CallbackQuery (edit_message_text) or a Message (edit_text).
+    """
     kwargs.setdefault("link_preview_options", NO_LINK_PREVIEW)
+    # Message.edit_text vs CallbackQuery.edit_message_text
+    edit_fn = (
+        target.edit_text if isinstance(target, Message) else target.edit_message_text
+    )
     try:
-        await target.edit_message_text(
+        await edit_fn(
             convert_markdown(text),
             parse_mode="MarkdownV2",
             **kwargs,
@@ -117,7 +124,7 @@ async def safe_edit(target: Any, text: str, **kwargs: Any) -> None:
         raise
     except TelegramError:
         try:
-            await target.edit_message_text(text, **kwargs)
+            await edit_fn(text, **kwargs)
         except RetryAfter:
             raise
         except TelegramError as e:
