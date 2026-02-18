@@ -307,14 +307,16 @@ class SessionMonitor:
             logger.debug("Started tracking session: %s", session_id)
             return
 
-        # Check mtime to see if file has changed
+        # Check mtime and size to see if file has changed.
+        # Size check catches writes within the same second (mtime granularity).
         try:
-            current_mtime = file_path.stat().st_mtime
+            st = file_path.stat()
+            current_mtime, current_size = st.st_mtime, st.st_size
         except OSError:
             return
 
         last_mtime = self._file_mtimes.get(session_id, 0.0)
-        if current_mtime <= last_mtime:
+        if current_mtime <= last_mtime and current_size <= tracked.last_byte_offset:
             return
 
         # File changed, read new content from last offset

@@ -1,6 +1,7 @@
 """Tests for SessionMonitor."""
 
 import json
+import os
 from unittest.mock import AsyncMock, patch
 
 import pytest
@@ -282,10 +283,11 @@ class TestCheckForUpdates:
             projects_path=projects_path,
             state_file=tmp_path / "ms.json",
         )
+        file_size = session_file.stat().st_size
         tracked = TrackedSession(
             session_id="sess-1",
             file_path=str(session_file),
-            last_byte_offset=0,
+            last_byte_offset=file_size,
         )
         monitor.state.update_session(tracked)
         monitor._file_mtimes["sess-1"] = session_file.stat().st_mtime
@@ -308,6 +310,48 @@ class TestCheckForUpdates:
             await monitor.check_for_updates(current_map)
 
         mock_read.assert_not_called()
+
+    async def test_same_mtime_but_larger_size_triggers_read(self, tmp_path) -> None:
+        projects_path = tmp_path / "projects"
+        projects_path.mkdir()
+
+        session_file = tmp_path / "sess-1.jsonl"
+        session_file.write_text('{"type":"summary"}\n')
+        original_mtime = session_file.stat().st_mtime
+
+        monitor = SessionMonitor(
+            projects_path=projects_path,
+            state_file=tmp_path / "ms.json",
+        )
+        tracked = TrackedSession(
+            session_id="sess-1",
+            file_path=str(session_file),
+            last_byte_offset=0,
+        )
+        monitor.state.update_session(tracked)
+        monitor._file_mtimes["sess-1"] = original_mtime
+
+        # Append content without changing mtime (simulate sub-second write)
+        with open(session_file, "a") as f:
+            f.write(
+                '{"type":"assistant","message":{"content":[{"type":"text","text":"hi"}]}}\n'
+            )
+        os.utime(session_file, (original_mtime, original_mtime))
+
+        current_map = {
+            "@0": {
+                "session_id": "sess-1",
+                "cwd": str(tmp_path),
+                "window_name": "proj",
+                "transcript_path": str(session_file),
+            },
+        }
+        with patch.object(
+            monitor, "_read_new_lines", spec=True, new_callable=AsyncMock
+        ) as mock_read:
+            await monitor.check_for_updates(current_map)
+
+        mock_read.assert_called_once()
 
     async def test_direct_path_reads_new_content(self, tmp_path) -> None:
         """Primary path reads new content from transcript_path."""

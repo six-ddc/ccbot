@@ -103,6 +103,7 @@ from .handlers.interactive_ui import (
 )
 from .handlers.message_queue import (
     enqueue_content_message,
+    enqueue_status_update,
     get_message_queue,
     shutdown_workers,
 )
@@ -217,6 +218,39 @@ async def topic_closed_handler(
         logger.debug(
             "Topic closed: no binding (user=%d, thread=%d)", user.id, thread_id
         )
+
+
+async def unbind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Disconnect a topic from its tmux window without killing the session."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    thread_id = _get_thread_id(update)
+    if thread_id is None:
+        await safe_reply(update.message, "\u274c Use this command inside a topic.")
+        return
+
+    window_id = session_manager.get_window_for_thread(user.id, thread_id)
+    if not window_id:
+        await safe_reply(
+            update.message, "\u274c This topic is not bound to any session."
+        )
+        return
+
+    display = session_manager.get_display_name(window_id)
+    # Enqueue a status clear to actually delete the Telegram status message
+    # (clear_topic_state only clears the tracking dict, leaving a ghost)
+    await enqueue_status_update(context.bot, user.id, window_id, None, thread_id)
+    await clear_topic_state(user.id, thread_id, context.bot, context.user_data)
+    session_manager.unbind_thread(user.id, thread_id)
+    await safe_reply(
+        update.message,
+        f"\u2702 Unbound from window `{display}`. The session is still running.\n"
+        "Send a message in this topic to rebind or create a new session.",
+    )
 
 
 async def forward_command_handler(
@@ -747,6 +781,9 @@ def create_bot() -> Application:
     )
     application.add_handler(
         CommandHandler("resume", resume_command, filters=_group_filter)
+    )
+    application.add_handler(
+        CommandHandler("unbind", unbind_command, filters=_group_filter)
     )
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Topic closed event — unbind window (kept alive for rebinding)

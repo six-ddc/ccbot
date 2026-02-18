@@ -13,6 +13,9 @@ from ccbot.terminal_parser import (
 # ── parse_status_line ────────────────────────────────────────────────────
 
 
+_SEPARATOR = "─" * 30
+
+
 class TestParseStatusLine:
     @pytest.mark.parametrize(
         ("spinner", "rest", "expected"),
@@ -26,7 +29,7 @@ class TestParseStatusLine:
         ],
     )
     def test_spinner_chars(self, spinner: str, rest: str, expected: str):
-        pane = f"some output\n{spinner}{rest}\n"
+        pane = f"some output\n{spinner}{rest}\n{_SEPARATOR}\n"
         assert parse_status_line(pane) == expected
 
     @pytest.mark.parametrize(
@@ -34,13 +37,31 @@ class TestParseStatusLine:
         [
             pytest.param("just normal text\nno spinners here\n", id="no_spinner"),
             pytest.param("", id="empty"),
+            pytest.param(
+                f"some output\n· bullet point\nmore text\n{_SEPARATOR}\n",
+                id="spinner_not_above_separator",
+            ),
+            pytest.param(
+                f"✻ Doing work\n{_SEPARATOR}\n" + "trailing\n" * 16,
+                id="separator_beyond_15_line_window",
+            ),
         ],
     )
     def test_returns_none(self, pane: str):
         assert parse_status_line(pane) is None
 
-    def test_bottom_up_scan_skips_trailing_blanks(self):
-        pane = "output\n✻ Doing work\n\n\n\n"
+    def test_ignores_bullet_points(self):
+        pane = (
+            "Here are some items:\n"
+            "· first item\n"
+            "· second item\n"
+            "normal line\n"
+            f"{_SEPARATOR}\n"
+        )
+        assert parse_status_line(pane) is None
+
+    def test_bottom_up_scan_with_chrome(self):
+        pane = f"output\n✻ Doing work\n{_SEPARATOR}\n❯\n"
         assert parse_status_line(pane) == "Doing work"
 
     def test_uses_fixture(self, sample_pane_status_line: str):

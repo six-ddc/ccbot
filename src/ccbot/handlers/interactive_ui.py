@@ -18,7 +18,7 @@ import contextlib
 import logging
 import time
 
-from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from telegram.error import BadRequest, RetryAfter, TelegramError
 
 from ..session import session_manager
@@ -35,7 +35,7 @@ from .callback_data import (
     CB_ASK_TAB,
     CB_ASK_UP,
 )
-from .message_sender import NO_LINK_PREVIEW, rate_limit_send_message
+from .message_sender import NO_LINK_PREVIEW, rate_limit_send
 
 logger = logging.getLogger(__name__)
 
@@ -259,13 +259,19 @@ async def handle_interactive_ui(
         "Sending interactive UI to user %d for window_id %s", user_id, window_id
     )
     _send_cooldowns[ikey] = now
-    sent = await rate_limit_send_message(
-        bot,
-        chat_id,
-        text,
-        reply_markup=keyboard,
-        **thread_kwargs,  # type: ignore[arg-type]
-    )
+    # Send as plain text — terminal content has characters like (, _, .
+    # that MarkdownV2 conversion would mangle.
+    sent: Message | None = None
+    await rate_limit_send(chat_id)
+    try:
+        sent = await bot.send_message(
+            chat_id=chat_id,
+            text=text,
+            reply_markup=keyboard,
+            **thread_kwargs,  # type: ignore[arg-type]
+        )
+    except TelegramError as e:
+        logger.error("Failed to send interactive UI to %s: %s", chat_id, e)
     if sent:
         _interactive_msgs[ikey] = sent.message_id
         _interactive_mode[ikey] = window_id

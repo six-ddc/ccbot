@@ -179,21 +179,29 @@ STATUS_SPINNERS = frozenset(["·", "✻", "✽", "✶", "✳", "✢"])
 def parse_status_line(pane_text: str) -> str | None:
     """Extract the Claude Code status line from terminal output.
 
-    Status lines start with a spinner character (see STATUS_SPINNERS).
+    The status line sits directly above the chrome separator (a line of ``─``
+    characters).  We anchor on that separator first, then check the line above
+    for a spinner character.  This avoids false positives from ``·`` bullet
+    points elsewhere in the output.
+
     Returns the text after the spinner, or None if no status line found.
     """
     if not pane_text:
         return None
 
-    # Search from bottom up — status line is near the bottom but may have
-    # separator lines, prompts, etc. below it.
     lines = pane_text.strip().split("\n")
-    for line in reversed(lines[-15:]):
-        line = line.strip()
-        if not line:
-            continue
-        if line[0] in STATUS_SPINNERS:
-            return line[1:].strip()
+
+    # Find the chrome separator in the last 15 lines (search from bottom up).
+    for i in range(len(lines) - 1, max(len(lines) - 16, -1), -1):
+        stripped = lines[i].strip()
+        if len(stripped) >= _MIN_SEPARATOR_WIDTH and all(c == "─" for c in stripped):
+            # Check the line directly above the separator
+            if i > 0:
+                candidate = lines[i - 1].strip()
+                if candidate and candidate[0] in STATUS_SPINNERS:
+                    return candidate[1:].strip()
+            break  # Only check the first (bottommost) separator
+
     return None
 
 

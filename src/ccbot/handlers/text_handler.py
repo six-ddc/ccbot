@@ -31,7 +31,7 @@ from .directory_browser import (
     clear_window_picker_state,
 )
 from .interactive_ui import get_interactive_window, handle_interactive_ui
-from .message_queue import clear_status_msg_info
+from .message_queue import enqueue_status_update
 from .message_sender import (
     NO_LINK_PREVIEW,
     rate_limit_send_message,
@@ -327,7 +327,9 @@ async def _forward_message(
 ) -> None:
     """Forward a text message to the bound tmux window."""
     await message.chat.send_action(ChatAction.TYPING)  # type: ignore[union-attr]
-    clear_status_msg_info(user_id, thread_id)
+    # Enqueue a status clear to actually delete the Telegram message
+    # (clear_status_msg_info only clears the tracking dict, leaving a ghost)
+    await enqueue_status_update(bot, user_id, window_id, None, thread_id)
 
     # Cancel any running bash capture — new message pushes pane content down
     _cancel_bash_capture(user_id, thread_id)

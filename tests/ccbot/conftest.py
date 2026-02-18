@@ -130,7 +130,8 @@ def sample_pane_permission():
 
 @pytest.fixture
 def sample_pane_status_line():
-    return "Some output text here\nMore output\n✻ Reading file src/main.py\n"
+    sep = "─" * 30
+    return f"Some output text here\nMore output\n✻ Reading file src/main.py\n{sep}\n"
 
 
 @pytest.fixture
