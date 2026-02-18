@@ -144,6 +144,7 @@ async def handle_interactive_ui(
     user_id: int,
     window_id: str,
     thread_id: int | None = None,
+    chat_id: int | None = None,
 ) -> bool:
     """Capture terminal and send interactive UI content to user.
 
@@ -152,7 +153,7 @@ async def handle_interactive_ui(
     False otherwise.
     """
     ikey = (user_id, thread_id or 0)
-    chat_id = user_id
+    chat_id = chat_id or user_id
     w = await tmux_manager.find_window_by_id(window_id)
     if not w:
         return False
@@ -231,6 +232,7 @@ async def clear_interactive_msg(
     user_id: int,
     bot: Bot | None = None,
     thread_id: int | None = None,
+    chat_id: int | None = None,
 ) -> None:
     """Clear tracked interactive message, delete from chat, and exit interactive mode."""
     ikey = (user_id, thread_id or 0)
@@ -243,8 +245,8 @@ async def clear_interactive_msg(
         msg_id,
     )
     if bot and msg_id:
-        chat_id = user_id
+        effective_chat_id = chat_id or user_id
         try:
-            await bot.delete_message(chat_id=chat_id, message_id=msg_id)
+            await bot.delete_message(chat_id=effective_chat_id, message_id=msg_id)
         except Exception:
             pass  # Message may already be deleted or too old

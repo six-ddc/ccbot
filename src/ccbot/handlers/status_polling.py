@@ -48,6 +48,7 @@ async def update_status_message(
     user_id: int,
     window_id: str,
     thread_id: int | None = None,
+    chat_id: int | None = None,
 ) -> None:
     """Poll terminal and enqueue status update for user's active window.
 
@@ -57,7 +58,9 @@ async def update_status_message(
     w = await tmux_manager.find_window_by_id(window_id)
     if not w:
         # Window gone, enqueue clear
-        await enqueue_status_update(bot, user_id, window_id, None, thread_id=thread_id)
+        await enqueue_status_update(
+            bot, user_id, window_id, None, thread_id=thread_id, chat_id=chat_id
+        )
         return
 
     pane_text = await tmux_manager.capture_pane(w.window_id)
@@ -75,16 +78,16 @@ async def update_status_message(
             return
         # Interactive UI gone — clear interactive mode, fall through to status check.
         # Don't re-check for new UI this cycle (the old one just disappeared).
-        await clear_interactive_msg(user_id, bot, thread_id)
+        await clear_interactive_msg(user_id, bot, thread_id, chat_id=chat_id)
         should_check_new_ui = False
     elif interactive_window is not None:
         # User is in interactive mode for a DIFFERENT window (window switched)
         # Clear stale interactive mode
-        await clear_interactive_msg(user_id, bot, thread_id)
+        await clear_interactive_msg(user_id, bot, thread_id, chat_id=chat_id)
 
     # Check for permission prompt (interactive UI not triggered via JSONL)
     if should_check_new_ui and is_interactive_ui(pane_text):
-        await handle_interactive_ui(bot, user_id, window_id, thread_id)
+        await handle_interactive_ui(bot, user_id, window_id, thread_id, chat_id=chat_id)
         return
 
     # Normal status line check
@@ -97,6 +100,7 @@ async def update_status_message(
             window_id,
             status_line,
             thread_id=thread_id,
+            chat_id=chat_id,
         )
     # If no status line, keep existing status message (don't clear on transient state)
 
@@ -111,12 +115,12 @@ async def status_poll_loop(bot: Bot) -> None:
             now = time.monotonic()
             if now - last_topic_check >= TOPIC_CHECK_INTERVAL:
                 last_topic_check = now
-                for user_id, thread_id, wid in list(
+                for user_id, thread_id, wid, chat_id in list(
                     session_manager.iter_thread_bindings()
                 ):
                     try:
                         await bot.unpin_all_forum_topic_messages(
-                            chat_id=user_id,
+                            chat_id=chat_id,
                             message_thread_id=thread_id,
                         )
                     except BadRequest as e:
@@ -147,7 +151,9 @@ async def status_poll_loop(bot: Bot) -> None:
                             e,
                         )
 
-            for user_id, thread_id, wid in list(session_manager.iter_thread_bindings()):
+            for user_id, thread_id, wid, chat_id in list(
+                session_manager.iter_thread_bindings()
+            ):
                 try:
                     # Clean up stale bindings (window no longer exists)
                     w = await tmux_manager.find_window_by_id(wid)
@@ -170,6 +176,7 @@ async def status_poll_loop(bot: Bot) -> None:
                         user_id,
                         wid,
                         thread_id=thread_id,
+                        chat_id=chat_id,
                     )
                 except Exception as e:
                     logger.debug(

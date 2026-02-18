@@ -30,7 +30,26 @@ class TestThreadBindings:
         mgr.bind_thread(100, 2, "@2")
         mgr.bind_thread(200, 3, "@3")
         result = set(mgr.iter_thread_bindings())
-        assert result == {(100, 1, "@1"), (100, 2, "@2"), (200, 3, "@3")}
+        # 4-tuple: (user_id, thread_id, window_id, chat_id) — chat_id defaults to user_id
+        assert result == {(100, 1, "@1", 100), (100, 2, "@2", 100), (200, 3, "@3", 200)}
+
+    def test_iter_thread_bindings_with_chat_id(self, mgr: SessionManager) -> None:
+        mgr.bind_thread(100, 1, "@1", chat_id=-1001234567890)
+        result = list(mgr.iter_thread_bindings())
+        assert result == [(100, 1, "@1", -1001234567890)]
+
+    def test_get_chat_id_for_thread(self, mgr: SessionManager) -> None:
+        mgr.bind_thread(100, 1, "@1", chat_id=-1001234567890)
+        assert mgr.get_chat_id_for_thread(100, 1) == -1001234567890
+
+    def test_get_chat_id_for_thread_fallback(self, mgr: SessionManager) -> None:
+        mgr.bind_thread(100, 1, "@1")
+        # No explicit chat_id → falls back to user_id
+        assert mgr.get_chat_id_for_thread(100, 1) == 100
+
+    def test_get_chat_id_for_thread_unbound(self, mgr: SessionManager) -> None:
+        # Unbound thread → falls back to user_id
+        assert mgr.get_chat_id_for_thread(100, 999) == 100
 
 
 class TestWindowState:

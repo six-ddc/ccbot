@@ -452,6 +452,7 @@ async def _capture_bash_output(
     thread_id: int,
     window_id: str,
     command: str,
+    chat_id: int | None = None,
 ) -> None:
     """Background task: capture ``!`` bash command output from tmux pane.
 
@@ -463,7 +464,7 @@ async def _capture_bash_output(
         # Wait for the command to start producing output
         await asyncio.sleep(2.0)
 
-        chat_id = user_id
+        chat_id = chat_id or user_id
         msg_id: int | None = None
         last_output: str = ""
 
@@ -583,7 +584,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if wid is None:
         # Unbound topic — check for unbound windows first
         all_windows = await tmux_manager.list_windows()
-        bound_ids = {wid for _, _, wid in session_manager.iter_thread_bindings()}
+        bound_ids = {wid for _, _, wid, _ in session_manager.iter_thread_bindings()}
         unbound = [
             (w.window_id, w.window_name, w.cwd)
             for w in all_windows
@@ -649,8 +650,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
+    chat_id = session_manager.get_chat_id_for_thread(user.id, thread_id)
     await update.message.chat.send_action(ChatAction.TYPING)
-    await enqueue_status_update(context.bot, user.id, wid, None, thread_id=thread_id)
+    await enqueue_status_update(
+        context.bot, user.id, wid, None, thread_id=thread_id, chat_id=chat_id
+    )
 
     # Cancel any running bash capture — new message pushes pane content down
     _cancel_bash_capture(user.id, thread_id)
@@ -664,7 +668,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if text.startswith("!") and len(text) > 1:
         bash_cmd = text[1:]  # strip leading "!"
         task = asyncio.create_task(
-            _capture_bash_output(context.bot, user.id, thread_id, wid, bash_cmd)
+            _capture_bash_output(
+                context.bot, user.id, thread_id, wid, bash_cmd, chat_id=chat_id
+            )
         )
         _bash_capture_tasks[(user.id, thread_id)] = task
 
@@ -672,7 +678,9 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     interactive_window = get_interactive_window(user.id, thread_id)
     if interactive_window and interactive_window == wid:
         await asyncio.sleep(0.2)
-        await handle_interactive_ui(context.bot, user.id, wid, thread_id)
+        await handle_interactive_ui(
+            context.bot, user.id, wid, thread_id, chat_id=chat_id
+        )
 
 
 # --- Callback query handler ---
@@ -873,15 +881,22 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await session_manager.wait_for_session_map_entry(created_wid)
 
             if pending_thread_id is not None:
+                effective_chat_id = (
+                    update.effective_chat.id if update.effective_chat else user.id
+                )
                 # Thread bind flow: bind thread to newly created window
                 session_manager.bind_thread(
-                    user.id, pending_thread_id, created_wid, window_name=created_wname
+                    user.id,
+                    pending_thread_id,
+                    created_wid,
+                    window_name=created_wname,
+                    chat_id=effective_chat_id,
                 )
 
                 # Rename the topic to match the window name
                 try:
                     await context.bot.edit_forum_topic(
-                        chat_id=user.id,
+                        chat_id=effective_chat_id,
                         message_thread_id=pending_thread_id,
                         name=created_wname,
                     )
@@ -916,7 +931,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                         logger.warning("Failed to forward pending text: %s", send_msg)
                         await safe_send(
                             context.bot,
-                            user.id,
+                            effective_chat_id,
                             f"❌ Failed to send pending message: {send_msg}",
                             message_thread_id=pending_thread_id,
                         )
@@ -980,16 +995,23 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.answer("Not in a topic", show_alert=True)
             return
 
+        effective_chat_id = (
+            update.effective_chat.id if update.effective_chat else user.id
+        )
         display = w.window_name
         clear_window_picker_state(context.user_data)
         session_manager.bind_thread(
-            user.id, thread_id, selected_wid, window_name=display
+            user.id,
+            thread_id,
+            selected_wid,
+            window_name=display,
+            chat_id=effective_chat_id,
         )
 
         # Rename the topic to match the window name
         try:
             await context.bot.edit_forum_topic(
-                chat_id=user.id,
+                chat_id=effective_chat_id,
                 message_thread_id=thread_id,
                 name=display,
             )
@@ -1016,7 +1038,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 logger.warning("Failed to forward pending text: %s", send_msg)
                 await safe_send(
                     context.bot,
-                    user.id,
+                    effective_chat_id,
                     f"❌ Failed to send pending message: {send_msg}",
                     message_thread_id=thread_id,
                 )
@@ -1259,7 +1281,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         logger.info(f"No active users for session {msg.session_id}")
         return
 
-    for user_id, wid, thread_id in active_users:
+    for user_id, wid, thread_id, chat_id in active_users:
         # Handle interactive tools specially - capture terminal and send UI
         if msg.tool_name in INTERACTIVE_TOOL_NAMES and msg.content_type == "tool_use":
             # Mark interactive mode BEFORE sleeping so polling skips this window
@@ -1270,7 +1292,9 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 await queue.join()
             # Wait briefly for Claude Code to render the question UI
             await asyncio.sleep(0.3)
-            handled = await handle_interactive_ui(bot, user_id, wid, thread_id)
+            handled = await handle_interactive_ui(
+                bot, user_id, wid, thread_id, chat_id=chat_id
+            )
             if handled:
                 # Update user's read offset
                 session = await session_manager.resolve_session_for_window(wid)
@@ -1289,7 +1313,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
 
         # Any non-interactive message means the interaction is complete — delete the UI message
         if get_interactive_msg_id(user_id, thread_id):
-            await clear_interactive_msg(user_id, bot, thread_id)
+            await clear_interactive_msg(user_id, bot, thread_id, chat_id=chat_id)
 
         parts = build_response_parts(
             msg.text,
@@ -1311,6 +1335,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 content_type=msg.content_type,
                 text=msg.text,
                 thread_id=thread_id,
+                chat_id=chat_id,
             )
 
             # Update user's read offset to current file position
