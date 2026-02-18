@@ -9,9 +9,9 @@ Core responsibilities:
   - Callback query handler: thin dispatcher routing to dedicated handler modules.
   - Topic-based routing: each named topic binds to one tmux window.
     Unbound topics trigger the directory browser to create a new session.
-  - Automatic cleanup: closing a topic kills the associated window
-    (topic_closed_handler). Unsupported content (images, stickers, etc.)
-    is rejected with a warning (unsupported_content_handler).
+  - Topic lifecycle: closing a topic unbinds the window (kept alive for
+    rebinding). Unbound windows are auto-killed after TTL by status polling.
+    Unsupported content (images, stickers, etc.) is rejected with a warning.
   - Bot lifecycle management: post_init, post_shutdown, create_bot.
 
 Key functions: create_bot(), handle_new_message().
@@ -187,7 +187,12 @@ async def history_command(update: Update, _context: ContextTypes.DEFAULT_TYPE) -
 async def topic_closed_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Handle topic closure — kill the associated tmux window and clean up state."""
+    """Handle topic closure — unbind thread but keep the tmux window alive.
+
+    The window becomes "unbound" and is available for rebinding via the window
+    picker when a new topic is created. Unbound windows are auto-killed after
+    the configured TTL (autoclose_done_minutes) by the status polling loop.
+    """
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         return
@@ -199,25 +204,15 @@ async def topic_closed_handler(
     window_id = session_manager.get_window_for_thread(user.id, thread_id)
     if window_id:
         display = session_manager.get_display_name(window_id)
-        w = await tmux_manager.find_window_by_id(window_id)
-        if w:
-            await tmux_manager.kill_window(w.window_id)
-            logger.info(
-                "Topic closed: killed window %s (user=%d, thread=%d)",
-                display,
-                user.id,
-                thread_id,
-            )
-        else:
-            logger.info(
-                "Topic closed: window %s already gone (user=%d, thread=%d)",
-                display,
-                user.id,
-                thread_id,
-            )
         session_manager.unbind_thread(user.id, thread_id)
         # Clean up all memory state for this topic
         await clear_topic_state(user.id, thread_id, context.bot, context.user_data)
+        logger.info(
+            "Topic closed: window %s unbound (kept alive for rebinding, user=%d, thread=%d)",
+            display,
+            user.id,
+            thread_id,
+        )
     else:
         logger.debug(
             "Topic closed: no binding (user=%d, thread=%d)", user.id, thread_id
@@ -754,7 +749,7 @@ def create_bot() -> Application:
         CommandHandler("resume", resume_command, filters=_group_filter)
     )
     application.add_handler(CallbackQueryHandler(callback_handler))
-    # Topic closed event — auto-kill associated window
+    # Topic closed event — unbind window (kept alive for rebinding)
     application.add_handler(
         MessageHandler(
             filters.StatusUpdate.FORUM_TOPIC_CLOSED & _group_filter,

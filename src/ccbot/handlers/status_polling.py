@@ -8,6 +8,7 @@ Provides background polling of terminal status lines for all active users:
   - Detects Claude process exit (pane command reverts to shell)
   - Syncs tmux window renames to Telegram topic titles
   - Auto-closes stale topics after configurable timeout
+  - Auto-kills unbound windows (topic closed, window kept alive) after TTL
   - Periodically probes topic existence via unpin_all_forum_topic_messages
     (silent no-op when no pins); cleans up deleted topics (kills tmux window
     + unbinds thread)
@@ -66,6 +67,9 @@ SHELL_COMMANDS = frozenset({"bash", "zsh", "fish", "sh", "dash", "tcsh", "csh", 
 # Auto-close timers: (user_id, thread_id) -> (state, monotonic_time_entered)
 _autoclose_timers: dict[tuple[int, int], tuple[str, float]] = {}
 
+# Unbound window TTL: window_id -> monotonic_time_first_seen_unbound
+_unbound_window_timers: dict[str, float] = {}
+
 
 def is_shell_prompt(pane_current_command: str) -> bool:
     """Check if the pane is running a shell (Claude has exited)."""
@@ -81,6 +85,7 @@ def clear_autoclose_timer(user_id: int, thread_id: int) -> None:
 def reset_autoclose_state() -> None:
     """Reset all autoclose tracking (for testing)."""
     _autoclose_timers.clear()
+    _unbound_window_timers.clear()
 
 
 def clear_dead_notification(user_id: int, thread_id: int) -> None:
@@ -108,6 +113,51 @@ def _start_autoclose_timer(
 def _clear_autoclose_if_active(user_id: int, thread_id: int) -> None:
     """Clear autoclose timer when topic becomes active/idle (session alive)."""
     _autoclose_timers.pop((user_id, thread_id), None)
+
+
+async def _check_unbound_window_ttl() -> None:
+    """Kill unbound tmux windows whose TTL has expired.
+
+    Unbound windows are live tmux windows not bound to any topic. They appear
+    when a topic is closed (window kept alive for rebinding). After
+    autoclose_done_minutes they are auto-killed.
+    """
+    timeout = config.autoclose_done_minutes * 60
+    if timeout <= 0:
+        return
+
+    # Build set of currently bound window IDs
+    bound_ids: set[str] = set()
+    for _, _, wid in session_manager.iter_thread_bindings():
+        bound_ids.add(wid)
+
+    # Get all live tmux windows
+    live_windows = await tmux_manager.list_windows()
+    live_ids = {w.window_id for w in live_windows}
+
+    # Remove timers for windows that got rebound or no longer exist
+    stale_timer_keys = [
+        wid for wid in _unbound_window_timers if wid in bound_ids or wid not in live_ids
+    ]
+    for wid in stale_timer_keys:
+        del _unbound_window_timers[wid]
+
+    # Track newly unbound windows
+    now = time.monotonic()
+    for w in live_windows:
+        if w.window_id not in bound_ids:
+            _unbound_window_timers.setdefault(w.window_id, now)
+
+    # Kill expired unbound windows
+    expired = [
+        wid
+        for wid, first_seen in _unbound_window_timers.items()
+        if now - first_seen >= timeout
+    ]
+    for wid in expired:
+        _unbound_window_timers.pop(wid, None)
+        await tmux_manager.kill_window(wid)
+        logger.info("Auto-killed unbound window %s (TTL expired)", wid)
 
 
 async def _check_autoclose_timers(bot: Bot) -> None:
@@ -357,8 +407,9 @@ async def status_poll_loop(bot: Bot) -> None:
                         e,
                     )
 
-            # Check auto-close timers at end of each poll cycle
+            # Check auto-close timers and unbound window TTL at end of each poll cycle
             await _check_autoclose_timers(bot)
+            await _check_unbound_window_ttl()
 
         except _LoopError:
             logger.exception("Status poll loop error")
