@@ -14,6 +14,10 @@ make typecheck                        # Type check — MUST be 0 errors before c
 make test                             # Run test suite
 ./scripts/restart.sh                  # Restart the ccbot service after code changes
 ccbot hook --install                  # Auto-install Claude Code SessionStart hook
+ccbot --version                       # Show version
+ccbot --help                          # Show all available flags
+ccbot -v                              # Run bot with verbose (DEBUG) logging
+ccbot run --tmux-session my-session   # Run with flag overrides
 ```
 
 ## Core Design Constraints
@@ -36,9 +40,11 @@ ccbot hook --install                  # Auto-install Claude Code SessionStart ho
 
 ## Configuration
 
-- Config directory: `~/.ccbot/` by default, override with `CCBOT_DIR` env var.
+- **Precedence**: CLI flag > env var > `.env` file > default.
+- Config directory: `~/.ccbot/` by default, override with `--config-dir` flag or `CCBOT_DIR` env var.
 - `.env` loading priority: local `.env` > config dir `.env`.
-- Multi-instance: `CCBOT_GROUP_ID` (optional) restricts this instance to one Telegram group. `CCBOT_INSTANCE_NAME` (optional, defaults to hostname) is a display label. Without `CCBOT_GROUP_ID`, all groups are processed.
+- All config values accept both CLI flags and env vars (see `ccbot --help`). `TELEGRAM_BOT_TOKEN` is env-only (security: flags visible in `ps`).
+- Multi-instance: `--group-id` / `CCBOT_GROUP_ID` restricts to one Telegram group. `--instance-name` / `CCBOT_INSTANCE_NAME` is a display label.
 - State files: `state.json` (thread bindings), `session_map.json` (hook-generated), `monitor_state.json` (byte offsets).
 - Project structure: handlers in `src/ccbot/handlers/`, core modules in `src/ccbot/`, tests mirror source under `tests/ccbot/`.
 
