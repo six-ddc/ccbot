@@ -23,6 +23,7 @@ async def clear_topic_state(
     thread_id: int,
     bot: Bot | None = None,
     user_data: dict[str, Any] | None = None,
+    window_id: str | None = None,
 ) -> None:
     """Clear all memory state associated with a topic.
 
@@ -35,6 +36,7 @@ async def clear_topic_state(
       - _tool_msg_ids (tool_use -> message_id mapping)
       - _interactive_msgs and _interactive_mode (interactive UI state)
       - _topic_states (topic emoji tracking)
+      - _has_seen_status (startup status tracking, if window_id provided)
       - user_data pending state (PENDING_THREAD_ID, PENDING_THREAD_TEXT)
     """
     # Clear status message tracking
@@ -44,10 +46,16 @@ async def clear_topic_state(
     clear_tool_msg_ids_for_topic(user_id, thread_id)
 
     # Clear dead window notification and autoclose tracking (lazy import to avoid circular dep)
-    from .status_polling import clear_autoclose_timer, clear_dead_notification
+    from .status_polling import (
+        clear_autoclose_timer,
+        clear_dead_notification,
+        clear_seen_status,
+    )
 
     clear_dead_notification(user_id, thread_id)
     clear_autoclose_timer(user_id, thread_id)
+    if window_id:
+        clear_seen_status(window_id)
 
     # Clear interactive UI state (also deletes message from chat)
     await clear_interactive_msg(user_id, bot, thread_id)

@@ -70,6 +70,11 @@ _autoclose_timers: dict[tuple[int, int], tuple[str, float]] = {}
 # Unbound window TTL: window_id -> monotonic_time_first_seen_unbound
 _unbound_window_timers: dict[str, float] = {}
 
+# Windows where we've observed at least one status line (spinner).
+# Until a spinner is seen, the window is treated as "active" (starting up),
+# not "idle", to avoid showing 💤 during Claude Code startup.
+_has_seen_status: set[str] = set()
+
 
 def is_shell_prompt(pane_current_command: str) -> bool:
     """Check if the pane is running a shell (Claude has exited)."""
@@ -98,6 +103,16 @@ def clear_dead_notification(user_id: int, thread_id: int) -> None:
 def reset_dead_notification_state() -> None:
     """Reset all dead notification tracking (for testing)."""
     _dead_notified.clear()
+
+
+def clear_seen_status(window_id: str) -> None:
+    """Clear startup status tracking for a window (called on cleanup)."""
+    _has_seen_status.discard(window_id)
+
+
+def reset_seen_status_state() -> None:
+    """Reset all startup status tracking (for testing)."""
+    _has_seen_status.clear()
 
 
 def _start_autoclose_timer(
@@ -263,6 +278,7 @@ async def update_status_message(
     notif_mode = session_manager.get_notification_mode(window_id)
 
     if status_line:
+        _has_seen_status.add(window_id)
         if notif_mode not in ("muted", "errors_only"):
             await enqueue_status_update(
                 bot,
@@ -286,9 +302,13 @@ async def update_status_message(
                 # Claude exited, shell is back
                 await update_topic_emoji(bot, chat_id, thread_id, "done", display)
                 _start_autoclose_timer(user_id, thread_id, "done", time.monotonic())
-            else:
-                # Claude still running, just no spinner
+            elif window_id in _has_seen_status:
+                # Was active before, now idle (spinner disappeared)
                 await update_topic_emoji(bot, chat_id, thread_id, "idle", display)
+                _clear_autoclose_if_active(user_id, thread_id)
+            else:
+                # Never seen a spinner — still starting up, show as active
+                await update_topic_emoji(bot, chat_id, thread_id, "active", display)
                 _clear_autoclose_if_active(user_id, thread_id)
 
 
@@ -299,6 +319,7 @@ async def _handle_dead_window_notification(
     dead_key = (user_id, thread_id, wid)
     if dead_key in _dead_notified:
         return
+    _has_seen_status.discard(wid)
     chat_id = session_manager.resolve_chat_id(user_id, thread_id)
     display = session_manager.get_display_name(wid)
     await update_topic_emoji(bot, chat_id, thread_id, "dead", display)
@@ -356,7 +377,9 @@ async def status_poll_loop(bot: Bot) -> None:
                             if w:
                                 await tmux_manager.kill_window(w.window_id)
                             session_manager.unbind_thread(user_id, thread_id)
-                            await clear_topic_state(user_id, thread_id, bot)
+                            await clear_topic_state(
+                                user_id, thread_id, bot, window_id=wid
+                            )
                             logger.info(
                                 "Topic deleted: killed window_id '%s' and "
                                 "unbound thread %d for user %d",

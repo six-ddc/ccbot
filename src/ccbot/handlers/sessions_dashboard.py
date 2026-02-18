@@ -153,7 +153,7 @@ async def handle_sessions_kill_confirm(
     for uid, tid, bound_wid in list(session_manager.iter_thread_bindings()):
         if bound_wid == window_id:
             session_manager.unbind_thread(uid, tid)
-            await clear_topic_state(uid, tid, bot)
+            await clear_topic_state(uid, tid, bot, window_id=window_id)
 
     logger.info(
         "sessions_kill_confirm: killed window %s (%s), user=%d",

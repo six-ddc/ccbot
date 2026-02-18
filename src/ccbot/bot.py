@@ -208,7 +208,9 @@ async def topic_closed_handler(
         display = session_manager.get_display_name(window_id)
         session_manager.unbind_thread(user.id, thread_id)
         # Clean up all memory state for this topic
-        await clear_topic_state(user.id, thread_id, context.bot, context.user_data)
+        await clear_topic_state(
+            user.id, thread_id, context.bot, context.user_data, window_id=window_id
+        )
         logger.info(
             "Topic closed: window %s unbound (kept alive for rebinding, user=%d, thread=%d)",
             display,
@@ -245,7 +247,9 @@ async def unbind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     # Enqueue a status clear to actually delete the Telegram status message
     # (clear_topic_state only clears the tracking dict, leaving a ghost)
     await enqueue_status_update(context.bot, user.id, window_id, None, thread_id)
-    await clear_topic_state(user.id, thread_id, context.bot, context.user_data)
+    await clear_topic_state(
+        user.id, thread_id, context.bot, context.user_data, window_id=window_id
+    )
     session_manager.unbind_thread(user.id, thread_id)
     await safe_reply(
         update.message,

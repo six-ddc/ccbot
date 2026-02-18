@@ -20,9 +20,13 @@ from ccbot.handlers.topic_emoji import (
 
 @pytest.fixture(autouse=True)
 def _reset():
+    from ccbot.handlers.status_polling import reset_seen_status_state
+
     reset_all_state()
+    reset_seen_status_state()
     yield
     reset_all_state()
+    reset_seen_status_state()
 
 
 class TestStripEmojiPrefix:
@@ -274,7 +278,13 @@ class TestStatusPollingIntegration:
                 return_value=None,
             ),
         ):
-            from ccbot.handlers.status_polling import update_status_message
+            from ccbot.handlers.status_polling import (
+                _has_seen_status,
+                update_status_message,
+            )
+
+            # Pre-seed: window had a spinner before, now idle
+            _has_seen_status.add("@0")
 
             mock_window = AsyncMock()
             mock_window.pane_current_command = "node"
@@ -287,6 +297,45 @@ class TestStatusPollingIntegration:
             await update_status_message(bot, 1, "@0", thread_id=42)
 
             mock_emoji.assert_called_once_with(bot, -100, 42, "idle", "myproject")
+
+    async def test_startup_window_shows_active_not_idle(self) -> None:
+        """New window with no spinner yet should show active, not idle."""
+        with (
+            patch("ccbot.handlers.status_polling.tmux_manager") as mock_tm,
+            patch("ccbot.handlers.status_polling.session_manager") as mock_sm,
+            patch("ccbot.handlers.status_polling.update_topic_emoji") as mock_emoji,
+            patch(
+                "ccbot.handlers.status_polling.get_interactive_window",
+                return_value=None,
+            ),
+            patch(
+                "ccbot.handlers.status_polling.is_interactive_ui",
+                return_value=False,
+            ),
+            patch(
+                "ccbot.handlers.status_polling.parse_status_line",
+                return_value=None,
+            ),
+        ):
+            from ccbot.handlers.status_polling import (
+                _has_seen_status,
+                update_status_message,
+            )
+
+            # Fresh window: never seen a spinner
+            _has_seen_status.discard("@99")
+
+            mock_window = AsyncMock()
+            mock_window.pane_current_command = "node"
+            mock_tm.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tm.capture_pane = AsyncMock(return_value="some output")
+            mock_sm.resolve_chat_id.return_value = -100
+            mock_sm.get_display_name.return_value = "newproject"
+
+            bot = AsyncMock()
+            await update_status_message(bot, 1, "@99", thread_id=99)
+
+            mock_emoji.assert_called_once_with(bot, -100, 99, "active", "newproject")
 
     async def test_done_when_shell_prompt(self) -> None:
         with (
