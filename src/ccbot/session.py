@@ -421,6 +421,9 @@ class SessionManager:
 
         self._needs_migration = False
 
+        # Prune session_map.json entries for dead windows
+        self.prune_session_map(live_ids)
+
     # --- Display name management ---
 
     def get_display_name(self, window_id: str) -> str:
@@ -473,6 +476,46 @@ class SessionManager:
             "Timed out waiting for session_map entry: window_id=%s", window_id
         )
         return False
+
+    def prune_session_map(self, live_window_ids: set[str]) -> None:
+        """Remove session_map.json entries for windows that no longer exist.
+
+        Reads session_map.json, drops entries whose window_id is not in
+        live_window_ids, and writes back only if changes were made.
+        Also removes corresponding window_states.
+        """
+        if not config.session_map_file.exists():
+            return
+        try:
+            raw = json.loads(config.session_map_file.read_text())
+        except json.JSONDecodeError, OSError:
+            return
+
+        prefix = f"{config.tmux_session_name}:"
+        dead_entries: list[tuple[str, str]] = []  # (map_key, window_id)
+        for key in raw:
+            if not key.startswith(prefix):
+                continue
+            window_id = key[len(prefix) :]
+            if self._is_window_id(window_id) and window_id not in live_window_ids:
+                dead_entries.append((key, window_id))
+
+        if not dead_entries:
+            return
+
+        changed_state = False
+        for key, window_id in dead_entries:
+            logger.info(
+                "Pruning dead session_map entry: %s (window %s)", key, window_id
+            )
+            del raw[key]
+            if window_id in self.window_states:
+                del self.window_states[window_id]
+                changed_state = True
+
+        atomic_write_json(config.session_map_file, raw)
+        if changed_state:
+            self._save_state()
 
     async def load_session_map(self) -> None:
         """Read session_map.json and update window_states with new session associations.

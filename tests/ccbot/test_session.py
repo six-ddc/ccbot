@@ -257,3 +257,93 @@ class TestParseSessionMap:
         result = parse_session_map(raw, "ccbot:")
         assert "good" in result
         assert "bad" not in result
+
+
+class TestPruneSessionMap:
+    def test_removes_dead_windows(
+        self, mgr: SessionManager, tmp_path, monkeypatch
+    ) -> None:
+        from ccbot.session import WindowState
+
+        session_map_file = tmp_path / "session_map.json"
+        session_map_file.write_text(
+            json.dumps(
+                {
+                    "ccbot:@1": {"session_id": "sid-1", "cwd": "/a"},
+                    "ccbot:@2": {"session_id": "sid-2", "cwd": "/b"},
+                    "ccbot:@3": {"session_id": "sid-3", "cwd": "/c"},
+                    "other:@9": {"session_id": "sid-9", "cwd": "/x"},
+                }
+            )
+        )
+
+        monkeypatch.setattr("ccbot.session.config.session_map_file", session_map_file)
+        monkeypatch.setattr("ccbot.session.config.tmux_session_name", "ccbot")
+
+        mgr.window_states["@1"] = WindowState(session_id="sid-1", cwd="/a")
+        mgr.window_states["@2"] = WindowState(session_id="sid-2", cwd="/b")
+        mgr.window_states["@3"] = WindowState(session_id="sid-3", cwd="/c")
+
+        mgr.prune_session_map(live_window_ids={"@1"})
+
+        result = json.loads(session_map_file.read_text())
+        assert "ccbot:@1" in result
+        assert "ccbot:@2" not in result
+        assert "ccbot:@3" not in result
+        assert "other:@9" in result
+
+        assert "@1" in mgr.window_states
+        assert "@2" not in mgr.window_states
+        assert "@3" not in mgr.window_states
+
+    def test_noop_when_all_alive(
+        self, mgr: SessionManager, tmp_path, monkeypatch
+    ) -> None:
+        session_map_file = tmp_path / "session_map.json"
+        session_map_file.write_text(
+            json.dumps({"ccbot:@1": {"session_id": "sid-1", "cwd": "/a"}})
+        )
+
+        monkeypatch.setattr("ccbot.session.config.session_map_file", session_map_file)
+        monkeypatch.setattr("ccbot.session.config.tmux_session_name", "ccbot")
+
+        mgr.prune_session_map(live_window_ids={"@1"})
+
+        result = json.loads(session_map_file.read_text())
+        assert "ccbot:@1" in result
+
+    def test_noop_when_file_missing(
+        self, mgr: SessionManager, tmp_path, monkeypatch
+    ) -> None:
+        missing = tmp_path / "nonexistent.json"
+        monkeypatch.setattr("ccbot.session.config.session_map_file", missing)
+
+        mgr.prune_session_map(live_window_ids=set())
+
+        assert not missing.exists()
+
+    def test_handles_malformed_json(
+        self, mgr: SessionManager, tmp_path, monkeypatch
+    ) -> None:
+        session_map_file = tmp_path / "session_map.json"
+        session_map_file.write_text("{ invalid json")
+
+        monkeypatch.setattr("ccbot.session.config.session_map_file", session_map_file)
+
+        mgr.prune_session_map(live_window_ids={"@1"})
+
+    def test_prunes_entry_without_window_state(
+        self, mgr: SessionManager, tmp_path, monkeypatch
+    ) -> None:
+        session_map_file = tmp_path / "session_map.json"
+        session_map_file.write_text(
+            json.dumps({"ccbot:@5": {"session_id": "sid-5", "cwd": "/a"}})
+        )
+
+        monkeypatch.setattr("ccbot.session.config.session_map_file", session_map_file)
+        monkeypatch.setattr("ccbot.session.config.tmux_session_name", "ccbot")
+
+        mgr.prune_session_map(live_window_ids=set())
+
+        result = json.loads(session_map_file.read_text())
+        assert "ccbot:@5" not in result
