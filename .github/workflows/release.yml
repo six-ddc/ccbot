@@ -31,7 +31,7 @@ jobs:
         id: version
         run: echo "VERSION=${GITHUB_REF_NAME#v}" >> "$GITHUB_OUTPUT"
       - name: Generate formula
-        run: python scripts/generate_homebrew_formula.py "${{ steps.version.outputs.VERSION }}" > ccbot.rb
+        run: uv run scripts/generate_homebrew_formula.py "${{ steps.version.outputs.VERSION }}" > ccbot.rb
       - name: Push to homebrew-tap
         env:
           GITHUB_TOKEN: ${{ secrets.HOMEBREW_TAP_TOKEN }}
