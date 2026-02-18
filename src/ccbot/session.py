@@ -240,6 +240,27 @@ class SessionManager:
                     for uid, favs in state.get("user_dir_favorites", {}).items()
                 }
 
+                # Deduplicate thread bindings: enforce 1 window = 1 thread.
+                # If multiple threads point to the same window, keep only the
+                # highest thread_id (most recently created topic).
+                for _uid, bindings in self.thread_bindings.items():
+                    window_threads: dict[str, list[int]] = {}
+                    for tid, wid in bindings.items():
+                        window_threads.setdefault(wid, []).append(tid)
+                    for wid, tids in window_threads.items():
+                        if len(tids) > 1:
+                            keep = max(tids)
+                            for tid in tids:
+                                if tid != keep:
+                                    del bindings[tid]
+                                    logger.warning(
+                                        "Startup: removed duplicate binding "
+                                        "thread %d -> window %s (keeping %d)",
+                                        tid,
+                                        wid,
+                                        keep,
+                                    )
+
                 # Detect old format: keys that don't look like window IDs
                 needs_migration = False
                 for k in self.window_states:
@@ -810,6 +831,9 @@ class SessionManager:
     ) -> None:
         """Bind a Telegram topic thread to a tmux window.
 
+        Enforces 1 topic = 1 window: if another thread is already bound to
+        the same window_id, that stale binding is removed first.
+
         Args:
             user_id: Telegram user ID
             thread_id: Telegram topic thread ID
@@ -818,6 +842,22 @@ class SessionManager:
         """
         if user_id not in self.thread_bindings:
             self.thread_bindings[user_id] = {}
+
+        # Enforce 1:1 — unbind any OTHER thread pointing to this window
+        stale = [
+            tid
+            for tid, wid in self.thread_bindings[user_id].items()
+            if wid == window_id and tid != thread_id
+        ]
+        for tid in stale:
+            del self.thread_bindings[user_id][tid]
+            logger.info(
+                "Evicted stale binding: thread %d -> window_id %s (replaced by thread %d)",
+                tid,
+                window_id,
+                thread_id,
+            )
+
         self.thread_bindings[user_id][thread_id] = window_id
         self._window_to_thread[(user_id, window_id)] = thread_id
         if window_name:
