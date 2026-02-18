@@ -113,7 +113,7 @@ class TestDoctorMain:
         )
 
         with pytest.raises(SystemExit) as exc_info:
-            doctor_main([])
+            doctor_main()
 
         assert exc_info.value.code == 0
         captured = capsys.readouterr()

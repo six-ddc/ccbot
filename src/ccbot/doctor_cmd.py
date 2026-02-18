@@ -6,7 +6,6 @@ a bot token. With --fix, auto-repairs what it can (install hook, kill orphans).
 No Config import needed — uses utils.ccbot_dir() and subprocess.
 """
 
-import argparse
 import json
 import os
 import shutil
@@ -238,19 +237,8 @@ def _fix_orphans(orphans: list[tuple[str, str]], fix: bool) -> None:
             _print_check(_FAIL, f"failed to kill window {wid}")
 
 
-def doctor_main(argv: list[str] | None = None) -> None:
+def doctor_main(fix: bool = False) -> None:
     """Entry point for `ccbot doctor [--fix]`."""
-    parser = argparse.ArgumentParser(
-        prog="ccbot doctor",
-        description="Validate ccbot setup and diagnose issues",
-    )
-    parser.add_argument(
-        "--fix",
-        action="store_true",
-        help="auto-fix issues where possible",
-    )
-    args = parser.parse_args(argv)
-
     has_failures = False
 
     for check_fn in (_check_tmux, _check_claude, _check_tmux_session):
@@ -258,11 +246,11 @@ def doctor_main(argv: list[str] | None = None) -> None:
         has_failures = has_failures or failed
 
     # Hook check needs special handling for --fix
-    hook_status, _, hook_installed = _check_hook()
-    _print_check(hook_status, _)
+    hook_status, hook_msg, hook_installed = _check_hook()
+    _print_check(hook_status, hook_msg)
     if hook_status == _FAIL:
         has_failures = True
-        _fix_hook(hook_installed, args.fix)
+        _fix_hook(hook_installed, fix)
 
     for check_fn in (_check_config_dir, _check_bot_token, _check_allowed_users):
         _, _, failed = _run_check(check_fn)
@@ -273,7 +261,7 @@ def doctor_main(argv: list[str] | None = None) -> None:
     if orphans:
         names = ", ".join(f"{wid} ({wname})" for wid, wname in orphans)
         _print_check(_WARN, f"{len(orphans)} orphaned window(s): {names}")
-        _fix_orphans(orphans, args.fix)
+        _fix_orphans(orphans, fix)
     else:
         _print_check(_PASS, "no orphaned windows")
 

@@ -11,7 +11,6 @@ Config directory resolution uses utils.ccbot_dir() (shared with config.py).
 Key functions: hook_main() (CLI entry), _install_hook().
 """
 
-import argparse
 import fcntl
 import json
 import logging
@@ -226,49 +225,8 @@ def _hook_status() -> int:
     return 1
 
 
-def hook_main() -> None:
-    """Process a Claude Code hook event from stdin, or manage hook installation."""
-    # Configure logging for the hook subprocess (main.py logging doesn't apply here)
-    logging.basicConfig(
-        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        level=logging.DEBUG,
-        stream=sys.stderr,
-    )
-
-    parser = argparse.ArgumentParser(
-        prog="ccbot hook",
-        description="Claude Code session tracking hook",
-    )
-    group = parser.add_mutually_exclusive_group()
-    group.add_argument(
-        "--install",
-        action="store_true",
-        help="Install the hook into ~/.claude/settings.json",
-    )
-    group.add_argument(
-        "--uninstall",
-        action="store_true",
-        help="Remove the hook from ~/.claude/settings.json",
-    )
-    group.add_argument(
-        "--status",
-        action="store_true",
-        help="Check if the hook is installed",
-    )
-    # Parse only known args to avoid conflicts with stdin JSON
-    args, _ = parser.parse_known_args(sys.argv[2:])
-
-    if args.install:
-        logger.info("Hook install requested")
-        sys.exit(_install_hook())
-
-    if args.uninstall:
-        sys.exit(_uninstall_hook())
-
-    if args.status:
-        sys.exit(_hook_status())
-
-    # Normal hook processing: read JSON from stdin
+def _process_hook_stdin() -> None:
+    """Process a Claude Code hook event from stdin."""
     logger.debug("Processing hook event from stdin")
     try:
         payload = json.load(sys.stdin)
@@ -388,3 +346,26 @@ def hook_main() -> None:
                 fcntl.flock(lock_f, fcntl.LOCK_UN)
     except OSError:
         logger.exception("Failed to write session_map")
+
+
+def hook_main(
+    install: bool = False, uninstall: bool = False, status: bool = False
+) -> None:
+    """Process a Claude Code hook event from stdin, or manage hook installation."""
+    logging.basicConfig(
+        format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
+        level=logging.DEBUG,
+        stream=sys.stderr,
+    )
+
+    if install:
+        logger.info("Hook install requested")
+        sys.exit(_install_hook())
+
+    if uninstall:
+        sys.exit(_uninstall_hook())
+
+    if status:
+        sys.exit(_hook_status())
+
+    _process_hook_stdin()

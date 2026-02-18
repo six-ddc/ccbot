@@ -1,11 +1,9 @@
-"""Application entry point — CLI dispatcher and bot bootstrap.
+"""Application entry point — Click CLI dispatcher and bot bootstrap.
 
-Handles execution modes:
-  1. `ccbot hook` — delegates to hook.hook_main() for Claude Code hook processing.
-  2. `ccbot status` — show running state (no token needed).
-  3. `ccbot doctor` — validate setup and diagnose issues.
-  4. `ccbot --version` — prints version and exits.
-  5. `ccbot [run] [flags]` — configures logging, initializes tmux, starts bot.
+The ``main()`` function invokes the Click command group defined in cli.py,
+which dispatches to subcommands (run, hook, status, doctor).
+``run_bot()`` contains the actual bot startup logic, called by the ``run``
+command after CLI flags have been applied to the environment.
 """
 
 import logging
@@ -70,45 +68,11 @@ def setup_logging(log_level: str) -> None:
         logging.getLogger(name).setLevel(logging.WARNING)
 
 
-def main() -> None:
-    """Main entry point."""
-    # Subcommands: early exit before CLI parsing (each has its own argparse)
-    if len(sys.argv) > 1 and sys.argv[1] == "hook":
-        from .hook import hook_main
-
-        hook_main()
-        return
-
-    if len(sys.argv) > 1 and sys.argv[1] == "status":
-        from .status_cmd import status_main
-
-        status_main()
-        return
-
-    if len(sys.argv) > 1 and sys.argv[1] == "doctor":
-        from .doctor_cmd import doctor_main
-
-        doctor_main(sys.argv[2:])
-        return
-
-    # Parse CLI flags and apply to environment before Config loads
-    from .cli import apply_args_to_env, parse_args
-
-    args = parse_args()
-
-    if args.version:
-        from . import __version__
-
-        print(f"ccbot {__version__}")
-        return
-
-    apply_args_to_env(args)
-
-    # Configure logging (respects CCBOT_LOG_LEVEL, possibly set by --verbose)
+def run_bot() -> None:
+    """Start the bot. Called by the ``run`` Click command after env is set."""
     log_level = os.environ.get("CCBOT_LOG_LEVEL", "INFO").upper()
     setup_logging(log_level)
 
-    # Import config after applying CLI overrides — avoid leaking debug logs on config errors
     try:
         from .config import config
     except ValueError as e:
@@ -132,7 +96,6 @@ def main() -> None:
     logger.info("Allowed users: %s", config.allowed_users)
     logger.info("Claude projects path: %s", config.claude_projects_path)
 
-    # Ensure tmux session exists
     session = tmux_manager.get_or_create_session()
     logger.info("Tmux session '%s' ready", session.session_name)
 
@@ -141,6 +104,13 @@ def main() -> None:
 
     application = create_bot()
     application.run_polling(allowed_updates=["message", "callback_query"])
+
+
+def main() -> None:
+    """Main entry point — dispatches via Click CLI group."""
+    from .cli import cli
+
+    cli()
 
 
 if __name__ == "__main__":
