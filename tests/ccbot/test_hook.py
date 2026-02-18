@@ -9,10 +9,129 @@ import pytest
 from ccbot.hook import (
     _UUID_RE,
     _hook_status,
+    _install_hook,
     _is_hook_installed,
     _uninstall_hook,
     hook_main,
 )
+
+
+class TestInstallHook:
+    def test_install_into_empty_settings(self, tmp_path, monkeypatch) -> None:
+        settings_file = tmp_path / "settings.json"
+        settings_file.parent.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr("ccbot.hook._CLAUDE_SETTINGS_FILE", settings_file)
+
+        result = _install_hook()
+        assert result == 0
+
+        settings = json.loads(settings_file.read_text())
+        session_start = settings["hooks"]["SessionStart"]
+        assert len(session_start) == 1
+        assert session_start[0]["hooks"][0]["command"] == "ccbot hook"
+
+    def test_install_adds_to_existing_matcher_group(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        settings_file = tmp_path / "settings.json"
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "matcher": ".*",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "session-start.sh",
+                                "timeout": 5,
+                            }
+                        ],
+                    }
+                ]
+            }
+        }
+        settings_file.write_text(json.dumps(settings))
+        monkeypatch.setattr("ccbot.hook._CLAUDE_SETTINGS_FILE", settings_file)
+
+        result = _install_hook()
+        assert result == 0
+
+        updated = json.loads(settings_file.read_text())
+        session_start = updated["hooks"]["SessionStart"]
+        assert len(session_start) == 1
+        hooks_list = session_start[0]["hooks"]
+        assert len(hooks_list) == 2
+        assert hooks_list[1]["command"] == "ccbot hook"
+
+    def test_install_skips_when_already_present_with_wrapper(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        settings_file = tmp_path / "settings.json"
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "ccbot hook 2>/dev/null || true",
+                                "timeout": 5,
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        settings_file.write_text(json.dumps(settings))
+        monkeypatch.setattr("ccbot.hook._CLAUDE_SETTINGS_FILE", settings_file)
+
+        result = _install_hook()
+        assert result == 0
+
+        updated = json.loads(settings_file.read_text())
+        hooks_list = updated["hooks"]["SessionStart"][0]["hooks"]
+        assert len(hooks_list) == 1
+
+    def test_install_skips_when_already_present_with_full_path(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        settings_file = tmp_path / "settings.json"
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "/usr/local/bin/ccbot hook",
+                                "timeout": 5,
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        settings_file.write_text(json.dumps(settings))
+        monkeypatch.setattr("ccbot.hook._CLAUDE_SETTINGS_FILE", settings_file)
+
+        result = _install_hook()
+        assert result == 0
+
+        updated = json.loads(settings_file.read_text())
+        hooks_list = updated["hooks"]["SessionStart"][0]["hooks"]
+        assert len(hooks_list) == 1
+
+    def test_install_uses_path_relative_command(self, tmp_path, monkeypatch) -> None:
+        settings_file = tmp_path / "settings.json"
+        settings_file.parent.mkdir(parents=True, exist_ok=True)
+        monkeypatch.setattr("ccbot.hook._CLAUDE_SETTINGS_FILE", settings_file)
+
+        _install_hook()
+
+        updated = json.loads(settings_file.read_text())
+        cmd = updated["hooks"]["SessionStart"][0]["hooks"][0]["command"]
+        assert cmd == "ccbot hook"
+        assert "/" not in cmd
 
 
 class TestUuidRegex:
@@ -69,6 +188,23 @@ class TestIsHookInstalled:
             }
         }
         assert _is_hook_installed(settings) is False
+
+    def test_shell_wrapped_command_matches(self) -> None:
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "ccbot hook 2>/dev/null || true",
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        assert _is_hook_installed(settings) is True
 
     def test_full_path_matches(self) -> None:
         settings = {
@@ -181,6 +317,67 @@ class TestUninstallHook:
 
         result = _uninstall_hook()
         assert result == 0
+
+    def test_uninstall_preserves_other_hooks_in_same_group(
+        self, tmp_path, monkeypatch
+    ) -> None:
+        settings_file = tmp_path / "settings.json"
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "matcher": ".*",
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "session-start.sh",
+                                "timeout": 5,
+                            },
+                            {"type": "command", "command": "ccbot hook", "timeout": 5},
+                        ],
+                    }
+                ]
+            }
+        }
+        settings_file.write_text(json.dumps(settings))
+        monkeypatch.setattr("ccbot.hook._CLAUDE_SETTINGS_FILE", settings_file)
+
+        result = _uninstall_hook()
+        assert result == 0
+
+        updated = json.loads(settings_file.read_text())
+        session_start = updated["hooks"]["SessionStart"]
+        assert len(session_start) == 1
+        hooks_list = session_start[0]["hooks"]
+        assert len(hooks_list) == 1
+        assert hooks_list[0]["command"] == "session-start.sh"
+
+    def test_uninstall_removes_wrapped_variant(self, tmp_path, monkeypatch) -> None:
+        settings_file = tmp_path / "settings.json"
+        settings = {
+            "hooks": {
+                "SessionStart": [
+                    {
+                        "hooks": [
+                            {
+                                "type": "command",
+                                "command": "ccbot hook 2>/dev/null || true",
+                                "timeout": 5,
+                            }
+                        ]
+                    }
+                ]
+            }
+        }
+        settings_file.write_text(json.dumps(settings))
+        monkeypatch.setattr("ccbot.hook._CLAUDE_SETTINGS_FILE", settings_file)
+
+        result = _uninstall_hook()
+        assert result == 0
+
+        updated = json.loads(settings_file.read_text())
+        assert not _is_hook_installed(updated)
+        assert updated["hooks"]["SessionStart"] == []
 
     def test_uninstall_not_installed(self, tmp_path, monkeypatch) -> None:
         settings_file = tmp_path / "settings.json"

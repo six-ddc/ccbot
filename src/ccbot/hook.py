@@ -16,7 +16,6 @@ import json
 import logging
 import os
 import re
-import shutil
 import subprocess
 import sys
 from pathlib import Path
@@ -28,40 +27,20 @@ _UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f
 
 _CLAUDE_SETTINGS_FILE = Path.home() / ".claude" / "settings.json"
 
-# The hook command suffix for detection
-_HOOK_COMMAND_SUFFIX = "ccbot hook"
+# Substring marker for detecting ccbot hook in command strings
+_HOOK_COMMAND_MARKER = "ccbot hook"
 
 # Expected number of parts when parsing "session_name:@id:window_name"
 _TMUX_FORMAT_PARTS = 3
 
 
-def _find_ccbot_path() -> str:
-    """Find the full path to the ccbot executable.
-
-    Priority:
-    1. shutil.which("ccbot") - if ccbot is in PATH
-    2. Same directory as the Python interpreter (for venv installs)
-    """
-    # Try PATH first
-    ccbot_path = shutil.which("ccbot")
-    if ccbot_path:
-        return ccbot_path
-
-    # Fall back to the directory containing the Python interpreter
-    # This handles the case where ccbot is installed in a venv
-    python_dir = Path(sys.executable).parent
-    ccbot_in_venv = python_dir / "ccbot"
-    if ccbot_in_venv.exists():
-        return str(ccbot_in_venv)
-
-    # Last resort: assume it will be in PATH
-    return "ccbot"
-
-
 def _is_hook_installed(settings: dict) -> bool:
     """Check if ccbot hook is already installed in the settings.
 
-    Detects both 'ccbot hook' and full paths like '/path/to/ccbot hook'.
+    Detects 'ccbot hook' anywhere in the command string, covering:
+    - Bare: 'ccbot hook'
+    - Full path: '/usr/bin/ccbot hook'
+    - With shell wrappers: 'ccbot hook 2>/dev/null || true'
     """
     hooks = settings.get("hooks", {})
     session_start = hooks.get("SessionStart", [])
@@ -74,8 +53,7 @@ def _is_hook_installed(settings: dict) -> bool:
             if not isinstance(h, dict):
                 continue
             cmd = h.get("command", "")
-            # Match 'ccbot hook' or paths ending with 'ccbot hook'
-            if cmd == _HOOK_COMMAND_SUFFIX or cmd.endswith("/" + _HOOK_COMMAND_SUFFIX):
+            if _HOOK_COMMAND_MARKER in cmd:
                 return True
     return False
 
@@ -104,19 +82,28 @@ def _install_hook() -> int:
         print(f"Hook already installed in {settings_file}")
         return 0
 
-    # Find the full path to ccbot
-    ccbot_path = _find_ccbot_path()
-    hook_command = f"{ccbot_path} hook"
+    # Use PATH-relative command for portability across machines
+    hook_command = "ccbot hook"
     hook_config = {"type": "command", "command": hook_command, "timeout": 5}
     logger.info("Installing hook command: %s", hook_command)
 
-    # Install the hook
+    # Install the hook into an existing matcher group if one exists,
+    # otherwise create a new SessionStart entry
     if "hooks" not in settings:
         settings["hooks"] = {}
     if "SessionStart" not in settings["hooks"]:
         settings["hooks"]["SessionStart"] = []
 
-    settings["hooks"]["SessionStart"].append({"hooks": [hook_config]})
+    session_start = settings["hooks"]["SessionStart"]
+    if session_start:
+        # Add to the first matcher group's hooks array
+        first_entry = session_start[0]
+        if isinstance(first_entry, dict):
+            first_entry.setdefault("hooks", []).append(hook_config)
+        else:
+            session_start.append({"hooks": [hook_config]})
+    else:
+        session_start.append({"hooks": [hook_config]})
 
     # Write back
     try:
@@ -165,10 +152,7 @@ def _uninstall_hook() -> int:
             h
             for h in inner_hooks
             if not isinstance(h, dict)
-            or not (
-                h.get("command", "") == _HOOK_COMMAND_SUFFIX
-                or h.get("command", "").endswith("/" + _HOOK_COMMAND_SUFFIX)
-            )
+            or _HOOK_COMMAND_MARKER not in h.get("command", "")
         ]
         if filtered:
             entry["hooks"] = filtered
@@ -213,9 +197,7 @@ def _hook_status() -> int:
                 if not isinstance(h, dict):
                     continue
                 cmd = h.get("command", "")
-                if cmd == _HOOK_COMMAND_SUFFIX or cmd.endswith(
-                    "/" + _HOOK_COMMAND_SUFFIX
-                ):
+                if _HOOK_COMMAND_MARKER in cmd:
                     print(f"Installed: {cmd}")
                     return 0
         print("Installed")
