@@ -330,7 +330,8 @@ class SessionManager:
             self._save_state()
             logger.info("Startup re-resolution complete")
 
-        # Clean up old-format keys from session_map.json
+        # Clean up session_map.json: stale window IDs and old-format keys
+        await self._cleanup_stale_session_map_entries(live_ids)
         await self._cleanup_old_format_session_map_keys()
 
     async def _cleanup_old_format_session_map_keys(self) -> None:
@@ -358,6 +359,45 @@ class SessionManager:
         atomic_write_json(config.session_map_file, session_map)
         logger.info(
             "Cleaned up %d old-format session_map keys: %s", len(old_keys), old_keys
+        )
+
+    async def _cleanup_stale_session_map_entries(
+        self, live_ids: set[str]
+    ) -> None:
+        """Remove entries for tmux windows that no longer exist.
+
+        When windows are closed externally (outside ccbot), session_map.json
+        retains orphan references. This cleanup removes entries whose window_id
+        is not in the current set of live tmux windows.
+        """
+        if not config.session_map_file.exists():
+            return
+        try:
+            async with aiofiles.open(config.session_map_file, "r") as f:
+                content = await f.read()
+            session_map = json.loads(content)
+        except (json.JSONDecodeError, OSError):
+            return
+
+        prefix = f"{config.tmux_session_name}:"
+        stale_keys = [
+            key
+            for key in session_map
+            if key.startswith(prefix)
+            and self._is_window_id(key[len(prefix) :])
+            and key[len(prefix) :] not in live_ids
+        ]
+        if not stale_keys:
+            return
+
+        for key in stale_keys:
+            del session_map[key]
+            logger.info("Removed stale session_map entry: %s", key)
+
+        atomic_write_json(config.session_map_file, session_map)
+        logger.info(
+            "Cleaned up %d stale session_map entries (windows no longer in tmux)",
+            len(stale_keys),
         )
 
     # --- Display name management ---
