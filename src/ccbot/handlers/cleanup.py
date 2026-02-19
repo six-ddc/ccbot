@@ -50,10 +50,12 @@ async def clear_topic_state(
         clear_autoclose_timer,
         clear_dead_notification,
         clear_seen_status,
+        clear_typing_state,
     )
 
     clear_dead_notification(user_id, thread_id)
     clear_autoclose_timer(user_id, thread_id)
+    clear_typing_state(user_id, thread_id)
     if window_id:
         clear_seen_status(window_id)
 

@@ -25,11 +25,13 @@ Key components:
 """
 
 import asyncio
+import contextlib
 import logging
 import time
 from pathlib import Path
 
 from telegram import Bot
+from telegram.constants import ChatAction
 from telegram.error import BadRequest, TelegramError
 
 from ..config import config
@@ -75,11 +77,34 @@ _unbound_window_timers: dict[str, float] = {}
 # not "idle", to avoid showing 💤 during Claude Code startup.
 _has_seen_status: set[str] = set()
 
+# Typing indicator throttle: (user_id, thread_id) -> monotonic time last sent.
+# Telegram typing action expires after ~5s; we re-send every 4s.
+_TYPING_INTERVAL = 4.0
+_last_typing_sent: dict[tuple[int, int], float] = {}
+
 
 def is_shell_prompt(pane_current_command: str) -> bool:
     """Check if the pane is running a shell (Claude has exited)."""
     cmd = pane_current_command.strip().rsplit("/", 1)[-1]
     return cmd in SHELL_COMMANDS
+
+
+async def _send_typing_throttled(bot: Bot, user_id: int, thread_id: int | None) -> None:
+    """Send typing indicator if enough time has elapsed since the last one."""
+    if thread_id is None:
+        return
+    key = (user_id, thread_id)
+    now = time.monotonic()
+    if now - _last_typing_sent.get(key, 0.0) < _TYPING_INTERVAL:
+        return
+    _last_typing_sent[key] = now
+    chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+    with contextlib.suppress(TelegramError):
+        await bot.send_chat_action(
+            chat_id=chat_id,
+            message_thread_id=thread_id,
+            action=ChatAction.TYPING,
+        )
 
 
 def clear_autoclose_timer(user_id: int, thread_id: int) -> None:
@@ -105,6 +130,11 @@ def reset_dead_notification_state() -> None:
     _dead_notified.clear()
 
 
+def clear_typing_state(user_id: int, thread_id: int) -> None:
+    """Clear typing indicator throttle for a topic (called on cleanup)."""
+    _last_typing_sent.pop((user_id, thread_id), None)
+
+
 def clear_seen_status(window_id: str) -> None:
     """Clear startup status tracking for a window (called on cleanup)."""
     _has_seen_status.discard(window_id)
@@ -113,6 +143,11 @@ def clear_seen_status(window_id: str) -> None:
 def reset_seen_status_state() -> None:
     """Reset all startup status tracking (for testing)."""
     _has_seen_status.clear()
+
+
+def reset_typing_state() -> None:
+    """Reset all typing indicator tracking (for testing)."""
+    _last_typing_sent.clear()
 
 
 def _start_autoclose_timer(
@@ -279,6 +314,7 @@ async def update_status_message(
 
     if status_line:
         _has_seen_status.add(window_id)
+        await _send_typing_throttled(bot, user_id, thread_id)
         if notif_mode not in ("muted", "errors_only"):
             await enqueue_status_update(
                 bot,
@@ -302,12 +338,15 @@ async def update_status_message(
                 # Claude exited, shell is back
                 await update_topic_emoji(bot, chat_id, thread_id, "done", display)
                 _start_autoclose_timer(user_id, thread_id, "done", time.monotonic())
+                _last_typing_sent.pop((user_id, thread_id), None)
             elif window_id in _has_seen_status:
                 # Was active before, now idle (spinner disappeared)
                 await update_topic_emoji(bot, chat_id, thread_id, "idle", display)
                 _clear_autoclose_if_active(user_id, thread_id)
+                _last_typing_sent.pop((user_id, thread_id), None)
             else:
                 # Never seen a spinner — still starting up, show as active
+                await _send_typing_throttled(bot, user_id, thread_id)
                 await update_topic_emoji(bot, chat_id, thread_id, "active", display)
                 _clear_autoclose_if_active(user_id, thread_id)
 
