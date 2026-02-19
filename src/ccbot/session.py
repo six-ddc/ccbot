@@ -361,9 +361,7 @@ class SessionManager:
             "Cleaned up %d old-format session_map keys: %s", len(old_keys), old_keys
         )
 
-    async def _cleanup_stale_session_map_entries(
-        self, live_ids: set[str]
-    ) -> None:
+    async def _cleanup_stale_session_map_entries(self, live_ids: set[str]) -> None:
         """Remove entries for tmux windows that no longer exist.
 
         When windows are closed externally (outside ccbot), session_map.json
