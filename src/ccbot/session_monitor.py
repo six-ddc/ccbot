@@ -198,6 +198,7 @@ class SessionMonitor:
         """Read new lines from a session file using byte offset for efficiency.
 
         Detects file truncation (e.g. after /clear) and resets offset.
+        Recovers from corrupted offsets (mid-line) by scanning to next line.
         """
         new_entries = []
         try:
@@ -219,6 +220,23 @@ class SessionMonitor:
 
                 # Seek to last read position for incremental reading
                 await f.seek(session.last_byte_offset)
+
+                # Detect corrupted offset: if we're mid-line (not at '{'),
+                # scan forward to the next line start. This can happen if
+                # the state file was manually edited or corrupted.
+                if session.last_byte_offset > 0:
+                    first_char = await f.read(1)
+                    if first_char and first_char != "{":
+                        logger.warning(
+                            "Corrupted offset %d in session %s (mid-line), "
+                            "scanning to next line",
+                            session.last_byte_offset,
+                            session.session_id,
+                        )
+                        await f.readline()  # Skip rest of partial line
+                        session.last_byte_offset = await f.tell()
+                        return []
+                    await f.seek(session.last_byte_offset)  # Reset for normal read
 
                 # Read only new lines from the offset.
                 # Track safe_offset: only advance past lines that parsed
