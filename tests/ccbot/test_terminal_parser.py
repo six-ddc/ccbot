@@ -125,6 +125,24 @@ class TestExtractInteractiveContent:
         assert result.name == "Settings"
         assert "Settings:" in result.content
 
+    def test_select_model(self):
+        pane = (
+            " Select model\n"
+            " Switch between Claude models.\n"
+            "\n"
+            " ❯ 1. Default (recommended) ✔  Opus 4.6\n"
+            "   2. Sonnet                   Sonnet 4.6\n"
+            "\n"
+            " ▌▌▌ Medium effort ← → to adjust\n"
+            "\n"
+            " Enter to confirm · Esc to exit\n"
+        )
+        result = extract_interactive_content(pane)
+        assert result is not None
+        assert result.name == "SelectModel"
+        assert "Select model" in result.content
+        assert "Enter to confirm" in result.content
+
     @pytest.mark.parametrize(
         "pane",
         [

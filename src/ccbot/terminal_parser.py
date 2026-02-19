@@ -89,6 +89,11 @@ UI_PATTERNS: list[UIPattern] = [
             re.compile(r"^\s*Type to filter"),
         ),
     ),
+    UIPattern(
+        name="SelectModel",
+        top=(re.compile(r"^\s*Select model"),),
+        bottom=(re.compile(r"Enter to confirm"),),
+    ),
 ]
 
 
