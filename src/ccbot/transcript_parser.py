@@ -102,8 +102,8 @@ class TranscriptParser:
         """Check if this is a user message."""
         return data.get("type") == "user"
 
-    @classmethod
-    def extract_text_only(cls, content_list: list[Any] | Any) -> str:
+    @staticmethod
+    def extract_text_only(content_list: list[Any]) -> str:
         """Extract only text content from structured content.
 
         This is used for Telegram notifications where we only want
@@ -113,11 +113,11 @@ class TranscriptParser:
             content_list: List of content blocks
 
         Returns:
-            Combined text content only (ANSI escape codes stripped)
+            Combined text content only
         """
         if not isinstance(content_list, list):
             if isinstance(content_list, str):
-                return cls._RE_ANSI_ESCAPE.sub("", content_list)
+                return content_list
             return ""
 
         texts = []
@@ -130,9 +130,7 @@ class TranscriptParser:
                     if text:
                         texts.append(text)
 
-        return cls._RE_ANSI_ESCAPE.sub("", "\n".join(texts))
-
-    _RE_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
+        return "\n".join(texts)
 
     _RE_COMMAND_NAME = re.compile(r"<command-name>(.*?)</command-name>")
     _RE_LOCAL_STDOUT = re.compile(
@@ -220,11 +218,11 @@ class TranscriptParser:
             return f"**{name}**({summary})"
         return f"**{name}**"
 
-    @classmethod
-    def extract_tool_result_text(cls, content: list | Any) -> str:
+    @staticmethod
+    def extract_tool_result_text(content: list | Any) -> str:
         """Extract text from a tool_result content block."""
         if isinstance(content, str):
-            return cls._RE_ANSI_ESCAPE.sub("", content)
+            return content
         if isinstance(content, list):
             parts = []
             for item in content:
@@ -234,7 +232,7 @@ class TranscriptParser:
                         parts.append(t)
                 elif isinstance(item, str):
                     parts.append(item)
-            return cls._RE_ANSI_ESCAPE.sub("", "\n".join(parts))
+            return "\n".join(parts)
         return ""
 
     @classmethod
