@@ -17,6 +17,7 @@ from ccbot.providers.base import (
     SessionStartEvent,
     StatusUpdate,
 )
+from ccbot.providers.claude import ClaudeProvider
 
 # ── Stub provider (minimal conforming implementation) ────────────────────
 
@@ -131,7 +132,7 @@ class StubProvider:
 
 # ── Fixtures ─────────────────────────────────────────────────────────────
 
-PROVIDER_FIXTURES: list[type] = [StubProvider]
+PROVIDER_FIXTURES: list[type] = [StubProvider, ClaudeProvider]
 
 
 @pytest.fixture(params=PROVIDER_FIXTURES, ids=lambda cls: cls.__name__)
@@ -178,7 +179,7 @@ class TestMakeLaunchArgs:
 class TestParseHookPayload:
     def test_valid_payload_returns_event(self, provider: AgentProvider) -> None:
         payload = {
-            "session_id": "test-sid",
+            "session_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
             "cwd": "/tmp/test",
             "transcript_path": "/tmp/test.jsonl",
             "window_key": "ccbot:@0",
@@ -187,7 +188,7 @@ class TestParseHookPayload:
         if provider.capabilities.supports_hook:
             assert event is not None
             assert isinstance(event, SessionStartEvent)
-            assert event.session_id == "test-sid"
+            assert event.session_id == "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
             assert event.cwd == "/tmp/test"
 
     def test_invalid_payload_returns_none(self, provider: AgentProvider) -> None:

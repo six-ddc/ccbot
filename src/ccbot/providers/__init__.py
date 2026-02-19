@@ -11,6 +11,7 @@ from ccbot.providers.base import (
     SessionStartEvent,
     StatusUpdate,
 )
+from ccbot.providers.claude import ClaudeProvider
 from ccbot.providers.policy import CapabilityPolicy
 from ccbot.providers.registry import ProviderRegistry, UnknownProviderError, registry
 
@@ -18,6 +19,7 @@ __all__ = [
     "AgentMessage",
     "AgentProvider",
     "CapabilityPolicy",
+    "ClaudeProvider",
     "ProviderCapabilities",
     "ProviderRegistry",
     "SessionStartEvent",

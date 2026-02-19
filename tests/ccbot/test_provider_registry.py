@@ -200,10 +200,9 @@ class TestConfigProviderSettings:
 
 
 class TestModuleLevelRegistry:
-    def test_singleton_exists_and_empty(self) -> None:
+    def test_singleton_exists_with_claude(self) -> None:
         assert isinstance(registry, ProviderRegistry)
-        # No providers registered yet at module level (real providers register later)
-        assert registry.available() == []
+        assert "claude" in registry.available()
 
     def test_stub_satisfies_protocol(self) -> None:
         assert isinstance(_StubProvider(), AgentProvider)
