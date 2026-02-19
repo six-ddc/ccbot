@@ -1,7 +1,7 @@
 ---
 id: TASK-035
 title: Provider registry and centralized capability policy
-status: in_progress
+status: done
 priority: high
 req: REQ-008
 epic: EPIC-008
