@@ -184,10 +184,10 @@ STATUS_SPINNERS = frozenset(["·", "✻", "✽", "✶", "✳", "✢"])
 def parse_status_line(pane_text: str) -> str | None:
     """Extract the Claude Code status line from terminal output.
 
-    The status line sits directly above the chrome separator (a line of ``─``
-    characters).  We anchor on that separator first, then check the line above
-    for a spinner character.  This avoids false positives from ``·`` bullet
-    points elsewhere in the output.
+    The status line sits above a chrome separator (a line of ``─`` characters).
+    Claude Code may render two separators (one above and one below the prompt),
+    so we check each separator found in the bottom 15 lines until a spinner is
+    found above one of them.
 
     Returns the text after the spinner, or None if no status line found.
     """
@@ -196,16 +196,23 @@ def parse_status_line(pane_text: str) -> str | None:
 
     lines = pane_text.strip().split("\n")
 
-    # Find the chrome separator in the last 15 lines (search from bottom up).
+    # Scan separators in the last 15 lines (bottom up).
+    # Claude Code 4.6 renders two separators around the prompt line;
+    # the spinner sits above the upper one, possibly with a blank line between.
     for i in range(len(lines) - 1, max(len(lines) - 16, -1), -1):
         stripped = lines[i].strip()
         if len(stripped) >= _MIN_SEPARATOR_WIDTH and all(c == "─" for c in stripped):
-            # Check the line directly above the separator
-            if i > 0:
-                candidate = lines[i - 1].strip()
-                if candidate and candidate[0] in STATUS_SPINNERS:
+            # Check up to 2 lines above the separator (skip blanks).
+            for offset in (1, 2):
+                j = i - offset
+                if j < 0:
+                    break
+                candidate = lines[j].strip()
+                if not candidate:
+                    continue  # skip blank line
+                if candidate[0] in STATUS_SPINNERS:
                     return candidate[1:].strip()
-            break  # Only check the first (bottommost) separator
+                break  # non-blank, non-spinner → stop looking above this separator
 
     return None
 

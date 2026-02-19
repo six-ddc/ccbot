@@ -65,6 +65,29 @@ class TestParseStatusLine:
         pane = f"output\n✻ Doing work\n{_SEPARATOR}\n❯\n"
         assert parse_status_line(pane) == "Doing work"
 
+    def test_two_separator_layout(self):
+        pane = (
+            "output\n"
+            "✶ Perusing… (3m 35s)\n"
+            "\n"
+            f"{_SEPARATOR}\n"
+            "❯ \n"
+            f"{_SEPARATOR}\n"
+            "   ⎇ main  ~/Workspace/proj  ✱ Opus 4.6\n"
+        )
+        assert parse_status_line(pane) == "Perusing… (3m 35s)"
+
+    def test_two_separator_no_blank_line(self):
+        pane = (
+            "output\n"
+            "✶ Working hard\n"
+            f"{_SEPARATOR}\n"
+            "❯ \n"
+            f"{_SEPARATOR}\n"
+            "   ⎇ main  ✱ Opus 4.6\n"
+        )
+        assert parse_status_line(pane) == "Working hard"
+
     def test_uses_fixture(self, sample_pane_status_line: str):
         assert parse_status_line(sample_pane_status_line) == "Reading file src/main.py"
 
