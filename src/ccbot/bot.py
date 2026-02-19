@@ -294,14 +294,14 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     thread_id = _get_thread_id(update)
-    wname = session_manager.resolve_window_for_thread(user.id, thread_id)
-    if not wname:
+    wid = session_manager.resolve_window_for_thread(user.id, thread_id)
+    if not wid:
         await safe_reply(update.message, "No session bound to this topic.")
         return
 
-    w = await tmux_manager.find_window_by_name(wname)
+    w = await tmux_manager.find_window_by_id(wid)
     if not w:
-        await safe_reply(update.message, f"Window '{wname}' no longer exists.")
+        await safe_reply(update.message, f"Window '{wid}' no longer exists.")
         return
 
     # Send /usage command to Claude Code TUI
