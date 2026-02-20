@@ -2,14 +2,12 @@
 
 import pytest
 
+from ccbot.providers.base import EXPANDABLE_QUOTE_END as EXPQUOTE_END
+from ccbot.providers.base import EXPANDABLE_QUOTE_START as EXPQUOTE_START
 from ccbot.transcript_parser import (
     ParsedMessage,
     TranscriptParser,
 )
-
-EXPQUOTE_START = TranscriptParser.EXPANDABLE_QUOTE_START
-EXPQUOTE_END = TranscriptParser.EXPANDABLE_QUOTE_END
-
 
 # ── parse_line ───────────────────────────────────────────────────────────
 

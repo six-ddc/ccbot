@@ -1,9 +1,11 @@
 """Tests for topic emoji status updates."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 from telegram.error import BadRequest, TelegramError
+
+from conftest import make_mock_provider
 
 from ccbot.handlers.topic_emoji import (
     DEBOUNCE_SECONDS,
@@ -30,17 +32,11 @@ def _reset():
 
 
 class TestStripEmojiPrefix:
-    def test_strips_active(self) -> None:
-        assert strip_emoji_prefix(f"{EMOJI_ACTIVE} myproject") == "myproject"
-
-    def test_strips_idle(self) -> None:
-        assert strip_emoji_prefix(f"{EMOJI_IDLE} myproject") == "myproject"
-
-    def test_strips_done(self) -> None:
-        assert strip_emoji_prefix(f"{EMOJI_DONE} myproject") == "myproject"
-
-    def test_strips_dead(self) -> None:
-        assert strip_emoji_prefix(f"{EMOJI_DEAD} myproject") == "myproject"
+    @pytest.mark.parametrize(
+        "emoji", [EMOJI_ACTIVE, EMOJI_IDLE, EMOJI_DONE, EMOJI_DEAD]
+    )
+    def test_strips_known_emoji(self, emoji: str) -> None:
+        assert strip_emoji_prefix(f"{emoji} myproject") == "myproject"
 
     def test_no_prefix(self) -> None:
         assert strip_emoji_prefix("myproject") == "myproject"
@@ -68,6 +64,14 @@ async def _debounced_update(
         await update_topic_emoji(bot, chat_id, thread_id, state, display_name)
 
 
+_STATE_EMOJI = [
+    ("active", EMOJI_ACTIVE),
+    ("idle", EMOJI_IDLE),
+    ("done", EMOJI_DONE),
+    ("dead", EMOJI_DEAD),
+]
+
+
 class TestUpdateTopicEmoji:
     async def test_first_call_starts_debounce(self) -> None:
         bot = AsyncMock()
@@ -75,40 +79,14 @@ class TestUpdateTopicEmoji:
             await update_topic_emoji(bot, -100, 42, "active", "myproject")
         bot.edit_forum_topic.assert_not_called()
 
-    async def test_sets_active_after_debounce(self) -> None:
+    @pytest.mark.parametrize("state,emoji", _STATE_EMOJI)
+    async def test_sets_emoji_after_debounce(self, state: str, emoji: str) -> None:
         bot = AsyncMock()
-        await _debounced_update(bot, -100, 42, "active", "myproject")
+        await _debounced_update(bot, -100, 42, state, "myproject")
         bot.edit_forum_topic.assert_called_once_with(
             chat_id=-100,
             message_thread_id=42,
-            name=f"{EMOJI_ACTIVE} myproject",
-        )
-
-    async def test_sets_idle_after_debounce(self) -> None:
-        bot = AsyncMock()
-        await _debounced_update(bot, -100, 42, "idle", "myproject")
-        bot.edit_forum_topic.assert_called_once_with(
-            chat_id=-100,
-            message_thread_id=42,
-            name=f"{EMOJI_IDLE} myproject",
-        )
-
-    async def test_sets_done_after_debounce(self) -> None:
-        bot = AsyncMock()
-        await _debounced_update(bot, -100, 42, "done", "myproject")
-        bot.edit_forum_topic.assert_called_once_with(
-            chat_id=-100,
-            message_thread_id=42,
-            name=f"{EMOJI_DONE} myproject",
-        )
-
-    async def test_sets_dead_after_debounce(self) -> None:
-        bot = AsyncMock()
-        await _debounced_update(bot, -100, 42, "dead", "myproject")
-        bot.edit_forum_topic.assert_called_once_with(
-            chat_id=-100,
-            message_thread_id=42,
-            name=f"{EMOJI_DEAD} myproject",
+            name=f"{emoji} myproject",
         )
 
     async def test_skips_same_state(self) -> None:
@@ -137,7 +115,7 @@ class TestUpdateTopicEmoji:
     async def test_rapid_toggling_suppressed(self) -> None:
         bot = AsyncMock()
         with patch(_PATCH_MONOTONIC) as mock_monotonic:
-            # Simulate rapid active/idle toggling every second
+            # Rapid toggling for 10s — never stable long enough to pass debounce
             for i in range(10):
                 mock_monotonic.return_value = float(i)
                 state = "active" if i % 2 == 0 else "idle"
@@ -147,14 +125,14 @@ class TestUpdateTopicEmoji:
     async def test_stable_state_after_flickering(self) -> None:
         bot = AsyncMock()
         with patch(_PATCH_MONOTONIC) as mock_monotonic:
-            # Rapid toggling for 4 seconds
+            # Rapid toggling for 4s — debounce never reached
             for i in range(4):
                 mock_monotonic.return_value = float(i)
                 state = "active" if i % 2 == 0 else "idle"
                 await update_topic_emoji(bot, -100, 42, state, "myproject")
             bot.edit_forum_topic.assert_not_called()
 
-            # Settle on "active" for DEBOUNCE_SECONDS
+            # Settle on "active" and wait past DEBOUNCE_SECONDS
             mock_monotonic.return_value = 4.0
             await update_topic_emoji(bot, -100, 42, "active", "myproject")
             mock_monotonic.return_value = 4.0 + DEBOUNCE_SECONDS + 0.1
@@ -218,11 +196,9 @@ class TestClearTopicEmojiState:
             await update_topic_emoji(bot, -100, 42, "active", "myproject")
         clear_topic_emoji_state(-100, 42)
         with patch(_PATCH_MONOTONIC) as mock_monotonic:
-            # Must start debounce from scratch after clear
             mock_monotonic.return_value = 100.0
             await update_topic_emoji(bot, -100, 42, "active", "myproject")
             bot.edit_forum_topic.assert_not_called()
-            # Full cycle completes with fresh debounce
             mock_monotonic.return_value = 100.0 + DEBOUNCE_SECONDS + 0.1
             await update_topic_emoji(bot, -100, 42, "active", "myproject")
         bot.edit_forum_topic.assert_called_once()
@@ -240,17 +216,13 @@ class TestStatusPollingIntegration:
                 return_value=None,
             ),
             patch(
-                "ccbot.handlers.status_polling.is_interactive_ui",
-                return_value=False,
-            ),
-            patch(
-                "ccbot.handlers.status_polling.parse_status_line",
-                return_value="Working...",
+                "ccbot.handlers.status_polling.get_provider",
+                return_value=make_mock_provider(has_status=True),
             ),
         ):
             from ccbot.handlers.status_polling import update_status_message
 
-            mock_tm.find_window_by_id = AsyncMock(return_value=AsyncMock())
+            mock_tm.find_window_by_id = AsyncMock(return_value=MagicMock())
             mock_tm.capture_pane = AsyncMock(return_value="some output")
             mock_sm.resolve_chat_id.return_value = -100
             mock_sm.get_display_name.return_value = "myproject"
@@ -270,12 +242,8 @@ class TestStatusPollingIntegration:
                 return_value=None,
             ),
             patch(
-                "ccbot.handlers.status_polling.is_interactive_ui",
-                return_value=False,
-            ),
-            patch(
-                "ccbot.handlers.status_polling.parse_status_line",
-                return_value=None,
+                "ccbot.handlers.status_polling.get_provider",
+                return_value=make_mock_provider(has_status=False),
             ),
         ):
             from ccbot.handlers.status_polling import (
@@ -283,10 +251,9 @@ class TestStatusPollingIntegration:
                 update_status_message,
             )
 
-            # Pre-seed: window had a spinner before, now idle
             _has_seen_status.add("@0")
 
-            mock_window = AsyncMock()
+            mock_window = MagicMock()
             mock_window.pane_current_command = "node"
             mock_tm.find_window_by_id = AsyncMock(return_value=mock_window)
             mock_tm.capture_pane = AsyncMock(return_value="some output")
@@ -309,12 +276,8 @@ class TestStatusPollingIntegration:
                 return_value=None,
             ),
             patch(
-                "ccbot.handlers.status_polling.is_interactive_ui",
-                return_value=False,
-            ),
-            patch(
-                "ccbot.handlers.status_polling.parse_status_line",
-                return_value=None,
+                "ccbot.handlers.status_polling.get_provider",
+                return_value=make_mock_provider(has_status=False),
             ),
         ):
             from ccbot.handlers.status_polling import (
@@ -322,10 +285,9 @@ class TestStatusPollingIntegration:
                 update_status_message,
             )
 
-            # Fresh window: never seen a spinner
             _has_seen_status.discard("@99")
 
-            mock_window = AsyncMock()
+            mock_window = MagicMock()
             mock_window.pane_current_command = "node"
             mock_tm.find_window_by_id = AsyncMock(return_value=mock_window)
             mock_tm.capture_pane = AsyncMock(return_value="some output")
@@ -347,17 +309,13 @@ class TestStatusPollingIntegration:
                 return_value=None,
             ),
             patch(
-                "ccbot.handlers.status_polling.is_interactive_ui",
-                return_value=False,
-            ),
-            patch(
-                "ccbot.handlers.status_polling.parse_status_line",
-                return_value=None,
+                "ccbot.handlers.status_polling.get_provider",
+                return_value=make_mock_provider(has_status=False),
             ),
         ):
             from ccbot.handlers.status_polling import update_status_message
 
-            mock_window = AsyncMock()
+            mock_window = MagicMock()
             mock_window.pane_current_command = "zsh"
             mock_tm.find_window_by_id = AsyncMock(return_value=mock_window)
             mock_tm.capture_pane = AsyncMock(return_value="some output")
@@ -380,17 +338,13 @@ class TestStatusPollingIntegration:
                 return_value=None,
             ),
             patch(
-                "ccbot.handlers.status_polling.is_interactive_ui",
-                return_value=False,
-            ),
-            patch(
-                "ccbot.handlers.status_polling.parse_status_line",
-                return_value="Working...",
+                "ccbot.handlers.status_polling.get_provider",
+                return_value=make_mock_provider(has_status=True),
             ),
         ):
             from ccbot.handlers.status_polling import update_status_message
 
-            mock_tm.find_window_by_id = AsyncMock(return_value=AsyncMock())
+            mock_tm.find_window_by_id = AsyncMock(return_value=MagicMock())
             mock_tm.capture_pane = AsyncMock(return_value="some output")
 
             bot = AsyncMock()

@@ -5,8 +5,35 @@ and sample pane text for terminal parser tests.
 """
 
 import time
+from unittest.mock import MagicMock
 
 import pytest
+
+from ccbot.providers.base import AgentProvider, StatusUpdate
+
+
+def make_mock_provider(
+    *, has_status: bool = False, interactive: bool = False
+) -> MagicMock:
+    """Build a mock provider with parse_terminal_status configured.
+
+    Plain helper (not a fixture) because callers need it inside ``patch()``
+    context managers where fixture injection isn't available.
+    """
+    provider = MagicMock(spec=AgentProvider)
+    if has_status:
+        status = StatusUpdate(
+            session_id="",
+            raw_text="Working...",
+            display_label="…working",
+            is_interactive=interactive,
+            ui_type="AskUserQuestion" if interactive else None,
+        )
+        provider.parse_terminal_status.return_value = status
+    else:
+        provider.parse_terminal_status.return_value = None
+    return provider
+
 
 # ── JSONL entry factories ────────────────────────────────────────────────
 

@@ -1,10 +1,8 @@
 """Tests for response_builder.build_response_parts."""
 
 from ccbot.handlers.response_builder import build_response_parts
-from ccbot.transcript_parser import TranscriptParser
-
-EXP_START = TranscriptParser.EXPANDABLE_QUOTE_START
-EXP_END = TranscriptParser.EXPANDABLE_QUOTE_END
+from ccbot.providers.base import EXPANDABLE_QUOTE_END as EXP_END
+from ccbot.providers.base import EXPANDABLE_QUOTE_START as EXP_START
 
 
 class TestBuildResponseParts:

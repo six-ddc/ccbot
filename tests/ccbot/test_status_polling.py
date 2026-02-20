@@ -1,8 +1,10 @@
 """Tests for status polling: shell detection, autoclose timers, rename sync."""
 
-from unittest.mock import AsyncMock, patch
+from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+
+from conftest import make_mock_provider
 
 from ccbot.handlers.status_polling import (
     _autoclose_timers,
@@ -23,41 +25,16 @@ def _reset():
 
 
 class TestIsShellPrompt:
-    def test_bash(self) -> None:
-        assert is_shell_prompt("bash") is True
+    @pytest.mark.parametrize(
+        "cmd",
+        ["bash", "zsh", "fish", "sh", "/usr/bin/zsh", "  bash  ", "dash", "ksh"],
+    )
+    def test_shell_detected(self, cmd: str) -> None:
+        assert is_shell_prompt(cmd) is True
 
-    def test_zsh(self) -> None:
-        assert is_shell_prompt("zsh") is True
-
-    def test_fish(self) -> None:
-        assert is_shell_prompt("fish") is True
-
-    def test_sh(self) -> None:
-        assert is_shell_prompt("sh") is True
-
-    def test_full_path(self) -> None:
-        assert is_shell_prompt("/usr/bin/zsh") is True
-
-    def test_with_whitespace(self) -> None:
-        assert is_shell_prompt("  bash  ") is True
-
-    def test_node_is_not_shell(self) -> None:
-        assert is_shell_prompt("node") is False
-
-    def test_claude_is_not_shell(self) -> None:
-        assert is_shell_prompt("claude") is False
-
-    def test_npx_is_not_shell(self) -> None:
-        assert is_shell_prompt("npx") is False
-
-    def test_empty_string(self) -> None:
-        assert is_shell_prompt("") is False
-
-    def test_dash(self) -> None:
-        assert is_shell_prompt("dash") is True
-
-    def test_ksh(self) -> None:
-        assert is_shell_prompt("ksh") is True
+    @pytest.mark.parametrize("cmd", ["node", "claude", "npx", ""])
+    def test_non_shell_rejected(self, cmd: str) -> None:
+        assert is_shell_prompt(cmd) is False
 
 
 class TestAutocloseTimers:
@@ -88,8 +65,15 @@ class TestAutocloseTimers:
     def test_clear_nonexistent_is_noop(self) -> None:
         clear_autoclose_timer(1, 42)
 
-    async def test_check_done_expired(self) -> None:
-        _start_autoclose_timer(1, 42, "done", 0.0)
+    @pytest.mark.parametrize(
+        ("state", "minutes", "elapsed"),
+        [("done", 30, 30 * 60 + 1), ("dead", 10, 10 * 60 + 1)],
+        ids=["done", "dead"],
+    )
+    async def test_check_expired(
+        self, state: str, minutes: int, elapsed: float
+    ) -> None:
+        _start_autoclose_timer(1, 42, state, 0.0)
         bot = AsyncMock()
         with (
             patch("ccbot.handlers.status_polling.config") as mock_config,
@@ -97,31 +81,14 @@ class TestAutocloseTimers:
             patch("ccbot.handlers.status_polling.time") as mock_time,
         ):
             mock_config.autoclose_done_minutes = 30
-            mock_config.autoclose_dead_minutes = 10
-            mock_time.monotonic.return_value = 30 * 60 + 1
+            mock_config.autoclose_dead_minutes = minutes
+            mock_time.monotonic.return_value = elapsed
             mock_sm.resolve_chat_id.return_value = -100
             await _check_autoclose_timers(bot)
         bot.close_forum_topic.assert_called_once_with(
             chat_id=-100, message_thread_id=42
         )
         assert (1, 42) not in _autoclose_timers
-
-    async def test_check_dead_expired(self) -> None:
-        _start_autoclose_timer(1, 42, "dead", 0.0)
-        bot = AsyncMock()
-        with (
-            patch("ccbot.handlers.status_polling.config") as mock_config,
-            patch("ccbot.handlers.status_polling.session_manager") as mock_sm,
-            patch("ccbot.handlers.status_polling.time") as mock_time,
-        ):
-            mock_config.autoclose_done_minutes = 30
-            mock_config.autoclose_dead_minutes = 10
-            mock_time.monotonic.return_value = 10 * 60 + 1
-            mock_sm.resolve_chat_id.return_value = -100
-            await _check_autoclose_timers(bot)
-        bot.close_forum_topic.assert_called_once_with(
-            chat_id=-100, message_thread_id=42
-        )
 
     async def test_check_not_expired_yet(self) -> None:
         _start_autoclose_timer(1, 42, "done", 0.0)
@@ -181,18 +148,14 @@ class TestWindowRenameSync:
                 return_value=None,
             ),
             patch(
-                "ccbot.handlers.status_polling.is_interactive_ui",
-                return_value=False,
-            ),
-            patch(
-                "ccbot.handlers.status_polling.parse_status_line",
-                return_value="Working...",
+                "ccbot.handlers.status_polling.get_provider",
+                return_value=make_mock_provider(has_status=True),
             ),
             patch("ccbot.handlers.status_polling.rename_topic") as mock_rename,
         ):
             from ccbot.handlers.status_polling import update_status_message
 
-            mock_window = AsyncMock()
+            mock_window = MagicMock()
             mock_window.window_id = "@0"
             mock_window.window_name = "new-name"
             mock_window.pane_current_command = "node"
@@ -218,18 +181,14 @@ class TestWindowRenameSync:
                 return_value=None,
             ),
             patch(
-                "ccbot.handlers.status_polling.is_interactive_ui",
-                return_value=False,
-            ),
-            patch(
-                "ccbot.handlers.status_polling.parse_status_line",
-                return_value="Working...",
+                "ccbot.handlers.status_polling.get_provider",
+                return_value=make_mock_provider(has_status=True),
             ),
             patch("ccbot.handlers.status_polling.rename_topic") as mock_rename,
         ):
             from ccbot.handlers.status_polling import update_status_message
 
-            mock_window = AsyncMock()
+            mock_window = MagicMock()
             mock_window.window_id = "@0"
             mock_window.window_name = "myproject"
             mock_window.pane_current_command = "node"

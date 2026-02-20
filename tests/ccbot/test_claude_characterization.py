@@ -7,37 +7,42 @@ test breaks during extraction, it signals an unintended behavior change.
 Only tests behaviors NOT already covered by existing unit tests.
 """
 
+import pytest
+
 from ccbot.cc_commands import CC_BUILTINS
-from ccbot.hook import _UUID_RE
+from ccbot.hook import UUID_RE
 from ccbot.terminal_parser import (
     STATUS_SPINNERS,
     UI_PATTERNS,
     extract_interactive_content,
     parse_status_line,
 )
+from ccbot.providers.base import EXPANDABLE_QUOTE_END, EXPANDABLE_QUOTE_START
 from ccbot.transcript_parser import TranscriptParser
 
 # ── Hook payload format ──────────────────────────────────────────────────
 
 
 class TestClaudeHookPayloadFormat:
-    def test_uuid_validation_regex(self) -> None:
-        valid = "a1b2c3d4-e5f6-7890-abcd-ef1234567890"
-        assert _UUID_RE.match(valid)
+    def test_uuid_validation_accepts_valid(self) -> None:
+        assert UUID_RE.match("a1b2c3d4-e5f6-7890-abcd-ef1234567890")
 
-        invalid_cases = [
+    @pytest.mark.parametrize(
+        "invalid",
+        [
             "",
             "not-a-uuid",
             "A1B2C3D4-E5F6-7890-ABCD-EF1234567890",  # uppercase rejected
             "a1b2c3d4e5f6-7890-abcd-ef1234567890",  # missing dash
             "a1b2c3d4-e5f6-7890-abcd-ef123456789",  # too short
-        ]
-        for invalid in invalid_cases:
-            assert _UUID_RE.match(invalid) is None, f"Should reject: {invalid!r}"
+        ],
+    )
+    def test_uuid_validation_rejects_invalid(self, invalid: str) -> None:
+        assert UUID_RE.match(invalid) is None
 
     def test_uuid_regex_exact_pattern(self) -> None:
         expected = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-        assert _UUID_RE.pattern == expected
+        assert UUID_RE.pattern == expected
 
 
 # ── Transcript format ────────────────────────────────────────────────────
@@ -45,8 +50,8 @@ class TestClaudeHookPayloadFormat:
 
 class TestClaudeTranscriptFormat:
     def test_expquote_sentinels(self) -> None:
-        assert TranscriptParser.EXPANDABLE_QUOTE_START == "\x02EXPQUOTE_START\x02"
-        assert TranscriptParser.EXPANDABLE_QUOTE_END == "\x02EXPQUOTE_END\x02"
+        assert EXPANDABLE_QUOTE_START == "\x02EXPQUOTE_START\x02"
+        assert EXPANDABLE_QUOTE_END == "\x02EXPQUOTE_END\x02"
 
     def test_tool_pair_carry_over(self, make_jsonl_entry, make_tool_use_block) -> None:
         entries = [make_jsonl_entry("assistant", [make_tool_use_block("t1", "Read")])]
@@ -173,6 +178,6 @@ class TestClaudeResumeAndRecovery:
             ],
         }
         entry = index["entries"][0]
-        assert _UUID_RE.match(entry["sessionId"])
+        assert UUID_RE.match(entry["sessionId"])
         assert "fullPath" in entry
         assert "projectPath" in entry

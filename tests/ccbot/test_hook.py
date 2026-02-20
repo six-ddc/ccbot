@@ -7,7 +7,7 @@ import sys
 import pytest
 
 from ccbot.hook import (
-    _UUID_RE,
+    UUID_RE,
     _hook_status,
     _install_hook,
     _is_hook_installed,
@@ -145,7 +145,7 @@ class TestUuidRegex:
         ids=["standard", "all-zeros", "all-hex"],
     )
     def test_valid_uuid_matches(self, value: str) -> None:
-        assert _UUID_RE.match(value) is not None
+        assert UUID_RE.match(value) is not None
 
     @pytest.mark.parametrize(
         "value",
@@ -158,7 +158,7 @@ class TestUuidRegex:
         ids=["gibberish", "truncated", "invalid-hex-char", "empty"],
     )
     def test_invalid_uuid_no_match(self, value: str) -> None:
-        assert _UUID_RE.match(value) is None
+        assert UUID_RE.match(value) is None
 
 
 class TestIsHookInstalled:

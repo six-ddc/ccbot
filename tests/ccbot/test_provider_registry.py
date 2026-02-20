@@ -1,4 +1,4 @@
-"""Tests for provider registry, capability policy, and config integration."""
+"""Tests for provider registry and config integration."""
 
 from typing import Any
 from unittest.mock import patch
@@ -8,12 +8,14 @@ import pytest
 from ccbot.providers.base import (
     AgentMessage,
     AgentProvider,
+    DiscoveredCommand,
     ProviderCapabilities,
     SessionStartEvent,
     StatusUpdate,
 )
-from ccbot.providers.policy import CapabilityPolicy
 from ccbot.providers.registry import ProviderRegistry, UnknownProviderError, registry
+
+# ruff: noqa: ARG002 — stub protocol methods must accept unused params
 
 
 class _StubProvider:
@@ -54,8 +56,20 @@ class _StubProvider:
     def parse_terminal_status(self, pane_text: str) -> StatusUpdate | None:
         return None
 
-    def discover_commands(self, base_dir: str) -> list[str]:
-        return list(self._CAPS.builtin_commands)
+    def extract_bash_output(self, pane_text: str, command: str) -> str | None:
+        return None
+
+    def is_user_transcript_entry(self, entry: dict[str, Any]) -> bool:
+        return entry.get("type") == "user"
+
+    def parse_history_entry(self, entry: dict[str, Any]) -> AgentMessage | None:
+        return None
+
+    def discover_commands(self, base_dir: str) -> list[DiscoveredCommand]:
+        return [
+            DiscoveredCommand(name=cmd, description="", source="builtin")
+            for cmd in self._CAPS.builtin_commands
+        ]
 
 
 # ── Registry tests ──────────────────────────────────────────────────────
@@ -84,10 +98,14 @@ class TestProviderRegistry:
         assert reg.available() == []
 
     def test_register_overwrites(self) -> None:
+        class _OtherProvider(_StubProvider):
+            _CAPS = ProviderCapabilities(name="other", launch_command="other-cli")
+
         reg = ProviderRegistry()
         reg.register("stub", _StubProvider)
-        reg.register("stub", _StubProvider)
+        reg.register("stub", _OtherProvider)
         assert reg.available() == ["stub"]
+        assert reg.get("stub").capabilities.name == "other"
 
     def test_get_returns_new_instance_each_call(self) -> None:
         reg = ProviderRegistry()
@@ -102,65 +120,6 @@ class TestProviderRegistry:
         reg.register("bravo", _StubProvider)
         with pytest.raises(UnknownProviderError, match="alpha, bravo"):
             reg.get("missing")
-
-
-# ── Policy tests ────────────────────────────────────────────────────────
-
-
-class TestCapabilityPolicy:
-    @pytest.fixture()
-    def full_caps(self) -> ProviderCapabilities:
-        return ProviderCapabilities(
-            name="full",
-            launch_command="full-cli",
-            supports_hook=True,
-            supports_resume=True,
-            supports_continue=True,
-            supports_structured_transcript=True,
-            transcript_format="jsonl",
-            terminal_ui_patterns=("AskUserQuestion", "ExitPlanMode"),
-            builtin_commands=("help", "clear", "compact"),
-        )
-
-    @pytest.fixture()
-    def minimal_caps(self) -> ProviderCapabilities:
-        return ProviderCapabilities(
-            name="minimal",
-            launch_command="min-cli",
-        )
-
-    def test_full_capabilities(self, full_caps: ProviderCapabilities) -> None:
-        policy = CapabilityPolicy(full_caps)
-        assert policy.can_hook is True
-        assert policy.can_resume is True
-        assert policy.can_continue is True
-        assert policy.has_structured_transcript is True
-        assert policy.transcript_format == "jsonl"
-
-    def test_minimal_capabilities(self, minimal_caps: ProviderCapabilities) -> None:
-        policy = CapabilityPolicy(minimal_caps)
-        assert policy.can_hook is False
-        assert policy.can_resume is False
-        assert policy.can_continue is False
-        assert policy.has_structured_transcript is False
-
-    def test_has_interactive_ui(self, full_caps: ProviderCapabilities) -> None:
-        policy = CapabilityPolicy(full_caps)
-        assert policy.has_interactive_ui("AskUserQuestion") is True
-        assert policy.has_interactive_ui("ExitPlanMode") is True
-        assert policy.has_interactive_ui("Nonexistent") is False
-
-    def test_has_command(self, full_caps: ProviderCapabilities) -> None:
-        policy = CapabilityPolicy(full_caps)
-        assert policy.has_command("help") is True
-        assert policy.has_command("clear") is True
-        assert policy.has_command("nonexistent") is False
-
-    def test_from_provider(self) -> None:
-        provider = _StubProvider()
-        policy = CapabilityPolicy.from_provider(provider)
-        assert policy.can_hook is True
-        assert policy.has_command("help") is True
 
 
 # ── Config integration tests ────────────────────────────────────────────
@@ -196,25 +155,21 @@ class TestConfigProviderSettings:
             assert cfg.provider_launch_command == "/usr/local/bin/codex"
 
 
-# ── Integration: registry + policy wired together ───────────────────────
+# ── Integration: registry wired together ─────────────────────────────────
 
 
 class TestModuleLevelRegistry:
     def test_singleton_exists_with_claude(self) -> None:
+        from ccbot.providers import get_provider
+
+        get_provider()
         assert isinstance(registry, ProviderRegistry)
         assert "claude" in registry.available()
 
     def test_stub_satisfies_protocol(self) -> None:
         assert isinstance(_StubProvider(), AgentProvider)
 
+    def test_claude_satisfies_protocol(self) -> None:
+        from ccbot.providers.claude import ClaudeProvider
 
-class TestRegistryPolicyIntegration:
-    def test_registry_to_policy(self) -> None:
-        reg = ProviderRegistry()
-        reg.register("stub", _StubProvider)
-        provider = reg.get("stub")
-        policy = CapabilityPolicy.from_provider(provider)
-        assert policy.can_hook is True
-        assert policy.can_resume is True
-        assert policy.has_command("help") is True
-        assert policy.has_interactive_ui("AskUserQuestion") is True
+        assert isinstance(ClaudeProvider(), AgentProvider)
