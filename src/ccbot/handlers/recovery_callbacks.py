@@ -21,6 +21,7 @@ from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
 from ..config import config
+from ..providers import get_provider
 from ..session import session_manager
 from ..tmux_manager import tmux_manager
 from .callback_data import (
@@ -59,7 +60,6 @@ def build_recovery_keyboard(window_id: str) -> InlineKeyboardMarkup:
     Buttons for Continue and Resume are only shown when the active provider
     declares support for those capabilities.
     """
-    from ..providers import get_provider
 
     caps = get_provider().capabilities
     options: list[InlineKeyboardButton] = [
@@ -410,8 +410,6 @@ async def _handle_continue(
         await query.answer("Failed")
         return
 
-    from ..providers import get_provider
-
     launch_args = get_provider().make_launch_args(use_continue=True)
     await _create_and_bind_window(
         query,
@@ -514,8 +512,6 @@ async def _handle_resume_pick(
         _clear_recovery_state(context.user_data)
         await query.answer("Failed")
         return
-
-    from ..providers import get_provider
 
     launch_args = get_provider().make_launch_args(resume_id=session_id)
     await _create_and_bind_window(

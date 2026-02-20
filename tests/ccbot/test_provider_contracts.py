@@ -1,7 +1,7 @@
 """Contract tests for the AgentProvider protocol.
 
-Every provider must pass these tests. The PROVIDER_FIXTURES list starts with
-StubProvider and will grow as real providers are extracted (Claude, Codex, Gemini).
+Every provider must pass these tests. The PROVIDER_FIXTURES list contains
+StubProvider plus all real providers (Claude, Codex, Gemini).
 """
 
 import json
@@ -93,7 +93,6 @@ class StubProvider:
             if text:
                 messages.append(
                     AgentMessage(
-                        session_id="stub-session",
                         text=text,
                         role=msg_type,
                         content_type="text",
@@ -126,7 +125,6 @@ class StubProvider:
         if not pane_text or not pane_text.strip():
             return None
         return StatusUpdate(
-            session_id="stub-session",
             raw_text=pane_text.strip(),
             display_label="…working",
         )
@@ -160,7 +158,6 @@ class StubProvider:
         if not text:
             return None
         return AgentMessage(
-            session_id="stub-session",
             text=text,
             role=msg_type,
             content_type="text",

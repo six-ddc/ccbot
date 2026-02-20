@@ -1,10 +1,8 @@
 """Characterization tests locking Claude-specific behaviors.
 
-These tests document current Claude Code integration behavior before
-multi-provider refactoring begins. They serve as a safety net — if any
-test breaks during extraction, it signals an unintended behavior change.
-
-Only tests behaviors NOT already covered by existing unit tests.
+These tests document current Claude Code integration behavior that is
+specific to the Claude provider — NOT covered by the generic contract
+tests in test_provider_contracts.py.
 """
 
 import pytest
@@ -52,21 +50,6 @@ class TestClaudeTranscriptFormat:
     def test_expquote_sentinels(self) -> None:
         assert EXPANDABLE_QUOTE_START == "\x02EXPQUOTE_START\x02"
         assert EXPANDABLE_QUOTE_END == "\x02EXPQUOTE_END\x02"
-
-    def test_tool_pair_carry_over(self, make_jsonl_entry, make_tool_use_block) -> None:
-        entries = [make_jsonl_entry("assistant", [make_tool_use_block("t1", "Read")])]
-        _, pending = TranscriptParser.parse_entries(entries, {})
-        assert "t1" in pending
-
-    def test_tool_pair_resolved_on_result(
-        self, make_jsonl_entry, make_tool_use_block, make_tool_result_block
-    ) -> None:
-        entries = [
-            make_jsonl_entry("assistant", [make_tool_use_block("t1", "Read")]),
-            make_jsonl_entry("user", [make_tool_result_block("t1", "file contents")]),
-        ]
-        _, pending = TranscriptParser.parse_entries(entries, {})
-        assert "t1" not in pending
 
     def test_exit_plan_mode_emits_plan_text(self, make_jsonl_entry) -> None:
         plan_text = "## Plan\n1. Do thing\n2. Do other thing"
@@ -159,25 +142,3 @@ class TestClaudeCommandDiscovery:
     def test_cc_builtins_exact_set(self) -> None:
         expected = {"clear", "compact", "cost", "help", "memory", "model"}
         assert set(CC_BUILTINS.keys()) == expected
-
-
-# ── Resume and recovery ─────────────────────────────────────────────────
-
-
-class TestClaudeResumeAndRecovery:
-    def test_sessions_index_format(self) -> None:
-        index = {
-            "originalPath": "/home/user/project",
-            "entries": [
-                {
-                    "sessionId": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
-                    "fullPath": "/tmp/session.jsonl",
-                    "summary": "Test session",
-                    "projectPath": "/home/user/project",
-                }
-            ],
-        }
-        entry = index["entries"][0]
-        assert UUID_RE.match(entry["sessionId"])
-        assert "fullPath" in entry
-        assert "projectPath" in entry

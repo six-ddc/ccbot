@@ -23,7 +23,6 @@ def make_mock_provider(
     provider = MagicMock(spec=AgentProvider)
     if has_status:
         status = StatusUpdate(
-            session_id="",
             raw_text="Working...",
             display_label="…working",
             is_interactive=interactive,

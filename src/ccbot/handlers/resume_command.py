@@ -26,6 +26,7 @@ from telegram.error import TelegramError
 from telegram.ext import ContextTypes
 
 from ..config import config
+from ..providers import get_provider
 from ..session import session_manager
 from ..tmux_manager import tmux_manager
 from .callback_data import CB_RESUME_CANCEL, CB_RESUME_PAGE, CB_RESUME_PICK
@@ -168,8 +169,6 @@ async def resume_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not user or not config.is_user_allowed(user.id):
         return
 
-    from ..providers import get_provider
-
     if not get_provider().capabilities.supports_resume:
         await safe_reply(
             update.message,
@@ -263,8 +262,6 @@ async def _handle_pick(
         from .status_polling import clear_dead_notification
 
         clear_dead_notification(user_id, thread_id)
-
-    from ..providers import get_provider
 
     launch_args = get_provider().make_launch_args(resume_id=session_id)
     success, message, created_wname, created_wid = await tmux_manager.create_window(

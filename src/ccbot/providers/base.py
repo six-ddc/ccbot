@@ -13,12 +13,17 @@ Capability descriptor:
   - ProviderCapabilities: declares what features the provider supports
 """
 
+import re
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, runtime_checkable
 
 # ── Type aliases for AgentMessage fields ─────────────────────────────────
 MessageRole = Literal["user", "assistant"]
 ContentType = Literal["text", "thinking", "tool_use", "tool_result", "local_command"]
+
+# ── Shared validation ────────────────────────────────────────────────────
+# Alphanumeric + hyphens/underscores — rejects shell metacharacters.
+RESUME_ID_RE = re.compile(r"^[\w-]+$")
 
 # ── Sentinel constants for expandable quotes ─────────────────────────────
 # Canonical source of truth — imported by transcript_parser.py and consumers.
@@ -40,13 +45,8 @@ class SessionStartEvent:
 
 @dataclass(frozen=True, slots=True)
 class AgentMessage:
-    """A single parsed message from the agent's transcript.
+    """A single parsed message from the agent's transcript."""
 
-    The ``session_id`` field is left empty ("") by provider methods and
-    populated by SessionMonitor when wrapping into NewMessage events.
-    """
-
-    session_id: str
     text: str
     role: MessageRole
     content_type: ContentType
@@ -69,7 +69,6 @@ class StatusUpdate:
         (same as ``ui_type``), e.g. "AskUserQuestion".
     """
 
-    session_id: str
     raw_text: str
     display_label: str
     is_interactive: bool = False
@@ -82,7 +81,7 @@ class DiscoveredCommand:
 
     name: str  # Original name (e.g. "spec:work", "committing-code")
     description: str
-    source: str  # "builtin", "skill", or "command"
+    source: Literal["builtin", "skill", "command"]
 
 
 # ── Capabilities ─────────────────────────────────────────────────────────
@@ -113,10 +112,10 @@ class ProviderCapabilities:
 class AgentProvider(Protocol):
     """Protocol that every agent CLI provider must satisfy.
 
-    Lifecycle: providers are instantiated once via the registry and cached
-    as a singleton by ``get_provider()``. All methods are stateless — they
-    receive input and return results without side effects. Thread safety
-    is not required (the bot runs in a single asyncio event loop).
+    Lifecycle: the active provider is resolved once by ``get_provider()``
+    and cached in ``providers._active``. The registry creates a fresh
+    instance per ``get()`` call. All methods are stateless — they receive
+    input and return results without side effects.
     """
 
     @property

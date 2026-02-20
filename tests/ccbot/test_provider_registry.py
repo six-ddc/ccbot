@@ -1,76 +1,12 @@
 """Tests for provider registry and config integration."""
 
-from typing import Any
 from unittest.mock import patch
 
 import pytest
 
-from ccbot.providers.base import (
-    AgentMessage,
-    AgentProvider,
-    DiscoveredCommand,
-    ProviderCapabilities,
-    SessionStartEvent,
-    StatusUpdate,
-)
+from ccbot.providers.base import AgentProvider, ProviderCapabilities
 from ccbot.providers.registry import ProviderRegistry, UnknownProviderError, registry
-
-# ruff: noqa: ARG002 — stub protocol methods must accept unused params
-
-
-class _StubProvider:
-    """Minimal provider for registry/policy tests (no cross-file import)."""
-
-    _CAPS = ProviderCapabilities(
-        name="stub",
-        launch_command="stub-cli",
-        supports_hook=True,
-        supports_resume=True,
-        supports_continue=True,
-        supports_structured_transcript=True,
-        transcript_format="jsonl",
-        terminal_ui_patterns=("AskUserQuestion",),
-        builtin_commands=("help", "clear"),
-    )
-
-    @property
-    def capabilities(self) -> ProviderCapabilities:
-        return self._CAPS
-
-    def make_launch_args(
-        self, resume_id: str | None = None, use_continue: bool = False
-    ) -> str:
-        return ""
-
-    def parse_hook_payload(self, payload: dict[str, Any]) -> SessionStartEvent | None:
-        return None
-
-    def parse_transcript_line(self, line: str) -> dict[str, Any] | None:
-        return None
-
-    def parse_transcript_entries(
-        self, entries: list[dict[str, Any]], pending_tools: dict[str, Any]
-    ) -> tuple[list[AgentMessage], dict[str, Any]]:
-        return [], {}
-
-    def parse_terminal_status(self, pane_text: str) -> StatusUpdate | None:
-        return None
-
-    def extract_bash_output(self, pane_text: str, command: str) -> str | None:
-        return None
-
-    def is_user_transcript_entry(self, entry: dict[str, Any]) -> bool:
-        return entry.get("type") == "user"
-
-    def parse_history_entry(self, entry: dict[str, Any]) -> AgentMessage | None:
-        return None
-
-    def discover_commands(self, base_dir: str) -> list[DiscoveredCommand]:
-        return [
-            DiscoveredCommand(name=cmd, description="", source="builtin")
-            for cmd in self._CAPS.builtin_commands
-        ]
-
+from test_provider_contracts import StubProvider as _StubProvider
 
 # ── Registry tests ──────────────────────────────────────────────────────
 

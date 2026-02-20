@@ -1,9 +1,9 @@
 """Provider registry — maps provider names to classes, instantiates on demand.
 
-The module-level ``registry`` singleton starts empty; provider modules
-call ``registry.register()`` at import time.  Handlers call
-``registry.get(name)`` to obtain a provider instance and
-``registry.available()`` to list registered names.
+The module-level ``registry`` singleton starts empty; providers are
+registered lazily via ``_ensure_registered()`` in ``ccbot.providers.__init__``
+before first use. ``get()`` creates a **new instance** on each call — use
+``get_provider()`` from ``ccbot.providers`` for cached singleton access.
 """
 
 import logging

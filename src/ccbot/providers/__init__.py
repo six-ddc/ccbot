@@ -26,14 +26,13 @@ logger = logging.getLogger(__name__)
 
 # Singleton cache
 _active: AgentProvider | None = None
-_registered = False
 
 
 def _ensure_registered() -> None:
-    """Register all known providers into the global registry (idempotent)."""
-    global _registered
-    if _registered:
-        return
+    """Register all known providers into the global registry.
+
+    Idempotent — ``register()`` silently overwrites, so no guard needed.
+    """
     from ccbot.providers.claude import ClaudeProvider
     from ccbot.providers.codex import CodexProvider
     from ccbot.providers.gemini import GeminiProvider
@@ -41,7 +40,6 @@ def _ensure_registered() -> None:
     registry.register("claude", ClaudeProvider)
     registry.register("codex", CodexProvider)
     registry.register("gemini", GeminiProvider)
-    _registered = True
 
 
 def get_provider() -> AgentProvider:
@@ -66,6 +64,12 @@ def get_provider() -> AgentProvider:
             )
             _active = registry.get("claude")
     return _active
+
+
+def _reset_provider() -> None:
+    """Reset the cached provider singleton (for tests only)."""
+    global _active
+    _active = None
 
 
 def resolve_capabilities(provider_name: str | None = None) -> ProviderCapabilities:

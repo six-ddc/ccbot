@@ -128,7 +128,7 @@ class TestBuildRecoveryKeyboard:
                 assert len(btn.callback_data) <= 64
 
     def test_hides_continue_when_unsupported(self) -> None:
-        with patch("ccbot.providers.get_provider") as mock_gp:
+        with patch("ccbot.handlers.recovery_callbacks.get_provider") as mock_gp:
             caps = mock_gp.return_value.capabilities
             caps.supports_continue = False
             caps.supports_resume = True
@@ -141,7 +141,7 @@ class TestBuildRecoveryKeyboard:
         assert any(d.startswith(CB_RECOVERY_RESUME) for d in datas)
 
     def test_hides_resume_when_unsupported(self) -> None:
-        with patch("ccbot.providers.get_provider") as mock_gp:
+        with patch("ccbot.handlers.recovery_callbacks.get_provider") as mock_gp:
             caps = mock_gp.return_value.capabilities
             caps.supports_continue = True
             caps.supports_resume = False
@@ -154,7 +154,7 @@ class TestBuildRecoveryKeyboard:
         assert not any(d.startswith(CB_RECOVERY_RESUME) for d in datas)
 
     def test_fresh_only_when_no_continue_or_resume(self) -> None:
-        with patch("ccbot.providers.get_provider") as mock_gp:
+        with patch("ccbot.handlers.recovery_callbacks.get_provider") as mock_gp:
             caps = mock_gp.return_value.capabilities
             caps.supports_continue = False
             caps.supports_resume = False

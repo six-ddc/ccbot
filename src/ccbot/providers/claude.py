@@ -7,7 +7,7 @@ that translates between the provider protocol and existing module APIs.
 
 import os
 from pathlib import Path
-from typing import Any, ClassVar, cast
+from typing import Any, cast
 
 from ccbot.cc_commands import CC_BUILTINS, discover_cc_commands
 from ccbot.hook import UUID_RE
@@ -45,13 +45,6 @@ class ClaudeProvider:
         terminal_ui_patterns=tuple(p.name for p in UI_PATTERNS),
         builtin_commands=tuple(CC_BUILTINS.keys()),
     )
-
-    # Maps transcript message_type → AgentMessage content_type.
-    # Only entries that differ from passthrough; everything else uses message_type as-is.
-    _CONTENT_TYPE_OVERRIDES: ClassVar[dict[str, str]] = {
-        "user": "text",
-        "assistant": "text",
-    }
 
     @property
     def capabilities(self) -> ProviderCapabilities:
@@ -112,7 +105,6 @@ class ClaudeProvider:
 
         messages = [
             AgentMessage(
-                session_id="",
                 text=e.text,
                 role=cast(MessageRole, e.role),
                 content_type=cast(ContentType, e.content_type),
@@ -130,7 +122,6 @@ class ClaudeProvider:
         interactive = extract_interactive_content(pane_text)
         if interactive:
             return StatusUpdate(
-                session_id="",
                 raw_text=interactive.content,
                 display_label=interactive.name,
                 is_interactive=True,
@@ -140,7 +131,6 @@ class ClaudeProvider:
         raw_status = parse_status_line(pane_text)
         if raw_status:
             return StatusUpdate(
-                session_id="",
                 raw_text=raw_status,
                 display_label=format_status_display(raw_status),
             )
@@ -161,13 +151,15 @@ class ClaudeProvider:
         raw_role = entry.get("type", "assistant")
         if raw_role not in ("user", "assistant"):
             return None
-        role: MessageRole = raw_role  # type: ignore[assignment]
-        raw_ct = self._CONTENT_TYPE_OVERRIDES.get(
-            parsed.message_type, parsed.message_type
+        role = cast(MessageRole, raw_role)
+        # "user"/"assistant" message_type maps to "text"; others pass through.
+        raw_ct = (
+            "text"
+            if parsed.message_type in ("user", "assistant")
+            else parsed.message_type
         )
-        content_type: ContentType = raw_ct  # type: ignore[assignment]
+        content_type = cast(ContentType, raw_ct)
         return AgentMessage(
-            session_id="",
             text=parsed.text,
             role=role,
             content_type=content_type,
