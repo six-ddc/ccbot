@@ -17,6 +17,8 @@ import re
 from dataclasses import dataclass
 from typing import Any
 
+from ccbot.providers.base import EXPANDABLE_QUOTE_END, EXPANDABLE_QUOTE_START
+
 
 @dataclass
 class ParsedMessage:
@@ -292,18 +294,15 @@ class TranscriptParser:
         """Extract timestamp from message data."""
         return data.get("timestamp")
 
-    EXPANDABLE_QUOTE_START = "\x02EXPQUOTE_START\x02"
-    EXPANDABLE_QUOTE_END = "\x02EXPQUOTE_END\x02"
-
-    @classmethod
-    def _format_expandable_quote(cls, text: str) -> str:
+    @staticmethod
+    def _format_expandable_quote(text: str) -> str:
         """Format text as a Telegram expandable blockquote.
 
         Wraps text with sentinel markers. The actual MarkdownV2 formatting
         (> prefix, || suffix, escaping) is done in convert_markdown() after
         telegramify processes the surrounding content.
         """
-        return f"{cls.EXPANDABLE_QUOTE_START}{text}{cls.EXPANDABLE_QUOTE_END}"
+        return f"{EXPANDABLE_QUOTE_START}{text}{EXPANDABLE_QUOTE_END}"
 
     @classmethod
     def _format_tool_result_text(cls, text: str, tool_name: str | None = None) -> str:
@@ -643,7 +642,7 @@ class TranscriptParser:
                             # For other tools, append formatted result text
                             elif (
                                 result_text
-                                and cls.EXPANDABLE_QUOTE_START not in tool_summary
+                                and EXPANDABLE_QUOTE_START not in tool_summary
                             ):
                                 entry_text += "\n" + cls._format_tool_result_text(
                                     result_text, tool_name

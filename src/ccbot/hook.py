@@ -23,7 +23,7 @@ from pathlib import Path
 logger = logging.getLogger(__name__)
 
 # Validate session_id looks like a UUID
-_UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
+UUID_RE = re.compile(r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$")
 
 _CLAUDE_SETTINGS_FILE = Path.home() / ".claude" / "settings.json"
 
@@ -226,7 +226,7 @@ def _process_hook_stdin() -> None:
         return
 
     # Validate session_id format
-    if not _UUID_RE.match(session_id):
+    if not UUID_RE.match(session_id):
         logger.warning("Invalid session_id format: %s", session_id)
         return
 

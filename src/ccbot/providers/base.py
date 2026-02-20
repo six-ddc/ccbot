@@ -16,6 +16,15 @@ Capability descriptor:
 from dataclasses import dataclass
 from typing import Any, Literal, Protocol, runtime_checkable
 
+# ── Type aliases for AgentMessage fields ─────────────────────────────────
+MessageRole = Literal["user", "assistant"]
+ContentType = Literal["text", "thinking", "tool_use", "tool_result", "local_command"]
+
+# ── Sentinel constants for expandable quotes ─────────────────────────────
+# Canonical source of truth — imported by transcript_parser.py and consumers.
+EXPANDABLE_QUOTE_START = "\x02EXPQUOTE_START\x02"
+EXPANDABLE_QUOTE_END = "\x02EXPQUOTE_END\x02"
+
 # ── Event types ──────────────────────────────────────────────────────────
 
 
@@ -23,36 +32,57 @@ from typing import Any, Literal, Protocol, runtime_checkable
 class SessionStartEvent:
     """Emitted when a provider session starts or is detected via hook."""
 
-    session_id: str
-    cwd: str
-    transcript_path: str
-    window_key: str  # e.g. "ccbot:@0"
+    session_id: str  # provider-specific session identifier (UUID for Claude)
+    cwd: str  # absolute path to the project directory
+    transcript_path: str  # path to the session's transcript file
+    window_key: str  # tmux key, e.g. "ccbot:@0"
 
 
 @dataclass(frozen=True, slots=True)
 class AgentMessage:
-    """A single parsed message from the agent's transcript."""
+    """A single parsed message from the agent's transcript.
+
+    The ``session_id`` field is left empty ("") by provider methods and
+    populated by SessionMonitor when wrapping into NewMessage events.
+    """
 
     session_id: str
     text: str
-    role: Literal["user", "assistant"]
-    content_type: Literal[
-        "text", "thinking", "tool_use", "tool_result", "local_command"
-    ]
+    role: MessageRole
+    content_type: ContentType
     is_complete: bool = True
     tool_use_id: str | None = None
     tool_name: str | None = None
+    timestamp: str | None = None
 
 
 @dataclass(frozen=True, slots=True)
 class StatusUpdate:
-    """Parsed terminal status line from the agent's pane."""
+    """Parsed terminal status line from the agent's pane.
+
+    Two modes depending on ``is_interactive``:
+      - **Normal status** (is_interactive=False): ``raw_text`` is the text
+        after the spinner, ``display_label`` is a short formatted label
+        like "…reading".
+      - **Interactive UI** (is_interactive=True): ``raw_text`` is the full
+        interactive pane content, ``display_label`` is the UI type name
+        (same as ``ui_type``), e.g. "AskUserQuestion".
+    """
 
     session_id: str
-    raw_text: str  # original text after spinner
-    display_label: str  # short label like "…reading"
+    raw_text: str
+    display_label: str
     is_interactive: bool = False
     ui_type: str | None = None  # "AskUserQuestion", "ExitPlanMode", etc.
+
+
+@dataclass(frozen=True, slots=True)
+class DiscoveredCommand:
+    """A command/skill discovered by a provider."""
+
+    name: str  # Original name (e.g. "spec:work", "committing-code")
+    description: str
+    source: str  # "builtin", "skill", or "command"
 
 
 # ── Capabilities ─────────────────────────────────────────────────────────
@@ -81,7 +111,13 @@ class ProviderCapabilities:
 
 @runtime_checkable
 class AgentProvider(Protocol):
-    """Protocol that every agent CLI provider must satisfy."""
+    """Protocol that every agent CLI provider must satisfy.
+
+    Lifecycle: providers are instantiated once via the registry and cached
+    as a singleton by ``get_provider()``. All methods are stateless — they
+    receive input and return results without side effects. Thread safety
+    is not required (the bot runs in a single asyncio event loop).
+    """
 
     @property
     def capabilities(self) -> ProviderCapabilities: ...
@@ -130,9 +166,27 @@ class AgentProvider(Protocol):
         """
         ...
 
-    def discover_commands(self, base_dir: str) -> list[str]:
-        """Discover available commands/skills from the provider's config.
+    def extract_bash_output(self, pane_text: str, command: str) -> str | None:
+        """Extract ``!`` command output from a captured tmux pane.
 
-        Returns command names (e.g. ["clear", "compact", "spec:work"]).
+        Returns the command echo and output lines, or None if not found.
         """
+        ...
+
+    def is_user_transcript_entry(self, entry: dict[str, Any]) -> bool:
+        """Return True if this entry represents a human turn in the conversation.
+
+        Excludes tool results, summaries, system messages, and metadata.
+        """
+        ...
+
+    def parse_history_entry(self, entry: dict[str, Any]) -> AgentMessage | None:
+        """Parse a single raw transcript entry into an AgentMessage for history.
+
+        Returns None for non-parseable entries (summaries, metadata, etc.).
+        """
+        ...
+
+    def discover_commands(self, base_dir: str) -> list[DiscoveredCommand]:
+        """Discover available commands/skills from the provider's config."""
         ...
