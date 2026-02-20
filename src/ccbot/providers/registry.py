@@ -13,7 +13,7 @@ from ccbot.providers.base import AgentProvider
 logger = logging.getLogger(__name__)
 
 
-class UnknownProviderError(KeyError):
+class UnknownProviderError(LookupError):
     """Raised when requesting a provider name that is not registered."""
 
 
@@ -44,10 +44,6 @@ class ProviderRegistry:
                 f"Unknown provider {name!r}. Available: {available}"
             )
         return cls()
-
-    def available(self) -> list[str]:
-        """Return sorted list of registered provider names."""
-        return sorted(self._providers)
 
 
 registry = ProviderRegistry()

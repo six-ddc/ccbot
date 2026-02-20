@@ -6,10 +6,7 @@ and terminal UI patterns (Rust TUI, patterns TBD). Unsupported capabilities are
 explicitly declared so callers can gate behavior.
 """
 
-from ccbot.providers.base import (
-    ProviderCapabilities,
-    RESUME_ID_RE,
-)
+from ccbot.providers.base import RESUME_ID_RE, ProviderCapabilities
 from ccbot.providers._jsonl import JsonlProvider
 
 # Codex CLI known slash commands.

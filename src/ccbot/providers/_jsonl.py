@@ -19,7 +19,7 @@ Base class:
 """
 
 import json
-from typing import Any, cast
+from typing import Any, ClassVar, cast
 
 from ccbot.providers.base import (
     AgentMessage,
@@ -27,6 +27,7 @@ from ccbot.providers.base import (
     DiscoveredCommand,
     MessageRole,
     ProviderCapabilities,
+    RESUME_ID_RE,
     SessionStartEvent,
     StatusUpdate,
 )
@@ -37,7 +38,8 @@ def parse_jsonl_line(line: str) -> dict[str, Any] | None:
     if not line or not line.strip():
         return None
     try:
-        return json.loads(line)
+        result = json.loads(line)
+        return result if isinstance(result, dict) else None
     except json.JSONDecodeError:
         return None
 
@@ -63,7 +65,9 @@ def extract_content_blocks(
             pending[block["id"]] = block.get("name", "unknown")
             content_type = "tool_use"
         elif btype == "tool_result":
-            pending.pop(block.get("tool_use_id", ""), None)
+            tool_use_id = block.get("tool_use_id")
+            if tool_use_id:
+                pending.pop(tool_use_id, None)
             content_type = "tool_result"
     return text, content_type, pending
 
@@ -119,9 +123,8 @@ def extract_bang_output(pane_text: str, command: str) -> str | None:
     """
     if not pane_text or not command:
         return None
-    cmd_prefix = command[:10]
     for line in pane_text.splitlines():
-        if line.strip().startswith(f"! {cmd_prefix}"):
+        if line.strip().startswith(f"! {command}"):
             return line.strip()
     return None
 
@@ -167,8 +170,8 @@ class JsonlProvider:
     All transcript parsing, terminal status, and command discovery are shared.
     """
 
-    _CAPS: ProviderCapabilities
-    _BUILTINS: dict[str, str] = {}
+    _CAPS: ClassVar[ProviderCapabilities]
+    _BUILTINS: ClassVar[dict[str, str]] = {}
 
     @property
     def capabilities(self) -> ProviderCapabilities:
@@ -179,8 +182,6 @@ class JsonlProvider:
         resume_id: str | None = None,
         use_continue: bool = False,  # noqa: ARG002 — protocol signature
     ) -> str:
-        from ccbot.providers.base import RESUME_ID_RE
-
         if resume_id:
             if not RESUME_ID_RE.match(resume_id):
                 raise ValueError(f"Invalid resume_id: {resume_id!r}")

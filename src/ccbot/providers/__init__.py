@@ -28,11 +28,14 @@ logger = logging.getLogger(__name__)
 _active: AgentProvider | None = None
 
 
-def _ensure_registered() -> None:
-    """Register all known providers into the global registry.
+_registered = False
 
-    Idempotent — ``register()`` silently overwrites, so no guard needed.
-    """
+
+def _ensure_registered() -> None:
+    """Register all known providers into the global registry (once)."""
+    global _registered
+    if _registered:
+        return
     from ccbot.providers.claude import ClaudeProvider
     from ccbot.providers.codex import CodexProvider
     from ccbot.providers.gemini import GeminiProvider
@@ -40,6 +43,7 @@ def _ensure_registered() -> None:
     registry.register("claude", ClaudeProvider)
     registry.register("codex", CodexProvider)
     registry.register("gemini", GeminiProvider)
+    _registered = True
 
 
 def get_provider() -> AgentProvider:
@@ -68,8 +72,9 @@ def get_provider() -> AgentProvider:
 
 def _reset_provider() -> None:
     """Reset the cached provider singleton (for tests only)."""
-    global _active
+    global _active, _registered
     _active = None
+    _registered = False
 
 
 def resolve_capabilities(provider_name: str | None = None) -> ProviderCapabilities:
@@ -81,7 +86,11 @@ def resolve_capabilities(provider_name: str | None = None) -> ProviderCapabiliti
     import Config (which requires TELEGRAM_BOT_TOKEN).
     """
     _ensure_registered()
-    name = provider_name or os.environ.get("CCBOT_PROVIDER", "claude")
+    name = (
+        provider_name
+        if provider_name is not None
+        else os.environ.get("CCBOT_PROVIDER", "claude")
+    )
     try:
         return registry.get(name).capabilities
     except UnknownProviderError:

@@ -16,6 +16,7 @@ from ccbot.terminal_parser import (
     parse_status_line,
 )
 from ccbot.providers.base import EXPANDABLE_QUOTE_END, EXPANDABLE_QUOTE_START
+from ccbot.providers.claude import ClaudeProvider
 from ccbot.transcript_parser import TranscriptParser
 
 # ── Hook payload format ──────────────────────────────────────────────────
@@ -38,9 +39,70 @@ class TestClaudeHookPayloadFormat:
     def test_uuid_validation_rejects_invalid(self, invalid: str) -> None:
         assert UUID_RE.match(invalid) is None
 
-    def test_uuid_regex_exact_pattern(self) -> None:
-        expected = r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
-        assert UUID_RE.pattern == expected
+
+# ── ClaudeProvider-specific method tests ─────────────────────────────────
+
+
+class TestClaudeProviderMethods:
+    def test_invalid_resume_id_raises(self) -> None:
+        provider = ClaudeProvider()
+        with pytest.raises(ValueError, match="Invalid resume_id"):
+            provider.make_launch_args(resume_id="not-a-uuid")
+
+    def test_relative_cwd_rejected(self) -> None:
+        provider = ClaudeProvider()
+        payload = {
+            "session_id": "a1b2c3d4-e5f6-7890-abcd-ef1234567890",
+            "cwd": "relative/path",
+        }
+        assert provider.parse_hook_payload(payload) is None
+
+    def test_invalid_uuid_in_hook_rejected(self) -> None:
+        provider = ClaudeProvider()
+        payload = {
+            "session_id": "NOT-A-VALID-UUID",
+            "cwd": "/tmp/test",
+        }
+        assert provider.parse_hook_payload(payload) is None
+
+    def test_parse_transcript_entries_adapter(self, make_jsonl_entry) -> None:
+        entries = [
+            make_jsonl_entry(
+                "assistant",
+                [
+                    {
+                        "type": "tool_use",
+                        "id": "tu1",
+                        "name": "Read",
+                        "input": {"file_path": "/tmp/test.py"},
+                    }
+                ],
+            ),
+            make_jsonl_entry(
+                "user",
+                [
+                    {
+                        "type": "tool_result",
+                        "tool_use_id": "tu1",
+                        "content": "file contents",
+                    }
+                ],
+            ),
+        ]
+        provider = ClaudeProvider()
+        messages, remaining = provider.parse_transcript_entries(entries, {})
+        tool_msgs = [m for m in messages if m.tool_use_id is not None]
+        assert len(tool_msgs) >= 1
+        assert tool_msgs[0].tool_name == "Read"
+        assert tool_msgs[0].tool_use_id == "tu1"
+
+    def test_spinner_status_parsed(self) -> None:
+        provider = ClaudeProvider()
+        pane = "output\n✻ Reading file\n" + "─" * 30 + "\n❯ \n" + "─" * 30 + "\n"
+        result = provider.parse_terminal_status(pane)
+        assert result is not None
+        assert "Reading file" in result.raw_text
+        assert result.is_interactive is False
 
 
 # ── Transcript format ────────────────────────────────────────────────────

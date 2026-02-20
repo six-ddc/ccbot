@@ -4,8 +4,8 @@ from unittest.mock import patch
 
 import pytest
 
-from ccbot.providers.base import AgentProvider, ProviderCapabilities
-from ccbot.providers.registry import ProviderRegistry, UnknownProviderError, registry
+from ccbot.providers.base import ProviderCapabilities
+from ccbot.providers.registry import ProviderRegistry, UnknownProviderError
 from test_provider_contracts import StubProvider as _StubProvider
 
 # ── Registry tests ──────────────────────────────────────────────────────
@@ -23,16 +23,6 @@ class TestProviderRegistry:
         with pytest.raises(UnknownProviderError, match="nope"):
             reg.get("nope")
 
-    def test_available_lists_registered(self) -> None:
-        reg = ProviderRegistry()
-        reg.register("bravo", _StubProvider)
-        reg.register("alpha", _StubProvider)
-        assert reg.available() == ["alpha", "bravo"]
-
-    def test_available_empty(self) -> None:
-        reg = ProviderRegistry()
-        assert reg.available() == []
-
     def test_register_overwrites(self) -> None:
         class _OtherProvider(_StubProvider):
             _CAPS = ProviderCapabilities(name="other", launch_command="other-cli")
@@ -40,7 +30,6 @@ class TestProviderRegistry:
         reg = ProviderRegistry()
         reg.register("stub", _StubProvider)
         reg.register("stub", _OtherProvider)
-        assert reg.available() == ["stub"]
         assert reg.get("stub").capabilities.name == "other"
 
     def test_get_returns_new_instance_each_call(self) -> None:
@@ -95,17 +84,36 @@ class TestConfigProviderSettings:
 
 
 class TestModuleLevelRegistry:
-    def test_singleton_exists_with_claude(self) -> None:
-        from ccbot.providers import get_provider
+    def test_singleton_exists_with_claude(self, monkeypatch) -> None:
+        from ccbot.providers import _reset_provider, get_provider, registry
 
-        get_provider()
-        assert isinstance(registry, ProviderRegistry)
-        assert "claude" in registry.available()
+        _reset_provider()
+        try:
+            get_provider()
+            assert isinstance(registry, ProviderRegistry)
+            assert "claude" in sorted(registry._providers)
+        finally:
+            _reset_provider()
 
-    def test_stub_satisfies_protocol(self) -> None:
-        assert isinstance(_StubProvider(), AgentProvider)
+    def test_unknown_provider_falls_back_to_claude(self, monkeypatch) -> None:
+        from ccbot.providers import _reset_provider, get_provider
 
-    def test_claude_satisfies_protocol(self) -> None:
-        from ccbot.providers.claude import ClaudeProvider
+        _reset_provider()
+        monkeypatch.setenv("CCBOT_PROVIDER", "doesnotexist")
+        monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test-token")
+        monkeypatch.setenv("ALLOWED_USERS", "123")
+        try:
+            provider = get_provider()
+            assert provider.capabilities.name == "claude"
+        finally:
+            _reset_provider()
 
-        assert isinstance(ClaudeProvider(), AgentProvider)
+    def test_resolve_capabilities_unknown_falls_back(self) -> None:
+        from ccbot.providers import _reset_provider, resolve_capabilities
+
+        _reset_provider()
+        try:
+            caps = resolve_capabilities("nonexistent")
+            assert caps.name == "claude"
+        finally:
+            _reset_provider()

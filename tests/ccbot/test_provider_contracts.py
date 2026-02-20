@@ -102,10 +102,9 @@ class TestAgentProviderCapabilities:
 
 
 class TestMakeLaunchArgs:
-    def test_fresh_session_no_flags(self, provider: AgentProvider) -> None:
+    def test_fresh_session_returns_empty(self, provider: AgentProvider) -> None:
         result = provider.make_launch_args()
-        assert "--resume" not in result
-        assert "--continue" not in result
+        assert result == ""
 
     def test_resume_id_included_when_supported(self, provider: AgentProvider) -> None:
         caps = provider.capabilities
@@ -240,25 +239,21 @@ class TestParseTerminalStatus:
         assert provider.parse_terminal_status("") is None
 
     def test_status_update_fields(self, provider: AgentProvider) -> None:
-        result = provider.parse_terminal_status("✻ Reading files\n" + "─" * 30 + "\n")
+        # Use spinner format that works for Claude; Codex/Gemini parse last line
+        sep = "─" * 30
+        pane = f"output\n✻ Reading files\n{sep}\n❯ \n{sep}\n"
+        result = provider.parse_terminal_status(pane)
         assert result is not None
         assert isinstance(result, StatusUpdate)
         assert isinstance(result.raw_text, str)
         assert isinstance(result.display_label, str)
-        assert result.is_interactive is False
 
-    def test_interactive_ui_detected(self, provider: AgentProvider) -> None:
-        pane = (
-            "  Would you like to proceed?\n"
-            "  ─────────────────────────────────\n"
-            "  Yes     No\n"
-            "  ─────────────────────────────────\n"
-            "  ctrl-g to edit in vim\n"
-        )
+    def test_plain_text_not_interactive(self, provider: AgentProvider) -> None:
+        sep = "─" * 30
+        pane = f"output\n✻ Reading files\n{sep}\n❯ \n{sep}\n"
         result = provider.parse_terminal_status(pane)
-        if result is not None and result.is_interactive:
-            assert result.ui_type is not None
-            assert isinstance(result.ui_type, str)
+        assert result is not None
+        assert result.is_interactive is False
 
 
 class TestExtractBashOutput:

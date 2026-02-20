@@ -15,7 +15,7 @@ Capability descriptor:
 
 import re
 from dataclasses import dataclass
-from typing import Any, Literal, Protocol, runtime_checkable
+from typing import Any, Literal, Protocol
 
 # ── Type aliases for AgentMessage fields ─────────────────────────────────
 MessageRole = Literal["user", "assistant"]
@@ -108,7 +108,6 @@ class ProviderCapabilities:
 # ── Provider protocol ────────────────────────────────────────────────────
 
 
-@runtime_checkable
 class AgentProvider(Protocol):
     """Protocol that every agent CLI provider must satisfy.
 

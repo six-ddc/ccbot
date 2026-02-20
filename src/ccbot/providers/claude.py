@@ -145,11 +145,11 @@ class ClaudeProvider:
 
     def parse_history_entry(self, entry: dict[str, Any]) -> AgentMessage | None:
         """Parse a single transcript entry for history display."""
-        parsed = TranscriptParser.parse_message(entry)
-        if parsed is None or not parsed.text:
-            return None
         raw_role = entry.get("type", "assistant")
         if raw_role not in ("user", "assistant"):
+            return None
+        parsed = TranscriptParser.parse_message(entry)
+        if parsed is None or not parsed.text:
             return None
         role = cast(MessageRole, raw_role)
         # "user"/"assistant" message_type maps to "text"; others pass through.
