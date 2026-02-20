@@ -147,5 +147,22 @@ def sample_pane_status_line():
 
 
 @pytest.fixture
+def sample_pane_settings():
+    """Realistic Claude Code /model picker as captured from tmux."""
+    return (
+        " Select model\n"
+        " Switch between Claude models. Applies to this session and future Claude Code sessions.\n"
+        "\n"
+        "   1. Default (recommended)  Opus 4.6 · Most capable for complex work\n"
+        " ❯ 2. Sonnet                 Sonnet 4.6 · Best for everyday tasks\n"
+        "   3. Haiku                  Haiku 4.5 · Fastest for quick answers\n"
+        "\n"
+        " Use /fast to turn on Fast mode (Opus 4.6 only).\n"
+        "\n"
+        " Enter to confirm · Esc to exit\n"
+    )
+
+
+@pytest.fixture
 def sample_pane_no_ui():
     return "$ echo hello\nhello\n$\n"

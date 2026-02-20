@@ -86,9 +86,14 @@ UI_PATTERNS: list[UIPattern] = [
     ),
     UIPattern(
         name="Settings",
-        top=(re.compile(r"^\s*Settings:.*tab to cycle"),),
+        top=(
+            re.compile(r"^\s*Settings:.*tab to cycle"),
+            re.compile(r"^\s*Select model"),
+        ),
         bottom=(
             re.compile(r"Esc to cancel"),
+            re.compile(r"Esc to exit"),
+            re.compile(r"Enter to confirm"),
             re.compile(r"^\s*Type to filter"),
         ),
     ),

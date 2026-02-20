@@ -142,6 +142,7 @@ CC_COMMANDS: dict[str, str] = {
     "cost": "↗ Show token/cost usage",
     "help": "↗ Show Claude Code help",
     "memory": "↗ Edit CLAUDE.md",
+    "model": "↗ Switch AI model",
 }
 
 
@@ -476,6 +477,11 @@ async def forward_command_handler(
         if cc_slash.strip().lower() == "/clear":
             logger.info("Clearing session for window %s after /clear", display)
             session_manager.clear_window_session(wid)
+
+        # Interactive commands (e.g. /model) render a terminal-based UI
+        # with no JSONL tool_use entry.  The status poller already detects
+        # interactive UIs every 1s (status_polling.py), so no
+        # proactive detection needed here — the poller handles it.
     else:
         await safe_reply(update.message, f"❌ {message}")
 

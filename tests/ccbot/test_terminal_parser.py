@@ -120,6 +120,45 @@ class TestExtractInteractiveContent:
         assert result.name == "Settings"
         assert "Settings:" in result.content
 
+    def test_settings_model_picker(self, sample_pane_settings: str):
+        result = extract_interactive_content(sample_pane_settings)
+        assert result is not None
+        assert result.name == "Settings"
+        assert "Select model" in result.content
+        assert "Sonnet" in result.content
+        assert "Enter to confirm" in result.content
+
+    def test_settings_esc_to_cancel_bottom(self):
+        pane = (
+            "  Settings: press tab to cycle\n"
+            "  ─────\n"
+            "  Model\n"
+            "  ─────\n"
+            "  ● claude-sonnet-4-20250514\n"
+            "  ○ claude-opus-4-20250514\n"
+            "  Esc to cancel\n"
+        )
+        result = extract_interactive_content(pane)
+        assert result is not None
+        assert result.name == "Settings"
+        assert "Esc to cancel" in result.content
+
+    def test_settings_esc_to_exit_bottom(self):
+        pane = (
+            "  Settings: press tab to cycle\n"
+            "  ─────\n"
+            "  Model\n"
+            "  ─────\n"
+            "  ● Default (Opus 4.6)\n"
+            "  ○ claude-sonnet-4-20250514\n"
+            "\n"
+            "  Enter to confirm · Esc to exit\n"
+        )
+        result = extract_interactive_content(pane)
+        assert result is not None
+        assert result.name == "Settings"
+        assert "Enter to confirm" in result.content
+
     @pytest.mark.parametrize(
         "pane",
         [
@@ -144,6 +183,9 @@ class TestIsInteractiveUI:
 
     def test_false_when_no_ui(self, sample_pane_no_ui: str):
         assert is_interactive_ui(sample_pane_no_ui) is False
+
+    def test_settings_is_interactive(self, sample_pane_settings: str):
+        assert is_interactive_ui(sample_pane_settings) is True
 
     def test_false_for_empty_string(self):
         assert is_interactive_ui("") is False
