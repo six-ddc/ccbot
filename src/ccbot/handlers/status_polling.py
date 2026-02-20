@@ -35,8 +35,8 @@ from telegram.constants import ChatAction
 from telegram.error import BadRequest, TelegramError
 
 from ..config import config
+from ..providers import get_provider
 from ..session import session_manager
-from ..terminal_parser import is_interactive_ui, parse_status_line
 from ..tmux_manager import tmux_manager
 from .interactive_ui import (
     clear_interactive_msg,
@@ -286,9 +286,12 @@ async def update_status_message(
     interactive_window = get_interactive_window(user_id, thread_id)
     should_check_new_ui = True
 
+    # Parse terminal status once and reuse the result
+    status = get_provider().parse_terminal_status(pane_text)
+
     if interactive_window == window_id:
         # User is in interactive mode for THIS window
-        if is_interactive_ui(pane_text):
+        if status is not None and status.is_interactive:
             # Interactive UI still showing — skip status update (user is interacting)
             return
         # Interactive UI gone — clear interactive mode, fall through to status check.
@@ -301,12 +304,12 @@ async def update_status_message(
         await clear_interactive_msg(user_id, bot, thread_id)
 
     # Check for permission prompt (interactive UI not triggered via JSONL)
-    if should_check_new_ui and is_interactive_ui(pane_text):
+    if should_check_new_ui and status is not None and status.is_interactive:
         await handle_interactive_ui(bot, user_id, window_id, thread_id)
         return
 
-    # Normal status line check
-    status_line = parse_status_line(pane_text)
+    # Normal status line check — use display_label for formatted text
+    status_line = status.display_label if status and not status.is_interactive else None
 
     # Suppress status message updates for muted/errors_only windows,
     # but only AFTER interactive UI detection, rename sync, and emoji updates above.
@@ -367,7 +370,7 @@ async def _handle_dead_window_notification(
     window_state = session_manager.get_window_state(wid)
     cwd = window_state.cwd or ""
     try:
-        dir_exists = cwd and await asyncio.to_thread(Path(cwd).is_dir)
+        dir_exists = bool(cwd) and await asyncio.to_thread(Path(cwd).is_dir)
     except OSError:
         dir_exists = False
     if dir_exists:

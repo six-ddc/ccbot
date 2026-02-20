@@ -1,7 +1,7 @@
 """Markdown → Telegram MarkdownV2 conversion layer.
 
 Wraps `telegramify_markdown` and adds special handling for expandable
-blockquotes (delimited by sentinel tokens from TranscriptParser).
+blockquotes (delimited by sentinel tokens from providers.base).
 Expandable quotes are escaped and formatted as Telegram >…|| syntax
 separately, so the library doesn't mangle them.
 
@@ -15,12 +15,10 @@ from mistletoe.block_token import BlockCode, remove_token
 from telegramify_markdown import _update_block, escape_latex
 from telegramify_markdown.render import TelegramMarkdownRenderer
 
-from .transcript_parser import TranscriptParser
+from .providers.base import EXPANDABLE_QUOTE_END, EXPANDABLE_QUOTE_START
 
 _EXPQUOTE_RE = re.compile(
-    re.escape(TranscriptParser.EXPANDABLE_QUOTE_START)
-    + r"([\s\S]*?)"
-    + re.escape(TranscriptParser.EXPANDABLE_QUOTE_END)
+    re.escape(EXPANDABLE_QUOTE_START) + r"([\s\S]*?)" + re.escape(EXPANDABLE_QUOTE_END)
 )
 
 # Characters that must be escaped in Telegram MarkdownV2 plain text

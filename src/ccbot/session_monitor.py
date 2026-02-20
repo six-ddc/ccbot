@@ -24,9 +24,9 @@ from telegram.error import TelegramError
 
 from .config import config
 from .monitor_state import MonitorState, TrackedSession
+from .providers import get_provider
 from .session import parse_session_map
 from .tmux_manager import tmux_manager
-from .transcript_parser import TranscriptParser
 from .utils import read_cwd_from_jsonl
 
 _CallbackError = (OSError, RuntimeError, TelegramError)
@@ -230,6 +230,7 @@ class SessionMonitor:
 
         Detects file truncation (e.g. after /clear) and resets offset.
         """
+        provider = get_provider()
         new_entries = []
         try:
             async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
@@ -257,7 +258,7 @@ class SessionMonitor:
                 # likely a partial write; stop and retry next cycle.
                 safe_offset = session.last_byte_offset
                 async for line in f:
-                    data = TranscriptParser.parse_line(line)
+                    data = provider.parse_transcript_line(line)
                     if data:
                         new_entries.append(data)
                         safe_offset = await f.tell()
@@ -325,7 +326,8 @@ class SessionMonitor:
 
         # Parse new entries using the shared logic, carrying over pending tools
         carry = self._pending_tools.get(session_id, {})
-        parsed_entries, remaining = TranscriptParser.parse_entries(
+        provider = get_provider()
+        agent_messages, remaining = provider.parse_transcript_entries(
             new_entries,
             pending_tools=carry,
         )
@@ -334,7 +336,7 @@ class SessionMonitor:
         else:
             self._pending_tools.pop(session_id, None)
 
-        for entry in parsed_entries:
+        for entry in agent_messages:
             if not entry.text:
                 continue
             new_messages.append(

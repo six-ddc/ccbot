@@ -33,8 +33,8 @@ import aiofiles
 
 from .config import config
 from .handlers.callback_data import NOTIFICATION_MODES
+from .providers import get_provider
 from .tmux_manager import tmux_manager
-from .transcript_parser import TranscriptParser
 from .utils import atomic_write_json
 
 logger = logging.getLogger(__name__)
@@ -740,6 +740,7 @@ class SessionManager:
         summary = ""
         last_user_msg = ""
         message_count = 0
+        provider = get_provider()
         try:
             async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
                 async for line in f:
@@ -755,8 +756,8 @@ class SessionManager:
                             if s:
                                 summary = s
                         # Track last user message as fallback
-                        elif TranscriptParser.is_user_message(data):
-                            parsed = TranscriptParser.parse_message(data)
+                        elif provider.is_user_transcript_entry(data):
+                            parsed = provider.parse_history_entry(data)
                             if parsed and parsed.text.strip():
                                 last_user_msg = parsed.text.strip()
                     except json.JSONDecodeError:
@@ -1019,7 +1020,8 @@ class SessionManager:
             return [], 0
 
         # Read JSONL entries (optionally filtered by byte range)
-        entries: list[dict] = []
+        provider = get_provider()
+        entries: list[dict[str, Any]] = []
         try:
             async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
                 if start_byte > 0:
@@ -1036,14 +1038,14 @@ class SessionManager:
                     if not line:
                         break
 
-                    data = TranscriptParser.parse_line(line)
+                    data = provider.parse_transcript_line(line)
                     if data:
                         entries.append(data)
         except OSError:
             logger.exception("Error reading session file %s", file_path)
             return [], 0
 
-        parsed_entries, _ = TranscriptParser.parse_entries(entries)
+        agent_messages, _ = provider.parse_transcript_entries(entries, {})
         all_messages = [
             {
                 "role": e.role,
@@ -1051,7 +1053,7 @@ class SessionManager:
                 "content_type": e.content_type,
                 "timestamp": e.timestamp,
             }
-            for e in parsed_entries
+            for e in agent_messages
         ]
 
         return all_messages, len(all_messages)

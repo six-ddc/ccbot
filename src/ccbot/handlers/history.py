@@ -12,9 +12,9 @@ from typing import Any
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
 
+from ..providers.base import EXPANDABLE_QUOTE_END, EXPANDABLE_QUOTE_START
 from ..session import session_manager
 from ..telegram_sender import split_message
-from ..transcript_parser import TranscriptParser
 from .callback_data import CB_HISTORY_NEXT, CB_HISTORY_PREV
 from .message_sender import safe_edit, safe_reply, safe_send
 
@@ -118,8 +118,8 @@ async def send_history(
             text = f"📋 [{display_name}] No messages yet."
         keyboard = None
     else:
-        _start = TranscriptParser.EXPANDABLE_QUOTE_START
-        _end = TranscriptParser.EXPANDABLE_QUOTE_END
+        _start = EXPANDABLE_QUOTE_START
+        _end = EXPANDABLE_QUOTE_END
 
         if is_unread:
             header = f"📬 [{display_name}] {total} unread messages"

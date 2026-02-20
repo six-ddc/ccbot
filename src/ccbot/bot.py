@@ -39,6 +39,7 @@ from telegram.ext import (
 )
 
 from .cc_commands import get_cc_name, register_commands
+from .providers import get_provider
 from .config import config
 from .handlers.callback_data import (
     CB_DIR_CANCEL,
@@ -693,13 +694,13 @@ async def _handle_new_window(event: NewWindowEvent, bot: Bot) -> None:
 async def post_init(application: Application) -> None:
     global session_monitor, _status_poll_task
 
-    await register_commands(application.bot)
+    await register_commands(application.bot, provider=get_provider())
 
     # Refresh CC commands every 10 minutes (picks up new skills/commands)
     async def _refresh_commands(context: ContextTypes.DEFAULT_TYPE) -> None:
         if context.bot:
             try:
-                await register_commands(context.bot)
+                await register_commands(context.bot, provider=get_provider())
             except _CommandRefreshError:
                 logger.exception("Failed to refresh CC commands, keeping previous menu")
 

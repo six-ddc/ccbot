@@ -11,8 +11,8 @@ Key function:
 """
 
 from ..markdown_v2 import convert_markdown
+from ..providers.base import EXPANDABLE_QUOTE_END, EXPANDABLE_QUOTE_START
 from ..telegram_sender import split_message
-from ..transcript_parser import TranscriptParser
 
 # Max length for user messages before truncation
 _MAX_USER_MSG_LENGTH = 3000
@@ -42,8 +42,8 @@ def build_response_parts(
 
     # Truncate thinking content to keep it compact
     if content_type == "thinking" and is_complete:
-        start_tag = TranscriptParser.EXPANDABLE_QUOTE_START
-        end_tag = TranscriptParser.EXPANDABLE_QUOTE_END
+        start_tag = EXPANDABLE_QUOTE_START
+        end_tag = EXPANDABLE_QUOTE_END
         max_thinking = 500
         if start_tag in text and end_tag in text:
             inner = text[text.index(start_tag) + len(start_tag) : text.index(end_tag)]
@@ -66,7 +66,7 @@ def build_response_parts(
     # If text contains expandable quote sentinels, don't split —
     # the quote must stay atomic. Truncation is handled by
     # _render_expandable_quote in markdown_v2.py.
-    if TranscriptParser.EXPANDABLE_QUOTE_START in text:
+    if EXPANDABLE_QUOTE_START in text:
         if prefix:
             return [convert_markdown(f"{prefix}{separator}{text}")]
         else:

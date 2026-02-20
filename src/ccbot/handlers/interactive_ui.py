@@ -21,8 +21,8 @@ import time
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup, Message
 from telegram.error import BadRequest, RetryAfter, TelegramError
 
+from ..providers import get_provider
 from ..session import session_manager
-from ..terminal_parser import extract_interactive_content, is_interactive_ui
 from ..tmux_manager import tmux_manager
 from .callback_data import (
     CB_ASK_DOWN,
@@ -198,7 +198,8 @@ async def _capture_interactive_content(
         logger.debug("No pane text captured for window_id %s", window_id)
         return None
 
-    if not is_interactive_ui(pane_text):
+    status = get_provider().parse_terminal_status(pane_text)
+    if status is None or not status.is_interactive:
         logger.debug(
             "No interactive UI detected in window_id %s (last 3 lines: %s)",
             window_id,
@@ -206,11 +207,11 @@ async def _capture_interactive_content(
         )
         return None
 
-    content = extract_interactive_content(pane_text)
-    if not content:
+    if not status.ui_type:
+        logger.warning("Interactive status with no ui_type in window_id %s", window_id)
         return None
 
-    return content.name, content.content
+    return status.ui_type, status.raw_text
 
 
 async def handle_interactive_ui(
