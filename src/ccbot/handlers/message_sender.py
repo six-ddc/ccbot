@@ -17,7 +17,7 @@ import time
 from typing import Any
 
 from telegram import Bot, LinkPreviewOptions, Message
-from telegram.error import RetryAfter, TelegramError
+from telegram.error import BadRequest, RetryAfter, TelegramError
 
 from ..markdown_v2 import convert_markdown
 
@@ -89,8 +89,11 @@ async def rate_limit_send_message(
     return await _send_with_fallback(bot, chat_id, text, **kwargs)
 
 
-async def safe_reply(message: Message, text: str, **kwargs: Any) -> Message:
-    """Reply with MarkdownV2, falling back to plain text on failure."""
+async def safe_reply(message: Message, text: str, **kwargs: Any) -> Message | None:
+    """Reply with MarkdownV2, falling back to plain text on failure.
+
+    Returns None if the original message no longer exists (e.g. deleted topic).
+    """
     kwargs.setdefault("link_preview_options", NO_LINK_PREVIEW)
     try:
         return await message.reply_text(
@@ -98,6 +101,11 @@ async def safe_reply(message: Message, text: str, **kwargs: Any) -> Message:
             parse_mode="MarkdownV2",
             **kwargs,
         )
+    except BadRequest as exc:
+        if "not found" in str(exc).lower():
+            logger.warning("Cannot reply: original message gone (%s)", exc)
+            return None
+        raise
     except RetryAfter:
         raise
     except TelegramError:
