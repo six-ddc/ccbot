@@ -3,6 +3,8 @@
 Checks environment, dependencies, and configuration without requiring
 a bot token. With --fix, auto-repairs what it can (install hook, kill orphans).
 
+Provider-aware: reads CCBOT_PROVIDER env to determine which checks apply
+(e.g. hook checks are skipped for providers without hook support).
 No Config import needed — uses utils.ccbot_dir() and subprocess.
 """
 
@@ -15,6 +17,7 @@ from pathlib import Path
 
 from collections.abc import Callable
 
+from .providers import resolve_capabilities
 from .utils import ccbot_dir
 
 _PASS = "pass"
@@ -53,13 +56,13 @@ def _check_tmux() -> tuple[str, str]:
         return _PASS, "tmux found (version unknown)"
 
 
-def _check_claude() -> tuple[str, str]:
-    """Check claude command availability."""
-    claude_cmd = os.environ.get("CLAUDE_COMMAND", "claude")
-    path = shutil.which(claude_cmd)
+def _check_provider_command(launch_command: str) -> tuple[str, str]:
+    """Check provider CLI command availability."""
+    cmd = os.environ.get("CCBOT_PROVIDER_COMMAND", launch_command)
+    path = shutil.which(cmd)
     if path:
-        return _PASS, f"claude found at {path}"
-    return _FAIL, f"'{claude_cmd}' not found in PATH"
+        return _PASS, f"{cmd} found at {path}"
+    return _FAIL, f"'{cmd}' not found in PATH"
 
 
 def _check_tmux_session() -> tuple[str, str]:
@@ -239,18 +242,30 @@ def _fix_orphans(orphans: list[tuple[str, str]], fix: bool) -> None:
 
 def doctor_main(fix: bool = False) -> None:
     """Entry point for `ccbot doctor [--fix]`."""
+    caps = resolve_capabilities()
     has_failures = False
 
-    for check_fn in (_check_tmux, _check_claude, _check_tmux_session):
-        _, _, failed = _run_check(check_fn)
-        has_failures = has_failures or failed
+    print(f"Provider: {caps.name}")
 
-    # Hook check needs special handling for --fix
-    hook_status, hook_msg, hook_installed = _check_hook()
-    _print_check(hook_status, hook_msg)
-    if hook_status == _FAIL:
-        has_failures = True
-        _fix_hook(hook_installed, fix)
+    # Core checks
+    _, _, failed = _run_check(_check_tmux)
+    has_failures = has_failures or failed
+
+    _, _, failed = _run_check(lambda: _check_provider_command(caps.launch_command))
+    has_failures = has_failures or failed
+
+    _, _, failed = _run_check(_check_tmux_session)
+    has_failures = has_failures or failed
+
+    # Hook check — only relevant for providers with hook support
+    if caps.supports_hook:
+        hook_status, hook_msg, hook_installed = _check_hook()
+        _print_check(hook_status, hook_msg)
+        if hook_status == _FAIL:
+            has_failures = True
+            _fix_hook(hook_installed, fix)
+    else:
+        _print_check(_PASS, f"hook check skipped ({caps.name} has no hook support)")
 
     for check_fn in (_check_config_dir, _check_bot_token, _check_allowed_users):
         _, _, failed = _run_check(check_fn)

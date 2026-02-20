@@ -168,6 +168,15 @@ async def resume_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     if not user or not config.is_user_allowed(user.id):
         return
 
+    from ..providers import get_provider
+
+    if not get_provider().capabilities.supports_resume:
+        await safe_reply(
+            update.message,
+            "\u274c Resume is not supported by the current provider.",
+        )
+        return
+
     thread_id = get_thread_id(update)
     if thread_id is None:
         await safe_reply(
@@ -255,8 +264,11 @@ async def _handle_pick(
 
         clear_dead_notification(user_id, thread_id)
 
+    from ..providers import get_provider
+
+    launch_args = get_provider().make_launch_args(resume_id=session_id)
     success, message, created_wname, created_wid = await tmux_manager.create_window(
-        cwd, claude_args=f"--resume {session_id}"
+        cwd, claude_args=launch_args
     )
     if not success:
         await safe_edit(query, f"\u274c {message}")

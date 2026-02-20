@@ -54,26 +54,38 @@ class _SessionEntry:
 
 
 def build_recovery_keyboard(window_id: str) -> InlineKeyboardMarkup:
-    """Build inline keyboard for dead window recovery options."""
+    """Build inline keyboard for dead window recovery options.
+
+    Buttons for Continue and Resume are only shown when the active provider
+    declares support for those capabilities.
+    """
+    from ..providers import get_provider
+
+    caps = get_provider().capabilities
+    options: list[InlineKeyboardButton] = [
+        InlineKeyboardButton(
+            "\U0001f195 Fresh",
+            callback_data=f"{CB_RECOVERY_FRESH}{window_id}"[:64],
+        ),
+    ]
+    if caps.supports_continue:
+        options.append(
+            InlineKeyboardButton(
+                "\u25b6 Continue",
+                callback_data=f"{CB_RECOVERY_CONTINUE}{window_id}"[:64],
+            )
+        )
+    if caps.supports_resume:
+        options.append(
+            InlineKeyboardButton(
+                "\U0001f4c2 Resume",
+                callback_data=f"{CB_RECOVERY_RESUME}{window_id}"[:64],
+            )
+        )
     return InlineKeyboardMarkup(
         [
-            [
-                InlineKeyboardButton(
-                    "\U0001f195 Fresh",
-                    callback_data=f"{CB_RECOVERY_FRESH}{window_id}"[:64],
-                ),
-                InlineKeyboardButton(
-                    "\u25b6 Continue",
-                    callback_data=f"{CB_RECOVERY_CONTINUE}{window_id}"[:64],
-                ),
-                InlineKeyboardButton(
-                    "\U0001f4c2 Resume",
-                    callback_data=f"{CB_RECOVERY_RESUME}{window_id}"[:64],
-                ),
-            ],
-            [
-                InlineKeyboardButton("\u2716 Cancel", callback_data=CB_RECOVERY_CANCEL),
-            ],
+            options,
+            [InlineKeyboardButton("\u2716 Cancel", callback_data=CB_RECOVERY_CANCEL)],
         ]
     )
 
@@ -398,13 +410,16 @@ async def _handle_continue(
         await query.answer("Failed")
         return
 
+    from ..providers import get_provider
+
+    launch_args = get_provider().make_launch_args(use_continue=True)
     await _create_and_bind_window(
         query,
         user_id,
         thread_id,
         cwd,
         context,
-        claude_args="--continue",
+        claude_args=launch_args,
         success_label="Continuing previous session.",
     )
 
@@ -500,13 +515,16 @@ async def _handle_resume_pick(
         await query.answer("Failed")
         return
 
+    from ..providers import get_provider
+
+    launch_args = get_provider().make_launch_args(resume_id=session_id)
     await _create_and_bind_window(
         query,
         user_id,
         thread_id,
         cwd,
         context,
-        claude_args=f"--resume {session_id}",
+        claude_args=launch_args,
         success_label=f"Resuming session: {picked['summary'][:40]}",
     )
 

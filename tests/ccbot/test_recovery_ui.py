@@ -127,6 +127,43 @@ class TestBuildRecoveryKeyboard:
             for btn in row:
                 assert len(btn.callback_data) <= 64
 
+    def test_hides_continue_when_unsupported(self) -> None:
+        with patch("ccbot.providers.get_provider") as mock_gp:
+            caps = mock_gp.return_value.capabilities
+            caps.supports_continue = False
+            caps.supports_resume = True
+            kb = build_recovery_keyboard("@0")
+
+        action_row = kb.inline_keyboard[0]
+        datas = [b.callback_data for b in action_row]
+        assert any(d.startswith(CB_RECOVERY_FRESH) for d in datas)
+        assert not any(d.startswith(CB_RECOVERY_CONTINUE) for d in datas)
+        assert any(d.startswith(CB_RECOVERY_RESUME) for d in datas)
+
+    def test_hides_resume_when_unsupported(self) -> None:
+        with patch("ccbot.providers.get_provider") as mock_gp:
+            caps = mock_gp.return_value.capabilities
+            caps.supports_continue = True
+            caps.supports_resume = False
+            kb = build_recovery_keyboard("@0")
+
+        action_row = kb.inline_keyboard[0]
+        datas = [b.callback_data for b in action_row]
+        assert any(d.startswith(CB_RECOVERY_FRESH) for d in datas)
+        assert any(d.startswith(CB_RECOVERY_CONTINUE) for d in datas)
+        assert not any(d.startswith(CB_RECOVERY_RESUME) for d in datas)
+
+    def test_fresh_only_when_no_continue_or_resume(self) -> None:
+        with patch("ccbot.providers.get_provider") as mock_gp:
+            caps = mock_gp.return_value.capabilities
+            caps.supports_continue = False
+            caps.supports_resume = False
+            kb = build_recovery_keyboard("@0")
+
+        action_row = kb.inline_keyboard[0]
+        assert len(action_row) == 1
+        assert action_row[0].callback_data.startswith(CB_RECOVERY_FRESH)
+
 
 @pytest.fixture(autouse=True)
 def _allow_user():
@@ -615,8 +652,14 @@ class TestRecoveryResumePickCallback:
         update = _make_callback_update(data=f"{CB_RECOVERY_PICK}0")
         user_data = _recovery_user_data()
         user_data[RECOVERY_SESSIONS] = [
-            {"session_id": "sess-abc", "summary": "Fix login bug"},
-            {"session_id": "sess-def", "summary": "Add tests"},
+            {
+                "session_id": "a1b2c3d4-0000-0000-0000-000000000001",
+                "summary": "Fix login bug",
+            },
+            {
+                "session_id": "a1b2c3d4-0000-0000-0000-000000000002",
+                "summary": "Add tests",
+            },
         ]
         ctx = _make_context(user_data)
         query = update.callback_query
@@ -626,7 +669,7 @@ class TestRecoveryResumePickCallback:
             await handle_recovery_callback(query, 100, query.data, update, ctx)
 
         mock_tm.create_window.assert_called_once_with(
-            "/tmp/project", claude_args="--resume sess-abc"
+            "/tmp/project", claude_args="--resume a1b2c3d4-0000-0000-0000-000000000001"
         )
         mock_sm.bind_thread.assert_called_once()
 
@@ -650,8 +693,14 @@ class TestRecoveryResumePickCallback:
         update = _make_callback_update(data=f"{CB_RECOVERY_PICK}1")
         user_data = _recovery_user_data()
         user_data[RECOVERY_SESSIONS] = [
-            {"session_id": "sess-abc", "summary": "Fix login bug"},
-            {"session_id": "sess-def", "summary": "Add tests"},
+            {
+                "session_id": "a1b2c3d4-0000-0000-0000-000000000001",
+                "summary": "Fix login bug",
+            },
+            {
+                "session_id": "a1b2c3d4-0000-0000-0000-000000000002",
+                "summary": "Add tests",
+            },
         ]
         ctx = _make_context(user_data)
         query = update.callback_query
@@ -661,14 +710,14 @@ class TestRecoveryResumePickCallback:
             await handle_recovery_callback(query, 100, query.data, update, ctx)
 
         mock_tm.create_window.assert_called_once_with(
-            "/tmp/project", claude_args="--resume sess-def"
+            "/tmp/project", claude_args="--resume a1b2c3d4-0000-0000-0000-000000000002"
         )
 
     async def test_pick_invalid_index_rejected(self) -> None:
         update = _make_callback_update(data=f"{CB_RECOVERY_PICK}99")
         user_data = _recovery_user_data()
         user_data[RECOVERY_SESSIONS] = [
-            {"session_id": "sess-abc", "summary": "test"},
+            {"session_id": "a1b2c3d4-0000-0000-0000-000000000001", "summary": "test"},
         ]
         ctx = _make_context(user_data)
         query = update.callback_query
@@ -693,7 +742,7 @@ class TestRecoveryResumePickCallback:
         update = _make_callback_update(data=f"{CB_RECOVERY_PICK}0", thread_id=99)
         user_data = _recovery_user_data()
         user_data[RECOVERY_SESSIONS] = [
-            {"session_id": "sess-abc", "summary": "test"},
+            {"session_id": "a1b2c3d4-0000-0000-0000-000000000001", "summary": "test"},
         ]
         ctx = _make_context(user_data)
         query = update.callback_query
@@ -951,7 +1000,7 @@ class TestScanSessionsForCwd:
             "originalPath": resolved,
             "entries": [
                 {
-                    "sessionId": "sess-abc123",
+                    "sessionId": "a1b2c3d4-0000-0000-0000-abc123000000",
                     "fullPath": str(session_file),
                     "projectPath": resolved,
                 }
@@ -964,4 +1013,4 @@ class TestScanSessionsForCwd:
             result = scan_sessions_for_cwd(str(work_dir))
 
         assert len(result) == 1
-        assert result[0].summary == "sess-abc123"
+        assert result[0].summary == "a1b2c3d4-000"

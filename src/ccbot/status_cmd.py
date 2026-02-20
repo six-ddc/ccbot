@@ -60,10 +60,28 @@ def _list_tmux_windows(session_name: str) -> list[dict[str, str]]:
         return []
 
 
+def _capability_summary() -> tuple[str, str]:
+    """Return (provider_name, comma-separated capability flags)."""
+    from .providers import resolve_capabilities
+
+    caps = resolve_capabilities()
+    flags = [
+        label
+        for flag, label in (
+            (caps.supports_hook, "hook"),
+            (caps.supports_resume, "resume"),
+            (caps.supports_continue, "continue"),
+        )
+        if flag
+    ]
+    return caps.name, ", ".join(flags) or "none"
+
+
 def status_main() -> None:
     """Entry point for `ccbot status`."""
     from . import __version__
 
+    provider_name, cap_flags = _capability_summary()
     config_dir = ccbot_dir()
     session_name = _get_tmux_session_name()
 
@@ -88,6 +106,7 @@ def status_main() -> None:
 
     # Output
     print(f"ccbot {__version__}")
+    print(f"Provider: {provider_name} ({cap_flags})")
     print(f"Tmux session: {session_name} ({len(live_windows)} windows)")
     print(f"Monitored sessions: {monitored}")
 

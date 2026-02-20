@@ -171,7 +171,7 @@ class TestScanAllSessions:
             "originalPath": "/tmp/myproj",
             "entries": [
                 {
-                    "sessionId": "sess-abc123",
+                    "sessionId": "a1b2c3d4-0000-0000-0000-abc123000000",
                     "fullPath": str(session_file),
                     "projectPath": "/tmp/myproj",
                 }
@@ -184,7 +184,7 @@ class TestScanAllSessions:
             result = scan_all_sessions()
 
         assert len(result) == 1
-        assert result[0].summary == "sess-abc123"
+        assert result[0].summary == "a1b2c3d4-000"
 
     def test_sorted_by_mtime_descending(self, tmp_path) -> None:
         import time
@@ -445,7 +445,11 @@ class TestResumePickCallback:
         update = _make_callback_update(data=f"{CB_RESUME_PICK}0")
         user_data: dict = {
             RESUME_SESSIONS: [
-                {"session_id": "sess-abc", "summary": "Fix bug", "cwd": "/tmp/proj"},
+                {
+                    "session_id": "a1b2c3d4-0000-0000-0000-000000000001",
+                    "summary": "Fix bug",
+                    "cwd": "/tmp/proj",
+                },
             ],
         }
         ctx = _make_context(user_data)
@@ -456,7 +460,7 @@ class TestResumePickCallback:
             await handle_resume_command_callback(query, 100, query.data, update, ctx)
 
         mock_tm.create_window.assert_called_once_with(
-            "/tmp/proj", claude_args="--resume sess-abc"
+            "/tmp/proj", claude_args="--resume a1b2c3d4-0000-0000-0000-000000000001"
         )
         mock_sm.bind_thread.assert_called_once_with(
             100, 42, "@5", window_name="project"
@@ -483,7 +487,11 @@ class TestResumePickCallback:
         update = _make_callback_update(data=f"{CB_RESUME_PICK}0")
         user_data: dict = {
             RESUME_SESSIONS: [
-                {"session_id": "sess-abc", "summary": "Fix bug", "cwd": "/tmp/proj"},
+                {
+                    "session_id": "a1b2c3d4-0000-0000-0000-000000000001",
+                    "summary": "Fix bug",
+                    "cwd": "/tmp/proj",
+                },
             ],
         }
         ctx = _make_context(user_data)
@@ -505,7 +513,11 @@ class TestResumePickCallback:
         update = _make_callback_update(data=f"{CB_RESUME_PICK}0")
         user_data: dict = {
             RESUME_SESSIONS: [
-                {"session_id": "sess-abc", "summary": "Fix bug", "cwd": "/gone"},
+                {
+                    "session_id": "a1b2c3d4-0000-0000-0000-000000000001",
+                    "summary": "Fix bug",
+                    "cwd": "/gone",
+                },
             ],
         }
         ctx = _make_context(user_data)
@@ -523,7 +535,11 @@ class TestResumePickCallback:
         update = _make_callback_update(data=f"{CB_RESUME_PICK}99")
         user_data: dict = {
             RESUME_SESSIONS: [
-                {"session_id": "sess-abc", "summary": "test", "cwd": "/tmp"},
+                {
+                    "session_id": "a1b2c3d4-0000-0000-0000-000000000001",
+                    "summary": "test",
+                    "cwd": "/tmp",
+                },
             ],
         }
         ctx = _make_context(user_data)
@@ -555,7 +571,11 @@ class TestResumePickCallback:
         update = _make_callback_update(data=f"{CB_RESUME_PICK}0")
         user_data: dict = {
             RESUME_SESSIONS: [
-                {"session_id": "sess-abc", "summary": "test", "cwd": "/tmp"},
+                {
+                    "session_id": "a1b2c3d4-0000-0000-0000-000000000001",
+                    "summary": "test",
+                    "cwd": "/tmp",
+                },
             ],
         }
         ctx = _make_context(user_data)
@@ -587,8 +607,16 @@ class TestResumePickCallback:
         update = _make_callback_update(data=f"{CB_RESUME_PICK}1")
         user_data: dict = {
             RESUME_SESSIONS: [
-                {"session_id": "sess-abc", "summary": "Fix bug", "cwd": "/tmp/proj"},
-                {"session_id": "sess-def", "summary": "Add tests", "cwd": "/tmp/proj"},
+                {
+                    "session_id": "a1b2c3d4-0000-0000-0000-000000000001",
+                    "summary": "Fix bug",
+                    "cwd": "/tmp/proj",
+                },
+                {
+                    "session_id": "a1b2c3d4-0000-0000-0000-000000000002",
+                    "summary": "Add tests",
+                    "cwd": "/tmp/proj",
+                },
             ],
         }
         ctx = _make_context(user_data)
@@ -599,7 +627,7 @@ class TestResumePickCallback:
             await handle_resume_command_callback(query, 100, query.data, update, ctx)
 
         mock_tm.create_window.assert_called_once_with(
-            "/tmp/proj", claude_args="--resume sess-def"
+            "/tmp/proj", claude_args="--resume a1b2c3d4-0000-0000-0000-000000000002"
         )
 
     @patch(f"{_RC}.tmux_manager")
@@ -623,7 +651,11 @@ class TestResumePickCallback:
         update = _make_callback_update(data=f"{CB_RESUME_PICK}0")
         user_data: dict = {
             RESUME_SESSIONS: [
-                {"session_id": "sess-abc", "summary": "Fix bug", "cwd": "/tmp/proj"},
+                {
+                    "session_id": "a1b2c3d4-0000-0000-0000-000000000001",
+                    "summary": "Fix bug",
+                    "cwd": "/tmp/proj",
+                },
             ],
         }
         ctx = _make_context(user_data)
@@ -656,7 +688,11 @@ class TestResumePickCallback:
         update = _make_callback_update(data=f"{CB_RESUME_PICK}0")
         user_data: dict = {
             RESUME_SESSIONS: [
-                {"session_id": "sess-abc", "summary": "Fix bug", "cwd": "/tmp/proj"},
+                {
+                    "session_id": "a1b2c3d4-0000-0000-0000-000000000001",
+                    "summary": "Fix bug",
+                    "cwd": "/tmp/proj",
+                },
             ],
         }
         ctx = _make_context(user_data)
@@ -687,7 +723,11 @@ class TestResumePickCallback:
         update = _make_callback_update(data=f"{CB_RESUME_PICK}0")
         user_data: dict = {
             RESUME_SESSIONS: [
-                {"session_id": "sess-abc", "summary": "Fix bug", "cwd": "/tmp/proj"},
+                {
+                    "session_id": "a1b2c3d4-0000-0000-0000-000000000001",
+                    "summary": "Fix bug",
+                    "cwd": "/tmp/proj",
+                },
             ],
         }
         ctx = _make_context(user_data)
@@ -758,7 +798,11 @@ class TestResumeCancelCallback:
     ) -> None:
         user_data: dict = {
             RESUME_SESSIONS: [
-                {"session_id": "sess-abc", "summary": "test", "cwd": "/tmp"},
+                {
+                    "session_id": "a1b2c3d4-0000-0000-0000-000000000001",
+                    "summary": "test",
+                    "cwd": "/tmp",
+                },
             ],
         }
         update = _make_callback_update(data=CB_RESUME_CANCEL)

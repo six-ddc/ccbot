@@ -100,3 +100,32 @@ class TestStatusMain:
         captured = capsys.readouterr()
         assert "(unbound)" in captured.out
         assert "orphan" in captured.out
+
+    def test_shows_provider_info(self, tmp_path, monkeypatch, capsys) -> None:
+        monkeypatch.setenv("CCBOT_DIR", str(tmp_path))
+        monkeypatch.setenv("CCBOT_PROVIDER", "claude")
+        monkeypatch.setenv("TMUX_SESSION_NAME", "test")
+        monkeypatch.setattr("ccbot.status_cmd._list_tmux_windows", lambda _: [])
+
+        with contextlib.suppress(SystemExit):
+            status_main()
+
+        captured = capsys.readouterr()
+        assert "Provider: claude" in captured.out
+        assert "hook" in captured.out
+        assert "resume" in captured.out
+
+    def test_hookless_provider_capabilities(
+        self, tmp_path, monkeypatch, capsys
+    ) -> None:
+        monkeypatch.setenv("CCBOT_DIR", str(tmp_path))
+        monkeypatch.setenv("CCBOT_PROVIDER", "codex")
+        monkeypatch.setenv("TMUX_SESSION_NAME", "test")
+        monkeypatch.setattr("ccbot.status_cmd._list_tmux_windows", lambda _: [])
+
+        with contextlib.suppress(SystemExit):
+            status_main()
+
+        captured = capsys.readouterr()
+        assert "Provider: codex" in captured.out
+        assert "hook" not in captured.out.split("Provider:")[1].split("\n")[0]
