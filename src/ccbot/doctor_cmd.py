@@ -18,7 +18,7 @@ from pathlib import Path
 from collections.abc import Callable
 
 from .providers import resolve_capabilities
-from .utils import ccbot_dir
+from .utils import ccbot_dir, tmux_session_name
 
 _PASS = "pass"
 _FAIL = "fail"
@@ -34,11 +34,6 @@ def _print_check(status: str, message: str) -> None:
     """Print a single check result."""
     sym = _SYMBOLS.get(status, "?")
     print(f"  {sym} {message}")
-
-
-def _get_tmux_session_name() -> str:
-    """Get tmux session name from env or default."""
-    return os.environ.get("TMUX_SESSION_NAME", "ccbot")
 
 
 def _check_tmux() -> tuple[str, str]:
@@ -67,7 +62,7 @@ def _check_provider_command(launch_command: str) -> tuple[str, str]:
 
 def _check_tmux_session() -> tuple[str, str]:
     """Check if tmux session exists."""
-    session_name = _get_tmux_session_name()
+    session_name = tmux_session_name()
     try:
         result = subprocess.run(
             ["tmux", "has-session", "-t", session_name],
@@ -193,7 +188,7 @@ def _get_known_window_ids(config_dir: Path, session_name: str) -> set[str]:
 
 def _find_orphaned_windows() -> list[tuple[str, str]]:
     """Find tmux windows not bound to any topic and not in session_map."""
-    session_name = _get_tmux_session_name()
+    session_name = tmux_session_name()
     live_windows = _list_live_windows(session_name)
     if not live_windows:
         return []
@@ -227,7 +222,7 @@ def _fix_orphans(orphans: list[tuple[str, str]], fix: bool) -> None:
     """Kill orphaned windows if --fix is set."""
     if not fix:
         return
-    session_name = _get_tmux_session_name()
+    session_name = tmux_session_name()
     for wid, wname in orphans:
         try:
             subprocess.run(

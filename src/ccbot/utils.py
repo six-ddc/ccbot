@@ -2,6 +2,7 @@
 
 Provides:
   - ccbot_dir(): resolve config directory from CCBOT_DIR env var.
+  - tmux_session_name(): resolve tmux session name from env.
   - atomic_write_json(): crash-safe JSON file writes via temp+rename.
   - read_cwd_from_jsonl(): extract the cwd field from the first JSONL entry.
 """
@@ -20,6 +21,11 @@ def ccbot_dir() -> Path:
     """Resolve config directory from CCBOT_DIR env var or default ~/.ccbot."""
     raw = os.environ.get(CCBOT_DIR_ENV, "")
     return Path(raw) if raw else Path.home() / ".ccbot"
+
+
+def tmux_session_name() -> str:
+    """Get tmux session name from TMUX_SESSION_NAME env var or default 'ccbot'."""
+    return os.environ.get("TMUX_SESSION_NAME", "ccbot")
 
 
 def atomic_write_json(path: Path, data: Any, indent: int = 2) -> None:

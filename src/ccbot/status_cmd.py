@@ -9,12 +9,11 @@ No Config import needed — uses utils.ccbot_dir() and subprocess for tmux.
 """
 
 import json
-import os
 import subprocess
 import sys
 from pathlib import Path
 
-from .utils import ccbot_dir
+from .utils import ccbot_dir, tmux_session_name
 
 _TMUX_FORMAT_PARTS = 2
 
@@ -25,11 +24,6 @@ def _read_json(path: Path) -> dict:
         return json.loads(path.read_text()) if path.exists() else {}
     except json.JSONDecodeError, OSError:
         return {}
-
-
-def _get_tmux_session_name() -> str:
-    """Get tmux session name from env or default."""
-    return os.environ.get("TMUX_SESSION_NAME", "ccbot")
 
 
 def _list_tmux_windows(session_name: str) -> list[dict[str, str]]:
@@ -83,7 +77,7 @@ def status_main() -> None:
 
     provider_name, cap_flags = _capability_summary()
     config_dir = ccbot_dir()
-    session_name = _get_tmux_session_name()
+    session_name = tmux_session_name()
 
     # Read state files
     state = _read_json(config_dir / "state.json")

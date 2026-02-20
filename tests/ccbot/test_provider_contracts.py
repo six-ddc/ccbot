@@ -18,17 +18,20 @@ from ccbot.providers.base import (
     SessionStartEvent,
     StatusUpdate,
 )
+from ccbot.providers._jsonl import JsonlProvider
 from ccbot.providers.claude import ClaudeProvider
 from ccbot.providers.codex import CodexProvider
-from ccbot.providers.gemini import (
-    GeminiProvider,
-)  # noqa: F401 (used in PROVIDER_FIXTURES)
+from ccbot.providers.gemini import GeminiProvider
 
 # ── Stub provider (minimal conforming implementation) ────────────────────
 
 
-class StubProvider:
-    """Minimal provider that satisfies AgentProvider for contract testing."""
+class StubProvider(JsonlProvider):
+    """Minimal provider that satisfies AgentProvider for contract testing.
+
+    Extends JsonlProvider with hook support and continue flag to exercise
+    all contract test branches that real hookless providers skip.
+    """
 
     _CAPS = ProviderCapabilities(
         name="stub",
@@ -42,9 +45,7 @@ class StubProvider:
         builtin_commands=("help", "clear"),
     )
 
-    @property
-    def capabilities(self) -> ProviderCapabilities:
-        return self._CAPS
+    _BUILTINS = {"help": "Show help", "clear": "Clear screen"}
 
     def make_launch_args(
         self,
@@ -68,106 +69,6 @@ class StubProvider:
             transcript_path=payload.get("transcript_path", ""),
             window_key=payload.get("window_key", ""),
         )
-
-    def parse_transcript_line(self, line: str) -> dict[str, Any] | None:
-        if not line or not line.strip():
-            return None
-        try:
-            return json.loads(line)
-        except json.JSONDecodeError:
-            return None
-
-    def parse_transcript_entries(
-        self,
-        entries: list[dict[str, Any]],
-        pending_tools: dict[str, Any],
-    ) -> tuple[list[AgentMessage], dict[str, Any]]:
-        messages: list[AgentMessage] = []
-        pending = dict(pending_tools)
-        for entry in entries:
-            msg_type = entry.get("type", "")
-            if msg_type not in ("user", "assistant"):
-                continue
-            content = entry.get("message", {}).get("content", "")
-            text, pending = self._extract_content(content, pending)
-            if text:
-                messages.append(
-                    AgentMessage(
-                        text=text,
-                        role=msg_type,
-                        content_type="text",
-                    )
-                )
-        return messages, pending
-
-    @staticmethod
-    def _extract_content(
-        content: Any, pending: dict[str, Any]
-    ) -> tuple[str, dict[str, Any]]:
-        if isinstance(content, str):
-            return content, pending
-        if not isinstance(content, list):
-            return "", pending
-        text = ""
-        for block in content:
-            if not isinstance(block, dict):
-                continue
-            btype = block.get("type", "")
-            if btype == "text":
-                text += block.get("text", "")
-            elif btype == "tool_use" and block.get("id"):
-                pending[block["id"]] = block.get("name", "unknown")
-            elif btype == "tool_result":
-                pending.pop(block.get("tool_use_id", ""), None)
-        return text, pending
-
-    def parse_terminal_status(self, pane_text: str) -> StatusUpdate | None:
-        if not pane_text or not pane_text.strip():
-            return None
-        return StatusUpdate(
-            raw_text=pane_text.strip(),
-            display_label="…working",
-        )
-
-    def extract_bash_output(self, pane_text: str, command: str) -> str | None:
-        if not pane_text or not command:
-            return None
-        for line in pane_text.splitlines():
-            if line.strip().startswith(f"! {command[:10]}"):
-                return line.strip()
-        return None
-
-    def is_user_transcript_entry(self, entry: dict[str, Any]) -> bool:
-        return entry.get("type") == "user"
-
-    def parse_history_entry(self, entry: dict[str, Any]) -> AgentMessage | None:
-        msg_type = entry.get("type", "")
-        if msg_type not in ("user", "assistant"):
-            return None
-        content = entry.get("message", {}).get("content", "")
-        if isinstance(content, list):
-            text = "".join(
-                b.get("text", "")
-                for b in content
-                if isinstance(b, dict) and b.get("type") == "text"
-            )
-        elif isinstance(content, str):
-            text = content
-        else:
-            text = ""
-        if not text:
-            return None
-        return AgentMessage(
-            text=text,
-            role=msg_type,
-            content_type="text",
-        )
-
-    def discover_commands(self, base_dir: str) -> list[DiscoveredCommand]:
-        return [
-            DiscoveredCommand(name=cmd, description=f"Stub {cmd}", source="builtin")
-            for cmd in self._CAPS.builtin_commands
-        ]
 
 
 # ── Fixtures ─────────────────────────────────────────────────────────────

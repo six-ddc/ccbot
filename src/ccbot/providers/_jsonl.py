@@ -1,8 +1,9 @@
-"""Shared JSONL transcript parsing for providers with content-block format.
+"""Shared JSONL transcript parsing and base class for JSONL-based providers.
 
 Codex and Gemini both use the same JSONL transcript structure (OpenAI-style
-content blocks). This module extracts the common parsing logic so both
-providers delegate here instead of duplicating ~100 lines each.
+content blocks). This module extracts the common parsing logic and provides
+``JsonlProvider`` — a concrete base class that both providers extend with
+only their capabilities and launch args.
 
 Shared helpers:
   - parse_jsonl_line: parse a single JSONL line
@@ -12,6 +13,9 @@ Shared helpers:
   - extract_bang_output: extract ``!`` command output from pane text
   - is_user_entry: check if entry is a human turn
   - parse_jsonl_history_entry: parse a single entry for history display
+
+Base class:
+  - JsonlProvider: hookless provider with JSONL transcripts
 """
 
 import json
@@ -20,7 +24,10 @@ from typing import Any, cast
 from ccbot.providers.base import (
     AgentMessage,
     ContentType,
+    DiscoveredCommand,
     MessageRole,
+    ProviderCapabilities,
+    SessionStartEvent,
     StatusUpdate,
 )
 
@@ -147,3 +154,72 @@ def parse_jsonl_history_entry(entry: dict[str, Any]) -> AgentMessage | None:
         role=cast(MessageRole, msg_type),
         content_type="text",
     )
+
+
+# ── Base class for hookless JSONL providers ──────────────────────────────
+
+
+class JsonlProvider:
+    """Base class for hookless providers that use JSONL transcripts.
+
+    Subclasses must set ``_CAPS`` and ``_BUILTINS``, and override
+    ``make_launch_args`` if their resume syntax differs from ``--resume <id>``.
+    All transcript parsing, terminal status, and command discovery are shared.
+    """
+
+    _CAPS: ProviderCapabilities
+    _BUILTINS: dict[str, str] = {}
+
+    @property
+    def capabilities(self) -> ProviderCapabilities:
+        return self._CAPS
+
+    def make_launch_args(
+        self,
+        resume_id: str | None = None,
+        use_continue: bool = False,  # noqa: ARG002 — protocol signature
+    ) -> str:
+        from ccbot.providers.base import RESUME_ID_RE
+
+        if resume_id:
+            if not RESUME_ID_RE.match(resume_id):
+                raise ValueError(f"Invalid resume_id: {resume_id!r}")
+            return f"--resume {resume_id}"
+        return ""
+
+    def parse_hook_payload(
+        self,
+        payload: dict[str, Any],  # noqa: ARG002 — protocol signature
+    ) -> SessionStartEvent | None:
+        return None
+
+    def parse_transcript_line(self, line: str) -> dict[str, Any] | None:
+        return parse_jsonl_line(line)
+
+    def parse_transcript_entries(
+        self,
+        entries: list[dict[str, Any]],
+        pending_tools: dict[str, Any],
+    ) -> tuple[list[AgentMessage], dict[str, Any]]:
+        return parse_jsonl_entries(entries, pending_tools)
+
+    def parse_terminal_status(self, pane_text: str) -> StatusUpdate | None:
+        return parse_last_line_status(pane_text)
+
+    def extract_bash_output(self, pane_text: str, command: str) -> str | None:
+        return extract_bang_output(pane_text, command)
+
+    def is_user_transcript_entry(self, entry: dict[str, Any]) -> bool:
+        return is_user_entry(entry)
+
+    def parse_history_entry(self, entry: dict[str, Any]) -> AgentMessage | None:
+        return parse_jsonl_history_entry(entry)
+
+    def discover_commands(
+        self,
+        base_dir: str,  # noqa: ARG002 — protocol signature
+    ) -> list[DiscoveredCommand]:
+        return [
+            DiscoveredCommand(name=name, description=desc, source="builtin")
+            for name, desc in self._BUILTINS.items()
+        ]
