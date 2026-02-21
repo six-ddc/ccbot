@@ -143,6 +143,7 @@ CC_COMMANDS: dict[str, str] = {
     "help": "↗ Show Claude Code help",
     "memory": "↗ Edit CLAUDE.md",
     "model": "↗ Switch AI model",
+    "context": "↗ Show context window usage",
 }
 
 
