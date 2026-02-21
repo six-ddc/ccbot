@@ -67,7 +67,18 @@ class Config:
         self.monitor_state_file = self.config_dir / "monitor_state.json"
 
         # Claude Code session monitoring configuration
-        self.claude_projects_path = Path.home() / ".claude" / "projects"
+        # Support custom projects path for Claude variants (e.g., cc-mirror, zai)
+        # Priority: CCBOT_CLAUDE_PROJECTS_PATH > CLAUDE_CONFIG_DIR/projects > default
+        custom_projects_path = os.getenv("CCBOT_CLAUDE_PROJECTS_PATH")
+        claude_config_dir = os.getenv("CLAUDE_CONFIG_DIR")
+
+        if custom_projects_path:
+            self.claude_projects_path = Path(custom_projects_path)
+        elif claude_config_dir:
+            self.claude_projects_path = Path(claude_config_dir) / "projects"
+        else:
+            self.claude_projects_path = Path.home() / ".claude" / "projects"
+
         self.monitor_poll_interval = float(os.getenv("MONITOR_POLL_INTERVAL", "2.0"))
 
         # Display user messages in history and real-time notifications
@@ -76,11 +87,12 @@ class Config:
 
         logger.debug(
             "Config initialized: dir=%s, token=%s..., allowed_users=%d, "
-            "tmux_session=%s",
+            "tmux_session=%s, claude_projects_path=%s",
             self.config_dir,
             self.telegram_bot_token[:8],
             len(self.allowed_users),
             self.tmux_session_name,
+            self.claude_projects_path,
         )
 
     def is_user_allowed(self, user_id: int) -> bool:
