@@ -1,5 +1,7 @@
 """Unit tests for Config — env var loading, validation, and user access."""
 
+from pathlib import Path
+
 import pytest
 
 from ccbot.config import Config
@@ -56,3 +58,35 @@ class TestConfigMissingEnv:
         monkeypatch.setenv("ALLOWED_USERS", "abc")
         with pytest.raises(ValueError, match="non-numeric"):
             Config()
+
+
+@pytest.mark.usefixtures("_base_env")
+class TestConfigClaudeProjectsPath:
+    def test_default_claude_projects_path(self, monkeypatch):
+        """Default path is ~/.claude/projects when no env vars are set."""
+        # Ensure no custom path env vars are set
+        monkeypatch.delenv("CCBOT_CLAUDE_PROJECTS_PATH", raising=False)
+        monkeypatch.delenv("CLAUDE_CONFIG_DIR", raising=False)
+        cfg = Config()
+        assert cfg.claude_projects_path == Path.home() / ".claude" / "projects"
+
+    def test_custom_claude_projects_path(self, monkeypatch):
+        """CCBOT_CLAUDE_PROJECTS_PATH overrides the default path."""
+        custom_path = "/custom/projects/path"
+        monkeypatch.setenv("CCBOT_CLAUDE_PROJECTS_PATH", custom_path)
+        cfg = Config()
+        assert cfg.claude_projects_path == Path(custom_path)
+
+    def test_claude_config_dir_projects_path(self, monkeypatch):
+        """CLAUDE_CONFIG_DIR sets path to $CLAUDE_CONFIG_DIR/projects."""
+        custom_config_dir = "/custom/claude/config"
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", custom_config_dir)
+        cfg = Config()
+        assert cfg.claude_projects_path == Path(custom_config_dir) / "projects"
+
+    def test_ccbot_projects_path_takes_priority(self, monkeypatch):
+        """CCBOT_CLAUDE_PROJECTS_PATH takes priority over CLAUDE_CONFIG_DIR."""
+        monkeypatch.setenv("CCBOT_CLAUDE_PROJECTS_PATH", "/priority/path")
+        monkeypatch.setenv("CLAUDE_CONFIG_DIR", "/lower/priority")
+        cfg = Config()
+        assert cfg.claude_projects_path == Path("/priority/path")
