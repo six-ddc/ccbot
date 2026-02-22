@@ -1,8 +1,7 @@
 """Integration test: verify file watch loop detects JSONL changes in <200ms."""
+
 import asyncio
 import time
-from pathlib import Path
-
 import pytest
 
 from ccbot.monitor_state import TrackedSession

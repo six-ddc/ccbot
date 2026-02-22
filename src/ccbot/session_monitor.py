@@ -474,9 +474,7 @@ class SessionMonitor:
         """
         from .session import session_manager  # avoid circular import
 
-        logger.info(
-            "Housekeeping loop started, interval=%ss", self.poll_interval
-        )
+        logger.info("Housekeeping loop started, interval=%ss", self.poll_interval)
 
         # Startup: clean up stale sessions and initialize session_map snapshot
         await self._cleanup_all_stale_sessions()
@@ -499,9 +497,7 @@ class SessionMonitor:
         Uses OS-level file events (FSEvents on macOS, inotify on Linux) via
         watchfiles. Replaces the time-based polling for the hot path.
         """
-        logger.info(
-            "File watch loop started, watching %s", self.projects_path
-        )
+        logger.info("File watch loop started, watching %s", self.projects_path)
 
         if not self.projects_path.exists():
             logger.warning(
@@ -533,9 +529,7 @@ class SessionMonitor:
                     if session_id not in active_session_ids:
                         continue
 
-                    session_info = SessionInfo(
-                        session_id=session_id, file_path=path
-                    )
+                    session_info = SessionInfo(session_id=session_id, file_path=path)
                     new_messages = await self._process_session_file(
                         session_info, active_session_ids
                     )
