@@ -462,6 +462,34 @@ class SessionMonitor:
 
         return current_map
 
+    async def _housekeeping_loop(self) -> None:
+        """Background loop for session lifecycle management.
+
+        Runs at low frequency (default 10s). Handles session_map changes,
+        session creation/deletion cleanup, and state persistence.
+        Does NOT handle file reading — that's done by _file_watch_loop.
+        """
+        from .session import session_manager  # avoid circular import
+
+        logger.info(
+            "Housekeeping loop started, interval=%ss", self.poll_interval
+        )
+
+        # Startup: clean up stale sessions and initialize session_map snapshot
+        await self._cleanup_all_stale_sessions()
+        self._last_session_map = await self._load_current_session_map()
+
+        while self._running:
+            try:
+                await session_manager.load_session_map()
+                await self._detect_and_cleanup_changes()
+                self.state.save_if_dirty()
+            except Exception as e:
+                logger.error(f"Housekeeping loop error: {e}")
+            await asyncio.sleep(self.poll_interval)
+
+        logger.info("Housekeeping loop stopped")
+
     async def _monitor_loop(self) -> None:
         """Background loop for checking session updates.
 

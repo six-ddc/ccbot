@@ -34,3 +34,25 @@ async def test_process_session_file_emits_message(tmp_path):
     assert len(messages) == 1
     assert messages[0].text == "hello"
     assert messages[0].session_id == "test-session"
+
+
+@pytest.mark.asyncio
+async def test_housekeeping_loop_runs_cleanup(tmp_path):
+    """_housekeeping_loop calls session lifecycle management at least once."""
+    monitor = SessionMonitor(projects_path=tmp_path)
+    monitor._running = True
+
+    cleanup_called = []
+
+    async def fake_cleanup():
+        cleanup_called.append(1)
+        monitor._running = False  # stop after one iteration
+        return {}  # _detect_and_cleanup_changes returns dict
+
+    monitor._detect_and_cleanup_changes = fake_cleanup
+
+    with patch("ccbot.session.session_manager") as mock_sm:
+        mock_sm.load_session_map = AsyncMock()
+        await monitor._housekeeping_loop()
+
+    assert len(cleanup_called) == 1
