@@ -91,6 +91,7 @@ ALLOWED_USERS=your_telegram_user_id
 | `TMUX_SESSION_NAME`     | `ccbot`    | Tmux session name                                |
 | `CLAUDE_COMMAND`        | `claude`   | Command to run in new windows                    |
 | `MONITOR_POLL_INTERVAL` | `2.0`      | Polling interval in seconds                      |
+| `CCBOT_SHOW_HIDDEN_DIRS` | `false` | Show hidden (dot) directories in directory browser |
 
 > If running on a VPS where there's no interactive terminal to approve permissions, consider:
 >

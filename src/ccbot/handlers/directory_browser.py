@@ -17,6 +17,7 @@ from pathlib import Path
 
 from telegram import InlineKeyboardButton, InlineKeyboardMarkup
 
+from ..config import config
 from .callback_data import (
     CB_DIR_CANCEL,
     CB_DIR_CONFIRM,
@@ -118,7 +119,8 @@ def build_directory_browser(
             [
                 d.name
                 for d in path.iterdir()
-                if d.is_dir() and not d.name.startswith(".")
+                if d.is_dir()
+                and (config.show_hidden_dirs or not d.name.startswith("."))
             ]
         )
     except (PermissionError, OSError):

@@ -85,6 +85,11 @@ class Config:
         # When True, user messages are shown with a 👤 prefix
         self.show_user_messages = True
 
+        # Show hidden (dot) directories in directory browser
+        self.show_hidden_dirs = (
+            os.getenv("CCBOT_SHOW_HIDDEN_DIRS", "").lower() == "true"
+        )
+
         logger.debug(
             "Config initialized: dir=%s, token=%s..., allowed_users=%d, "
             "tmux_session=%s, claude_projects_path=%s",
