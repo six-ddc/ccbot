@@ -935,8 +935,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         msg_text, keyboard, subdirs = build_directory_browser(new_path_str)
         if context.user_data is not None:
             context.user_data[BROWSE_DIRS_KEY] = subdirs
-        await safe_edit(query, msg_text, reply_markup=keyboard)
         await query.answer()
+        await safe_edit(query, msg_text, reply_markup=keyboard)
 
     elif data == CB_DIR_UP:
         pending_tid = (
@@ -963,8 +963,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         msg_text, keyboard, subdirs = build_directory_browser(parent_path)
         if context.user_data is not None:
             context.user_data[BROWSE_DIRS_KEY] = subdirs
-        await safe_edit(query, msg_text, reply_markup=keyboard)
         await query.answer()
+        await safe_edit(query, msg_text, reply_markup=keyboard)
 
     elif data.startswith(CB_DIR_PAGE):
         pending_tid = (
@@ -990,8 +990,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         msg_text, keyboard, subdirs = build_directory_browser(current_path, pg)
         if context.user_data is not None:
             context.user_data[BROWSE_DIRS_KEY] = subdirs
-        await safe_edit(query, msg_text, reply_markup=keyboard)
         await query.answer()
+        await safe_edit(query, msg_text, reply_markup=keyboard)
 
     elif data == CB_DIR_CONFIRM:
         default_path = str(Path.cwd())
@@ -1021,6 +1021,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             selected_path
         )
         if success:
+            await query.answer("Created")
             logger.info(
                 "Window created: %s (id=%s) at %s (user=%d, thread=%s)",
                 created_wname,
@@ -1089,11 +1090,11 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 # Should not happen in topic-only mode, but handle gracefully
                 await safe_edit(query, f"✅ {message}")
         else:
+            await query.answer("Failed")
             await safe_edit(query, f"❌ {message}")
             if pending_thread_id is not None and context.user_data is not None:
                 context.user_data.pop("_pending_thread_id", None)
                 context.user_data.pop("_pending_thread_text", None)
-        await query.answer("Created" if success else "Failed")
 
     elif data == CB_DIR_CANCEL:
         pending_tid = (
@@ -1106,8 +1107,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if context.user_data is not None:
             context.user_data.pop("_pending_thread_id", None)
             context.user_data.pop("_pending_thread_text", None)
-        await safe_edit(query, "Cancelled")
         await query.answer("Cancelled")
+        await safe_edit(query, "Cancelled")
 
     # Window picker: bind existing window
     elif data.startswith(CB_WIN_BIND):
@@ -1145,6 +1146,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
         display = w.window_name
         clear_window_picker_state(context.user_data)
+        # Answer the query immediately so Telegram button UI stops spinning
+        await query.answer("Bound")
         session_manager.bind_thread(
             user.id, thread_id, selected_wid, window_name=display
         )
@@ -1184,7 +1187,6 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                     f"❌ Failed to send pending message: {send_msg}",
                     message_thread_id=thread_id,
                 )
-        await query.answer("Bound")
 
     # Window picker: new session → transition to directory browser
     elif data == CB_WIN_NEW:
@@ -1203,8 +1205,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data[BROWSE_PATH_KEY] = start_path
             context.user_data[BROWSE_PAGE_KEY] = 0
             context.user_data[BROWSE_DIRS_KEY] = subdirs
-        await safe_edit(query, msg_text, reply_markup=keyboard)
         await query.answer()
+        await safe_edit(query, msg_text, reply_markup=keyboard)
 
     # Window picker: cancel
     elif data == CB_WIN_CANCEL:
@@ -1218,8 +1220,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         if context.user_data is not None:
             context.user_data.pop("_pending_thread_id", None)
             context.user_data.pop("_pending_thread_text", None)
-        await safe_edit(query, "Cancelled")
         await query.answer("Cancelled")
+        await safe_edit(query, "Cancelled")
 
     # Screenshot: Refresh
     elif data.startswith(CB_SCREENSHOT_REFRESH):
