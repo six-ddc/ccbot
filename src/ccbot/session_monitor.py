@@ -577,3 +577,17 @@ class SessionMonitor:
             self._watch_task = None
         self.state.save()
         logger.info("Session monitor stopped and state saved")
+
+    async def stop_async(self) -> None:
+        """Stop the monitor and wait for all tasks to fully terminate.
+
+        Prefer this over stop() when called from an async context (e.g.
+        post_shutdown) so that the watchfiles background thread is fully
+        cleaned up before Python starts joining threads on exit.
+        """
+        task = self._task
+        watch_task = self._watch_task
+        self.stop()
+        pending = [t for t in (task, watch_task) if t is not None]
+        if pending:
+            await asyncio.gather(*pending, return_exceptions=True)

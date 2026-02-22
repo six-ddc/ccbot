@@ -1560,7 +1560,7 @@ async def post_shutdown(application: Application) -> None:
     await shutdown_workers()
 
     if session_monitor:
-        session_monitor.stop()
+        await session_monitor.stop_async()
         logger.info("Session monitor stopped")
 
 
