@@ -563,61 +563,23 @@ class SessionMonitor:
 
         logger.info("File watch loop stopped")
 
-    async def _monitor_loop(self) -> None:
-        """Background loop for checking session updates.
-
-        Uses simple async polling with aiofiles for non-blocking I/O.
-        """
-        logger.info("Session monitor started, polling every %ss", self.poll_interval)
-
-        # Deferred import to avoid circular dependency (cached once)
-        from .session import session_manager
-
-        # Clean up all stale sessions on startup
-        await self._cleanup_all_stale_sessions()
-        # Initialize last known session_map
-        self._last_session_map = await self._load_current_session_map()
-
-        while self._running:
-            try:
-                # Load hook-based session map updates
-                await session_manager.load_session_map()
-
-                # Detect session_map changes and cleanup replaced/removed sessions
-                current_map = await self._detect_and_cleanup_changes()
-                active_session_ids = set(current_map.values())
-
-                # Check for new messages (all I/O is async)
-                new_messages = await self.check_for_updates(active_session_ids)
-
-                for msg in new_messages:
-                    status = "complete" if msg.is_complete else "streaming"
-                    preview = msg.text[:80] + ("..." if len(msg.text) > 80 else "")
-                    logger.info("[%s] session=%s: %s", status, msg.session_id, preview)
-                    if self._message_callback:
-                        try:
-                            await self._message_callback(msg)
-                        except Exception as e:
-                            logger.error(f"Message callback error: {e}")
-
-            except Exception as e:
-                logger.error(f"Monitor loop error: {e}")
-
-            await asyncio.sleep(self.poll_interval)
-
-        logger.info("Session monitor stopped")
-
     def start(self) -> None:
         if self._running:
             logger.warning("Monitor already running")
             return
         self._running = True
-        self._task = asyncio.create_task(self._monitor_loop())
+        self._stop_event.clear()
+        self._task = asyncio.create_task(self._housekeeping_loop())
+        self._watch_task = asyncio.create_task(self._file_watch_loop())
 
     def stop(self) -> None:
         self._running = False
+        self._stop_event.set()
         if self._task:
             self._task.cancel()
             self._task = None
+        if self._watch_task:
+            self._watch_task.cancel()
+            self._watch_task = None
         self.state.save()
         logger.info("Session monitor stopped and state saved")
