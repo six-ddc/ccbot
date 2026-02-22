@@ -79,7 +79,9 @@ class Config:
         else:
             self.claude_projects_path = Path.home() / ".claude" / "projects"
 
-        self.monitor_poll_interval = float(os.getenv("MONITOR_POLL_INTERVAL", "2.0"))
+        # Housekeeping interval (session lifecycle management). No longer affects
+        # message latency — file changes are detected via OS events (watchfiles).
+        self.monitor_poll_interval = float(os.getenv("MONITOR_POLL_INTERVAL", "10.0"))
 
         # Display user messages in history and real-time notifications
         # When True, user messages are shown with a 👤 prefix
