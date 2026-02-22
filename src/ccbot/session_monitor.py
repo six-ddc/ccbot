@@ -19,6 +19,7 @@ from pathlib import Path
 from typing import Any, Callable, Awaitable
 
 import aiofiles
+import watchfiles
 
 from .config import config
 from .monitor_state import MonitorState, TrackedSession
@@ -76,6 +77,8 @@ class SessionMonitor:
 
         self._running = False
         self._task: asyncio.Task | None = None
+        self._watch_task: asyncio.Task | None = None
+        self._stop_event: asyncio.Event = asyncio.Event()
         self._message_callback: Callable[[NewMessage], Awaitable[None]] | None = None
         # Per-session pending tool_use state carried across poll cycles
         self._pending_tools: dict[str, dict[str, Any]] = {}  # session_id -> pending
@@ -489,6 +492,76 @@ class SessionMonitor:
             await asyncio.sleep(self.poll_interval)
 
         logger.info("Housekeeping loop stopped")
+
+    async def _file_watch_loop(self) -> None:
+        """Background loop for instant JSONL change detection.
+
+        Uses OS-level file events (FSEvents on macOS, inotify on Linux) via
+        watchfiles. Replaces the time-based polling for the hot path.
+        """
+        logger.info(
+            "File watch loop started, watching %s", self.projects_path
+        )
+
+        if not self.projects_path.exists():
+            logger.warning(
+                "projects_path %s does not exist, file watch loop idle",
+                self.projects_path,
+            )
+            while self._running:
+                await asyncio.sleep(5)
+            return
+
+        try:
+            async for changes in watchfiles.awatch(
+                self.projects_path, stop_event=self._stop_event
+            ):
+                if not self._running:
+                    break
+
+                # Use _last_session_map updated by housekeeping loop
+                current_map = self._last_session_map
+                active_session_ids = set(current_map.values())
+
+                for change_type, path_str in changes:
+                    path = Path(path_str)
+                    if path.suffix != ".jsonl":
+                        continue
+
+                    # Derive session_id from filename stem
+                    session_id = path.stem
+                    if session_id not in active_session_ids:
+                        continue
+
+                    session_info = SessionInfo(
+                        session_id=session_id, file_path=path
+                    )
+                    new_messages = await self._process_session_file(
+                        session_info, active_session_ids
+                    )
+
+                    for msg in new_messages:
+                        preview = msg.text[:80] + ("..." if len(msg.text) > 80 else "")
+                        logger.info(
+                            "[complete] session=%s: %s", msg.session_id, preview
+                        )
+                        if self._message_callback:
+                            try:
+                                await self._message_callback(msg)
+                            except Exception as e:
+                                logger.error(f"Message callback error: {e}")
+
+                    self.state.save_if_dirty()
+
+        except Exception as e:
+            if self._running:
+                logger.error("File watch loop error: %s — falling back to no-op", e)
+                logger.warning(
+                    "File watching unavailable. Set MONITOR_POLL_INTERVAL to a "
+                    "lower value and restart to reduce latency."
+                )
+
+        logger.info("File watch loop stopped")
 
     async def _monitor_loop(self) -> None:
         """Background loop for checking session updates.

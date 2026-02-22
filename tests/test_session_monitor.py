@@ -56,3 +56,37 @@ async def test_housekeeping_loop_runs_cleanup(tmp_path):
         await monitor._housekeeping_loop()
 
     assert len(cleanup_called) == 1
+
+
+@pytest.mark.asyncio
+async def test_file_watch_loop_processes_jsonl_change(tmp_path):
+    """_file_watch_loop calls _process_session_file when a .jsonl file changes."""
+    import watchfiles
+
+    monitor = SessionMonitor(projects_path=tmp_path)
+    monitor._running = True
+    monitor._last_session_map = {"@0": "abc-session"}
+
+    processed = []
+
+    async def fake_process(session_info, active_ids):
+        processed.append(session_info.session_id)
+        monitor._running = False  # stop after first event
+        return []
+
+    monitor._process_session_file = fake_process
+
+    # Create the file that the event will point to
+    jsonl_path = tmp_path / "-some-project" / "abc-session.jsonl"
+    jsonl_path.parent.mkdir(parents=True)
+    jsonl_path.touch()
+
+    fake_changes = [(watchfiles.Change.modified, str(jsonl_path))]
+
+    async def fake_awatch(*args, **kwargs):
+        yield fake_changes
+
+    with patch("ccbot.session_monitor.watchfiles.awatch", fake_awatch):
+        await monitor._file_watch_loop()
+
+    assert "abc-session" in processed
