@@ -1410,10 +1410,15 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
     Messages are queued per-user to ensure status messages always appear last.
     Routes via thread_bindings to deliver to the correct topic.
     """
+    # Skip internal thinking messages - don't send to Telegram
+    if msg.content_type == "thinking":
+        logger.debug(f"Skipping thinking message for session {msg.session_id}")
+        return
+
     status = "complete" if msg.is_complete else "streaming"
     logger.info(
         f"handle_new_message [{status}]: session={msg.session_id}, "
-        f"text_len={len(msg.text)}"
+        f"content_type={msg.content_type}, text_len={len(msg.text)}"
     )
 
     # Find users whose thread-bound window matches this session
@@ -1536,9 +1541,11 @@ async def post_init(application: Application) -> None:
     session_monitor = monitor
     logger.info("Session monitor started")
 
-    # Start status polling task
-    _status_poll_task = asyncio.create_task(status_poll_loop(application.bot))
-    logger.info("Status polling task started")
+    # Status polling disabled - status messages ("Brewed", "Forging") are annoying
+    # To re-enable, uncomment the next two lines:
+    # _status_poll_task = asyncio.create_task(status_poll_loop(application.bot))
+    # logger.info("Status polling task started")
+    logger.info("Status polling DISABLED")
 
 
 async def post_shutdown(application: Application) -> None:
