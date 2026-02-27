@@ -2,8 +2,8 @@
 
 Parses captured tmux pane content to detect:
   - Interactive UIs (AskUserQuestion, ExitPlanMode, Permission Prompt,
-    RestoreCheckpoint) via regex-based UIPattern matching with top/bottom
-    delimiters.
+    RestoreCheckpoint, TrustFolder) via regex-based UIPattern matching with
+    top/bottom delimiters.
   - Status line (spinner characters + working text) by scanning from bottom up.
 
 All Claude Code text patterns live here. To support a new UI type or
@@ -96,6 +96,18 @@ UI_PATTERNS: list[UIPattern] = [
             re.compile(r"Enter to confirm"),
             re.compile(r"^\s*Type to filter"),
         ),
+    ),
+    UIPattern(
+        name="TrustFolder",
+        top=(
+            re.compile(r"^\s*Accessing workspace:"),
+            re.compile(r"^\s*Quick safety check:"),
+        ),
+        bottom=(
+            re.compile(r"^\s*Enter to confirm\s*·\s*Esc to cancel"),
+            re.compile(r"^\s*Enter to confirm"),
+        ),
+        min_gap=3,
     ),
 ]
 

@@ -1559,9 +1559,9 @@ async def post_init(application: Application) -> None:
 
     # Status polling disabled - status messages ("Brewed", "Forging") are annoying
     # To re-enable, uncomment the next two lines:
-    # _status_poll_task = asyncio.create_task(status_poll_loop(application.bot))
-    # logger.info("Status polling task started")
-    logger.info("Status polling DISABLED")
+    _status_poll_task = asyncio.create_task(status_poll_loop(application.bot))
+    logger.info("Status polling task started")
+    # logger.info("Status polling DISABLED")
 
 
 async def post_shutdown(application: Application) -> None:
