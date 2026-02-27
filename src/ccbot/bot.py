@@ -1138,6 +1138,22 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.answer(f"Window '{display}' no longer exists", show_alert=True)
             return
 
+        # Wait for SessionStart hook to write session_map entry
+        # This ensures the session is fully initialized before binding
+        # (fixes race condition where bind_thread executes before hook completes)
+        if not await session_manager.wait_for_session_map_entry(selected_wid):
+            logger.warning(
+                "Session map entry not found for window %s (user=%d, thread=%d)",
+                selected_wid,
+                user.id,
+                _get_thread_id(update),
+            )
+            await query.answer(
+                "Session not ready. Please try selecting the window again.",
+                show_alert=True,
+            )
+            return
+
         thread_id = _get_thread_id(update)
         if thread_id is None:
             await query.answer("Not in a topic", show_alert=True)
