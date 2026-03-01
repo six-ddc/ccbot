@@ -1450,6 +1450,22 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.answer(f"Window '{display}' no longer exists", show_alert=True)
             return
 
+        # Wait for SessionStart hook to write session_map entry
+        # This ensures the session is fully initialized before binding
+        # (fixes race condition where bind_thread executes before hook completes)
+        if not await session_manager.wait_for_session_map_entry(selected_wid):
+            logger.warning(
+                "Session map entry not found for window %s (user=%d, thread=%d)",
+                selected_wid,
+                user.id,
+                _get_thread_id(update),
+            )
+            await query.answer(
+                "Session not ready. Please try selecting the window again.",
+                show_alert=True,
+            )
+            return
+
         thread_id = _get_thread_id(update)
         if thread_id is None:
             await query.answer("Not in a topic", show_alert=True)
@@ -1722,10 +1738,15 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
     Messages are queued per-user to ensure status messages always appear last.
     Routes via thread_bindings to deliver to the correct topic.
     """
+    # Skip internal thinking messages - don't send to Telegram
+    if msg.content_type == "thinking":
+        logger.debug(f"Skipping thinking message for session {msg.session_id}")
+        return
+
     status = "complete" if msg.is_complete else "streaming"
     logger.info(
         f"handle_new_message [{status}]: session={msg.session_id}, "
-        f"text_len={len(msg.text)}"
+        f"content_type={msg.content_type}, text_len={len(msg.text)}"
     )
 
     # Find users whose thread-bound window matches this session
@@ -1848,9 +1869,11 @@ async def post_init(application: Application) -> None:
     session_monitor = monitor
     logger.info("Session monitor started")
 
-    # Start status polling task
+    # Status polling disabled - status messages ("Brewed", "Forging") are annoying
+    # To re-enable, uncomment the next two lines:
     _status_poll_task = asyncio.create_task(status_poll_loop(application.bot))
     logger.info("Status polling task started")
+    # logger.info("Status polling DISABLED")
 
 
 async def post_shutdown(application: Application) -> None:
