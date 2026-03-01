@@ -1020,15 +1020,34 @@ async def _create_and_bind_window(
             pending_thread_id,
             resume_session_id,
         )
-        # Wait for Claude Code's SessionStart hook to register in session_map
-        await session_manager.wait_for_session_map_entry(created_wid)
+        # Wait for Claude Code's SessionStart hook to register in session_map.
+        # Resume sessions take longer to start (loading session state), so use
+        # a longer timeout to avoid silently dropping messages.
+        hook_timeout = 15.0 if resume_session_id else 5.0
+        hook_ok = await session_manager.wait_for_session_map_entry(
+            created_wid, timeout=hook_timeout
+        )
 
         # --resume creates a new session_id in the hook, but messages continue
         # writing to the resumed session's JSONL file. Override window_state to
         # track the original session_id so the monitor can route messages back.
         if resume_session_id:
             ws = session_manager.get_window_state(created_wid)
-            if ws.session_id != resume_session_id:
+            if not hook_ok:
+                # Hook timed out — manually populate window_state so the
+                # monitor can still route messages back to this topic.
+                logger.warning(
+                    "Hook timed out for resume window %s, "
+                    "manually setting session_id=%s cwd=%s",
+                    created_wid,
+                    resume_session_id,
+                    selected_path,
+                )
+                ws.session_id = resume_session_id
+                ws.cwd = str(selected_path)
+                ws.window_name = created_wname
+                session_manager._save_state()
+            elif ws.session_id != resume_session_id:
                 logger.info(
                     "Resume override: window %s session_id %s -> %s",
                     created_wid,
