@@ -1,0 +1,37 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Autoloop State",
+  "type": "object",
+  "required": ["active", "lastHeartbeat", "currentCycle"],
+  "properties": {
+    "active": {"type": "boolean"},
+    "startedAt": {"type": "string", "format": "date-time"},
+    "lastHeartbeat": {"type": "string", "format": "date-time"},
+    "currentCycle": {"type": "number"},
+    "cycleTime": {"type": "number"},
+    "queues": {
+      "type": "object",
+      "properties": {
+        "intake": {"type": "number"},
+        "inProgress": {"type": "number"},
+        "review": {"type": "number"},
+        "completed": {"type": "number"},
+        "failed": {"type": "number"}
+      }
+    },
+    "health": {
+      "type": "object",
+      "properties": {
+        "status": {"type": "string"},
+        "diskUsagePercent": {"type": "number"},
+        "memoryUsagePercent": {"type": "number"},
+        "testsPassing": {"type": "boolean"},
+        "gitClean": {"type": "boolean"}
+      }
+    },
+    "lastActions": {
+      "type": "array",
+      "items": {"type": "string"}
+    }
+  }
+}

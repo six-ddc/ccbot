@@ -1,0 +1,70 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Domain Configuration",
+  "type": "object",
+  "required": ["domain", "workspace", "autoloop"],
+  "properties": {
+    "domainId": {"type": "string"},
+    "domain": {
+      "type": "object",
+      "required": ["id", "name", "type"],
+      "properties": {
+        "id": {"type": "string"},
+        "name": {"type": "string"},
+        "type": {"type": "string"},
+        "description": {"type": "string"}
+      }
+    },
+    "workspace": {
+      "type": "object",
+      "required": ["language", "framework"],
+      "properties": {
+        "language": {"type": "string"},
+        "framework": {"type": "string"},
+        "packageManager": {"type": "string"},
+        "testing": {"type": "string"},
+        "versionControl": {"type": "string"}
+      }
+    },
+    "agents": {
+      "type": "array",
+      "items": {"type": "string"}
+    },
+    "routing": {
+      "type": "object",
+      "properties": {
+        "rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "properties": {
+              "pattern": {"type": "string"},
+              "agent": {"type": "string"}
+            }
+          }
+        }
+      }
+    },
+    "routines": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "properties": {
+          "name": {"type": "string"},
+          "schedule": {"type": "string"},
+          "enabled": {"type": "boolean"},
+          "command": {"type": "string"}
+        },
+        "required": ["name", "schedule", "enabled"]
+      }
+    },
+    "autoloop": {
+      "type": "object",
+      "properties": {
+        "cycleTime": {"type": "number"},
+        "enabled": {"type": "boolean"},
+        "concurrentTasks": {"type": "number"}
+      }
+    }
+  }
+}

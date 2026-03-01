@@ -1,0 +1,19 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Routine Task",
+  "type": "object",
+  "required": ["name", "schedule", "enabled", "command"],
+  "properties": {
+    "name": {"type": "string"},
+    "schedule": {"type": "string"},
+    "enabled": {"type": "boolean"},
+    "command": {"type": "string"},
+    "timeout": {"type": "number"},
+    "retryOnFailure": {"type": "boolean"},
+    "maxRetries": {"type": "number"},
+    "alertOnFailure": {"type": "boolean"},
+    "continueOnFailure": {"type": "boolean"},
+    "lastRun": {"type": "string", "format": "date-time"},
+    "lastResult": {"type": "string"}
+  }
+}
