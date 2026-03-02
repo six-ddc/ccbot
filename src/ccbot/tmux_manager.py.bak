@@ -67,40 +67,15 @@ class TmuxManager:
         if session:
             return session
 
-        # Try using libtmux first
-        try:
-            session = self.server.new_session(
-                session_name=self.session_name,
-                start_directory=str(Path.home()),
-            )
-            # If successful and has windows, rename the first window
-            if session and hasattr(session, 'windows') and session.windows:
-                session.windows[0].rename_window(config.tmux_main_window_name)
-            return session
-        except libtmux.exc.TmuxSessionExists:
-            # Session already exists, just get it
-            logger.info(f"Session {self.session_name} already exists, retrieving it")
-            import time
-            for _ in range(5):  # Retry a few times
-                session = self.get_session()
-                if session:
-                    return session
-                time.sleep(0.2)
-            raise Exception(f"Session exists but could not retrieve it")
-        except Exception as e:
-            # Other libtmux failures, try subprocess
-            logger.warning(f"libtmux failed: {e}, using subprocess")
-            import subprocess
-            subprocess.run(['tmux', 'new-session', '-d', '-s', self.session_name])
-            # Get the newly created session
-            self._server = None
-            for _ in range(5):
-                session = self.get_session()
-                if session:
-                    return session
-                import time
-                time.sleep(0.2)
-            raise Exception(f"Failed to retrieve session after subprocess creation")
+        # Create new session with main window named specifically
+        session = self.server.new_session(
+            session_name=self.session_name,
+            start_directory=str(Path.home()),
+        )
+        # Rename the default window to the main window name
+        if session.windows:
+            session.windows[0].rename_window(config.tmux_main_window_name)
+        return session
 
     async def list_windows(self) -> list[TmuxWindow]:
         """List all windows in the session with their working directories.
