@@ -12,8 +12,10 @@ Core responsibilities:
     Unbound topics trigger the directory browser to create a new session.
   - Photo handling: photos sent by user are downloaded and forwarded
     to Claude Code as file paths (photo_handler).
+  - Voice handling: voice messages are transcribed via Whisper and
+    forwarded as text to Claude Code (voice_handler).
   - Automatic cleanup: closing a topic kills the associated window
-    (topic_closed_handler). Unsupported content (stickers, voice, etc.)
+    (topic_closed_handler). Unsupported content (stickers, etc.)
     is rejected with a warning (unsupported_content_handler).
   - Bot lifecycle management: post_init, post_shutdown, create_bot.
 
@@ -124,6 +126,7 @@ from .screenshot import text_to_image
 from .session import session_manager
 from .session_monitor import NewMessage, SessionMonitor
 from .terminal_parser import extract_bash_output
+from .transcribe import TranscriptionDisabled, TranscriptionError, transcribe
 from .tmux_manager import tmux_manager
 from .utils import ccbot_dir
 
@@ -499,7 +502,7 @@ async def unsupported_content_handler(
     logger.debug("Unsupported content from user %d", user.id)
     await safe_reply(
         update.message,
-        "⚠ Only text messages are supported. Images, stickers, voice, and other media cannot be forwarded to Claude Code.",
+        "⚠ Only text, photo, and voice messages are supported. Stickers and other media cannot be forwarded to Claude Code.",
     )
 
 
@@ -507,8 +510,12 @@ async def unsupported_content_handler(
 _IMAGES_DIR = ccbot_dir() / "images"
 _IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
+# --- Audio directory for incoming voice messages ---
+_AUDIO_DIR = ccbot_dir() / "audio"
+_AUDIO_DIR.mkdir(parents=True, exist_ok=True)
 
-async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+
+async def photo_handler(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
     """Handle photos sent by the user: download and forward path to Claude Code."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
@@ -577,6 +584,83 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     # Confirm to user
     await safe_reply(update.message, "📷 Image sent to Claude Code.")
+
+
+async def voice_handler(update: Update, _context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle voice messages: download, transcribe, and forward text to Claude Code."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        if update.message:
+            await safe_reply(update.message, "You are not authorized to use this bot.")
+        return
+
+    if not update.message or not update.message.voice:
+        return
+
+    chat = update.message.chat
+    thread_id = _get_thread_id(update)
+    if chat.type in ("group", "supergroup") and thread_id is not None:
+        session_manager.set_group_chat_id(user.id, thread_id, chat.id)
+
+    if thread_id is None:
+        await safe_reply(
+            update.message,
+            "❌ Please use a named topic. Create a new topic to start a session.",
+        )
+        return
+
+    wid = session_manager.get_window_for_thread(user.id, thread_id)
+    if wid is None:
+        await safe_reply(
+            update.message,
+            "❌ No session bound to this topic. Send a text message first to create one.",
+        )
+        return
+
+    w = await tmux_manager.find_window_by_id(wid)
+    if not w:
+        display = session_manager.get_display_name(wid)
+        session_manager.unbind_thread(user.id, thread_id)
+        await safe_reply(
+            update.message,
+            f"❌ Window '{display}' no longer exists. Binding removed.\n"
+            "Send a message to start a new session.",
+        )
+        return
+
+    # Download the voice file
+    voice = update.message.voice
+    tg_file = await voice.get_file()
+    filename = f"{int(time.time())}_{voice.file_unique_id}.ogg"
+    file_path = _AUDIO_DIR / filename
+    await tg_file.download_to_drive(file_path)
+
+    # Transcribe
+    try:
+        await update.message.chat.send_action(ChatAction.TYPING)
+        text = await transcribe(file_path)
+    except TranscriptionDisabled as e:
+        await safe_reply(update.message, f"🎤 Voice not available: {e}")
+        return
+    except TranscriptionError as e:
+        await safe_reply(update.message, f"❌ Transcription failed: {e}")
+        return
+    except Exception:
+        logger.exception("Unexpected transcription error")
+        await safe_reply(update.message, "❌ Transcription failed unexpectedly.")
+        return
+
+    # Clean up audio file
+    file_path.unlink(missing_ok=True)
+
+    # Show transcription to user
+    await safe_reply(update.message, f'🎤 "{text}"')
+
+    # Forward to Claude Code
+    clear_status_msg_info(user.id, thread_id)
+    success, message = await session_manager.send_to_window(wid, text)
+    if not success:
+        await safe_reply(update.message, f"❌ {message}")
 
 
 # Active bash capture tasks: (user_id, thread_id) → asyncio.Task
@@ -1593,7 +1677,9 @@ def create_bot() -> Application:
     )
     # Photos: download and forward file path to Claude Code
     application.add_handler(MessageHandler(filters.PHOTO, photo_handler))
-    # Catch-all: non-text content (stickers, voice, etc.)
+    # Voice messages: transcribe and forward text to Claude Code
+    application.add_handler(MessageHandler(filters.VOICE, voice_handler))
+    # Catch-all: non-text content (stickers, etc.)
     application.add_handler(
         MessageHandler(
             ~filters.COMMAND & ~filters.TEXT & ~filters.StatusUpdate.ALL,

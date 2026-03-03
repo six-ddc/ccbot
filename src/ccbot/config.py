@@ -90,6 +90,17 @@ class Config:
             os.getenv("CCBOT_SHOW_HIDDEN_DIRS", "").lower() == "true"
         )
 
+        # Voice transcription settings
+        self.whisper_backend: str = os.getenv("CCBOT_WHISPER_BACKEND", "local").lower()
+        if self.whisper_backend not in ("local", "openai", "off"):
+            logger.warning(
+                "Unknown CCBOT_WHISPER_BACKEND=%r, defaulting to 'off'",
+                self.whisper_backend,
+            )
+            self.whisper_backend = "off"
+        self.whisper_model: str = os.getenv("CCBOT_WHISPER_MODEL", "base")
+        self.openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
+
         logger.debug(
             "Config initialized: dir=%s, token=%s..., allowed_users=%d, "
             "tmux_session=%s, claude_projects_path=%s",

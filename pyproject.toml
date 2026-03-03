@@ -25,6 +25,12 @@ dev = [
     "pytest-cov>=6.0",
     "ruff>=0.8.0",
 ]
+voice = [
+    "faster-whisper>=1.0.0",
+]
+voice-openai = [
+    "openai>=1.0.0",
+]
 
 [build-system]
 requires = ["hatchling"]
