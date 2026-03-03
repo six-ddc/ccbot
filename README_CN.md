@@ -147,6 +147,7 @@ uv run ccbot
 | `/history` | 当前话题的消息历史 |
 | `/screenshot` | 截取终端屏幕 |
 | `/esc` | 发送 Escape 键中断 Claude |
+| `/kill` | 终止会话并解绑当前话题 |
 
 **Claude Code 命令（通过 tmux 转发）：**
 
@@ -178,7 +179,8 @@ uv run ccbot
 
 **关闭会话：**
 
-在 Telegram 中关闭（或删除）话题，关联的 tmux 窗口会自动终止，绑定也会被移除。
+在话题里使用 `/kill`，可终止该话题绑定的 tmux 窗口并解绑话题。  
+也可以在 Telegram 中关闭（或删除）话题：关联的 tmux 窗口同样会自动终止，绑定会被移除。
 
 ### 消息历史
 
