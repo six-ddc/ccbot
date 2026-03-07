@@ -117,3 +117,36 @@ class TestConfigOpenAI:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-secret")
         Config()
         assert os.environ.get("OPENAI_API_KEY") is None
+
+
+@pytest.mark.usefixtures("_base_env")
+class TestConfigStatusThrottle:
+    def test_default_intervals(self, monkeypatch):
+        monkeypatch.delenv("STATUS_THROTTLE_INTERVALS", raising=False)
+        cfg = Config()
+        assert cfg.status_throttle_intervals == (1.0, 5.0, 30.0)
+
+    def test_custom_intervals(self, monkeypatch):
+        monkeypatch.setenv("STATUS_THROTTLE_INTERVALS", "2,10,60")
+        cfg = Config()
+        assert cfg.status_throttle_intervals == (2.0, 10.0, 60.0)
+
+    def test_disable_throttle(self, monkeypatch):
+        monkeypatch.setenv("STATUS_THROTTLE_INTERVALS", "1,1,1")
+        cfg = Config()
+        assert cfg.status_throttle_intervals == (1.0, 1.0, 1.0)
+
+    def test_invalid_format_uses_defaults(self, monkeypatch):
+        monkeypatch.setenv("STATUS_THROTTLE_INTERVALS", "bad,input")
+        cfg = Config()
+        assert cfg.status_throttle_intervals == (1.0, 5.0, 30.0)
+
+    def test_wrong_count_uses_defaults(self, monkeypatch):
+        monkeypatch.setenv("STATUS_THROTTLE_INTERVALS", "1,5")
+        cfg = Config()
+        assert cfg.status_throttle_intervals == (1.0, 5.0, 30.0)
+
+    def test_negative_value_uses_defaults(self, monkeypatch):
+        monkeypatch.setenv("STATUS_THROTTLE_INTERVALS", "1,-5,30")
+        cfg = Config()
+        assert cfg.status_throttle_intervals == (1.0, 5.0, 30.0)

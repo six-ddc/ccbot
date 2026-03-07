@@ -84,6 +84,26 @@ class Config:
 
         self.monitor_poll_interval = float(os.getenv("MONITOR_POLL_INTERVAL", "2.0"))
 
+        # Adaptive throttle for timer-based status lines.
+        # Three comma-separated intervals (seconds) for elapsed-time tiers:
+        #   tier 1 (0–10 s), tier 2 (10–60 s), tier 3 (60 s+)
+        # Default "1,5,30" means: real-time for first 10 s, then every 5 s,
+        # then every 30 s.  Set to "1,1,1" to disable throttling.
+        self.status_throttle_intervals: tuple[float, float, float] = (1.0, 5.0, 30.0)
+        raw = os.getenv("STATUS_THROTTLE_INTERVALS", "")
+        if raw:
+            try:
+                parts = [float(x.strip()) for x in raw.split(",")]
+                if len(parts) != 3 or any(p < 0 for p in parts):
+                    raise ValueError("need exactly 3 non-negative numbers")
+                self.status_throttle_intervals = (parts[0], parts[1], parts[2])
+            except ValueError as e:
+                logger.warning(
+                    "Invalid STATUS_THROTTLE_INTERVALS=%r (%s), using defaults",
+                    raw,
+                    e,
+                )
+
         # Display user messages in history and real-time notifications
         # When True, user messages are shown with a 👤 prefix
         self.show_user_messages = True
