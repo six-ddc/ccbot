@@ -19,7 +19,13 @@ from .utils import ccbot_dir
 logger = logging.getLogger(__name__)
 
 # Env vars that must not leak to child processes (e.g. Claude Code via tmux)
-SENSITIVE_ENV_VARS = {"TELEGRAM_BOT_TOKEN", "ALLOWED_USERS", "OPENAI_API_KEY", "OPENAI_BASE_URL", "DEEPGRAM_API_KEY"}
+SENSITIVE_ENV_VARS = {
+    "TELEGRAM_BOT_TOKEN",
+    "ALLOWED_USERS",
+    "OPENAI_API_KEY",
+    "OPENAI_BASE_URL",
+    "DEEPGRAM_API_KEY",
+}
 
 
 def _getbool(key: str, default: bool) -> bool:
@@ -89,11 +95,19 @@ class Config:
         else:
             self.claude_projects_path = Path.home() / ".claude" / "projects"
 
-        self.monitor_poll_interval = max(0.5, float(os.getenv("MONITOR_POLL_INTERVAL", "2.0")))
+        self.monitor_poll_interval = max(
+            0.5, float(os.getenv("MONITOR_POLL_INTERVAL", "2.0"))
+        )
 
         self.show_user_messages = _getbool("CCBOT_SHOW_USER_MESSAGES", False)
         self.clean_output = _getbool("CCBOT_CLEAN_OUTPUT", True)
         self.show_hidden_dirs = _getbool("CCBOT_SHOW_HIDDEN_DIRS", False)
+
+        # Idle reminder: seconds of user inactivity after Claude responds
+        # before sending a reminder. 0 = disabled.
+        self.idle_reminder_seconds = max(
+            0, int(os.getenv("CCBOT_IDLE_REMINDER_SECONDS", "120"))
+        )
 
         # Directory browser navigation boundaries
         # Comma-separated list of allowed root directories; defaults to home dir
@@ -126,10 +140,9 @@ class Config:
             os.environ.pop(var, None)
 
         logger.debug(
-            "Config initialized: dir=%s, token=%s..., allowed_users=%d, "
+            "Config initialized: dir=%s, allowed_users=%d, "
             "tmux_session=%s, claude_projects_path=%s, allowed_roots=%s",
             self.config_dir,
-            "<redacted>",
             len(self.allowed_users),
             self.tmux_session_name,
             self.claude_projects_path,

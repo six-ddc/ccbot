@@ -43,4 +43,14 @@
 - Files changed: src/ccbot/bot.py, CHANGELOG.md
 - Lines: +115/-0
 - Security: semgrep 0 findings, extension allowlist, sensitive name blocklist, 20MB size limit
+- Commit: 4e954ea
+
+## Cycle 5: Idle Detection + Smart Re-notification
+- Date: 2026-03-15
+- Role sequence: Researcher > Validator (Sequential Thinking) > Architect > Developer > Auditor
+- Idea source: Deep analysis of Claude-Code-Remote competitor (push notifications on task completion), gap analysis (no way to know Claude finished when user is away)
+- Validation: APPROVED — solves real daily problem (missed Claude responses), configurable, architecturally clean (integrates into existing status_poll_loop)
+- Files changed: src/ccbot/bot.py, src/ccbot/config.py, src/ccbot/handlers/status_polling.py, CHANGELOG.md
+- Lines: +60/-5 across 3 source files
+- Security: semgrep found 1 issue (credential-in-log in config.py) — FIXED by removing token reference from debug log. Final scan: 0 findings.
 - Commit: pending

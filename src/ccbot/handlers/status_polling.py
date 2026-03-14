@@ -23,6 +23,7 @@ import time
 from telegram import Bot
 from telegram.error import BadRequest
 
+from ..config import config
 from ..session import session_manager
 from ..terminal_parser import is_interactive_ui, parse_status_line
 from ..tmux_manager import tmux_manager
@@ -45,6 +46,25 @@ TOPIC_CHECK_INTERVAL = 60.0  # seconds
 # Grace period before auto-killing a window whose Claude process exited
 _exit_detected_at: dict[str, float] = {}
 _EXIT_GRACE_PERIOD = 5.0
+
+# Idle reminder tracking: (user_id, thread_id) → timestamp
+_last_user_activity: dict[tuple[int, int], float] = {}
+_last_claude_response: dict[tuple[int, int], float] = {}
+_idle_reminder_sent: set[tuple[int, int]] = set()
+
+
+def record_user_activity(user_id: int, thread_id: int) -> None:
+    """Record that the user sent a message. Resets idle reminder."""
+    key = (user_id, thread_id)
+    _last_user_activity[key] = time.monotonic()
+    _idle_reminder_sent.discard(key)
+
+
+def record_claude_response(user_id: int, thread_id: int) -> None:
+    """Record that Claude sent a text response (not tool_use/status)."""
+    key = (user_id, thread_id)
+    _last_claude_response[key] = time.monotonic()
+    _idle_reminder_sent.discard(key)
 
 
 async def update_status_message(
@@ -199,15 +219,20 @@ async def status_poll_loop(bot: Bot) -> None:
                         await clear_topic_state(user_id, thread_id, bot)
                         logger.info(
                             "Claude exited in '%s' (%s), killed (user=%d, thread=%d)",
-                            display, wid, user_id, thread_id,
+                            display,
+                            wid,
+                            user_id,
+                            thread_id,
                         )
                         resolved_chat = session_manager.resolve_chat_id(
                             user_id, thread_id
                         )
                         try:
                             from .message_sender import safe_send
+
                             await safe_send(
-                                bot, resolved_chat,
+                                bot,
+                                resolved_chat,
                                 f"Сессия '{display}' завершена.\n"
                                 "Напиши сюда чтобы начать новую или возобновить.",
                                 message_thread_id=thread_id,
@@ -236,6 +261,41 @@ async def status_poll_loop(bot: Bot) -> None:
                         f"Status update error for user {user_id} "
                         f"thread {thread_id}: {e}"
                     )
+            # Idle reminder: if Claude responded but user hasn't replied
+            if config.idle_reminder_seconds > 0:
+                now_idle = time.monotonic()
+                for user_id, thread_id, wid in list(
+                    session_manager.iter_thread_bindings()
+                ):
+                    key = (user_id, thread_id)
+                    if key in _idle_reminder_sent:
+                        continue
+                    claude_ts = _last_claude_response.get(key, 0.0)
+                    user_ts = _last_user_activity.get(key, 0.0)
+                    if claude_ts <= 0 or claude_ts <= user_ts:
+                        continue
+                    if now_idle - claude_ts < config.idle_reminder_seconds:
+                        continue
+                    _idle_reminder_sent.add(key)
+                    resolved_chat = session_manager.resolve_chat_id(user_id, thread_id)
+                    try:
+                        from .message_sender import safe_send
+
+                        await safe_send(
+                            bot,
+                            resolved_chat,
+                            "Claude ожидает ваш ответ.",
+                            message_thread_id=thread_id,
+                        )
+                        logger.info(
+                            "Idle reminder sent (user=%d, thread=%d, idle=%ds)",
+                            user_id,
+                            thread_id,
+                            int(now_idle - claude_ts),
+                        )
+                    except Exception:
+                        pass
+
         except Exception as e:
             logger.error(f"Status poll loop error: {e}")
 

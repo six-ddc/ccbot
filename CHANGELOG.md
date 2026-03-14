@@ -1,5 +1,16 @@
 # Changelog
 
+## [Fork] 2026-03-15 — Idle Detection + Smart Re-notification
+
+When Claude finishes responding and the user doesn't reply within 2 minutes, the bot sends a reminder: "Claude ожидает ваш ответ." This solves the problem of missed Claude responses when the user is away.
+
+- Tracks `last_user_activity` and `last_claude_response` per session
+- Sends ONE reminder per idle period (resets when user replies)
+- Configurable: `CCBOT_IDLE_REMINDER_SECONDS` (default 120, 0 = disabled)
+- Also fixed semgrep credential-in-log finding in config.py (removed token reference from log format)
+
+---
+
 ## [Fork] 2026-03-15 — Document Upload Handler
 
 Users can now send files (code, configs, PDFs, docs) to Claude Code via Telegram:

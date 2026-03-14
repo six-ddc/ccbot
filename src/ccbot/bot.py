@@ -131,7 +131,11 @@ from .handlers.message_sender import (
 )
 from .markdown_v2 import convert_markdown
 from .handlers.response_builder import build_response_parts
-from .handlers.status_polling import status_poll_loop
+from .handlers.status_polling import (
+    record_claude_response,
+    record_user_activity,
+    status_poll_loop,
+)
 from .screenshot import text_to_image
 from .session import session_manager
 from .session_monitor import NewMessage, SessionMonitor
@@ -1388,6 +1392,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await safe_reply(update.message, f"❌ {message}")
         return
 
+    record_user_activity(user.id, thread_id)
+
     # Start background capture for ! bash command output
     if text.startswith("!") and len(text) > 1:
         bash_cmd = text[1:]  # strip leading "!"
@@ -2287,6 +2293,9 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 thread_id=thread_id,
                 image_data=msg.image_data,
             )
+
+            if msg.content_type == "text" and thread_id is not None:
+                record_claude_response(user_id, thread_id)
 
             # Update user's read offset to current file position
             # This marks these messages as "read" for this user
