@@ -86,7 +86,15 @@ class Config:
 
         # Display user messages in history and real-time notifications
         # When True, user messages are shown with a 👤 prefix
-        self.show_user_messages = True
+        self.show_user_messages = (
+            os.getenv("CCBOT_SHOW_USER_MESSAGES", "true").lower() != "false"
+        )
+
+        # Show tool call notifications (tool_use/tool_result) in Telegram
+        # When False, only text responses, thinking, and interactive prompts are sent
+        self.show_tool_calls = (
+            os.getenv("CCBOT_SHOW_TOOL_CALLS", "true").lower() != "false"
+        )
 
         # Show hidden (dot) directories in directory browser
         self.show_hidden_dirs = (

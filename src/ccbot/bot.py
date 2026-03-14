@@ -1767,6 +1767,10 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         if get_interactive_msg_id(user_id, thread_id):
             await clear_interactive_msg(user_id, bot, thread_id)
 
+        # Skip tool call notifications when CCBOT_SHOW_TOOL_CALLS=false
+        if not config.show_tool_calls and msg.content_type in ("tool_use", "tool_result"):
+            continue
+
         parts = build_response_parts(
             msg.text,
             msg.is_complete,
