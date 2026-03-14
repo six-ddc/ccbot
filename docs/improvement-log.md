@@ -63,4 +63,14 @@
 - Files changed: src/ccbot/bot.py, src/ccbot/config.py, CHANGELOG.md
 - Lines: +55/-5
 - Security: semgrep 0 findings, no new attack surface (uses existing send_to_window sanitization)
+- Commit: 01cf1fe
+
+## Cycle 7: Rich Progress Status (Live Tool Activity Display)
+- Date: 2026-03-15
+- Role sequence: Researcher (deep architecture analysis) > Validator (Sequential Thinking) > Architect > Developer > Auditor
+- Idea source: Core UX gap — clean_output mode showed "⏳ Работаю…" black box for minutes with zero visibility. Bridges Claude Code TUI status bar experience to Telegram.
+- Validation: APPROVED — transforms UX from black-box to transparent, uses existing data (tool_use entries) and delivery (edit_message_text), zero message spam
+- Files changed: src/ccbot/session_monitor.py, CHANGELOG.md
+- Lines: +70/-8
+- Security: semgrep 0 findings, no new attack surface (display-only formatting of existing data)
 - Commit: pending

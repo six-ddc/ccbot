@@ -30,8 +30,32 @@ from .utils import read_cwd_from_jsonl
 logger = logging.getLogger(__name__)
 
 _WRITE_TOOL_RE = re.compile(r"\*\*Write\*\*\(([^)]+)\)")
-_SENDABLE_EXTS = {".md", ".txt", ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".csv", ".html", ".htm", ".rtf", ".epub"}
-_SENSITIVE_NAMES = {".env", "credentials", "id_rsa", "id_ed25519", "id_dsa", ".netrc", ".pgpass", "session_map.json", "state.json", "monitor_state.json"}
+_SENDABLE_EXTS = {
+    ".md",
+    ".txt",
+    ".pdf",
+    ".docx",
+    ".doc",
+    ".xlsx",
+    ".xls",
+    ".csv",
+    ".html",
+    ".htm",
+    ".rtf",
+    ".epub",
+}
+_SENSITIVE_NAMES = {
+    ".env",
+    "credentials",
+    "id_rsa",
+    "id_ed25519",
+    "id_dsa",
+    ".netrc",
+    ".pgpass",
+    "session_map.json",
+    "state.json",
+    "monitor_state.json",
+}
 
 
 @dataclass
@@ -55,6 +79,55 @@ class NewMessage:
     tool_name: str | None = None  # For tool_use messages, the tool name
     image_data: list[tuple[str, bytes]] | None = None  # From tool_result images
     file_path: str | None = None  # File to send to Telegram (from Write tool)
+
+
+def _format_tool_status(tool_name: str | None, tool_text: str) -> str:
+    """Convert a tool_use entry into a human-readable progress status line.
+
+    Maps tool names to emoji + short description. Extracts file path or
+    command preview from the tool summary text for context.
+    """
+    if not tool_name:
+        return "⏳ Работаю…"
+
+    # Extract first argument (file path or command) from summary text
+    # Tool summaries look like: "**Read**(src/main.py)" or "**Bash**(`ls -la`)"
+    arg = ""
+    if "(" in tool_text and ")" in tool_text:
+        start = tool_text.index("(") + 1
+        end = tool_text.rindex(")")
+        raw = tool_text[start:end].strip("`* ")
+        if raw:
+            # Truncate long args
+            arg = raw[:60] + "…" if len(raw) > 60 else raw
+
+    status_map: dict[str, str] = {
+        "Read": f"📖 Читаю {arg}" if arg else "📖 Читаю файл",
+        "Write": f"✏️ Пишу {arg}" if arg else "✏️ Пишу файл",
+        "Edit": f"✏️ Редактирую {arg}" if arg else "✏️ Редактирую",
+        "Bash": f"⚡ {arg}" if arg else "⚡ Выполняю команду",
+        "Grep": f"🔍 Ищу: {arg}" if arg else "🔍 Поиск по коду",
+        "Glob": f"🔍 Ищу файлы: {arg}" if arg else "🔍 Поиск файлов",
+        "Agent": f"🤖 Агент: {arg}" if arg else "🤖 Запуск агента",
+        "WebSearch": f"🌐 Ищу в интернете: {arg}" if arg else "🌐 Веб-поиск",
+        "WebFetch": "🌐 Загружаю страницу",
+        "NotebookEdit": f"📓 Редактирую ноутбук: {arg}" if arg else "📓 Ноутбук",
+    }
+
+    if tool_name in status_map:
+        return status_map[tool_name]
+
+    # MCP tools: "mcp__server__tool" → show tool name
+    if tool_name.startswith("mcp__"):
+        parts = tool_name.split("__")
+        short = parts[-1] if len(parts) >= 3 else tool_name
+        return f"🔌 {short}"
+
+    # Thinking
+    if tool_name == "thinking":
+        return "🧠 Думаю…"
+
+    return f"⏳ {tool_name}"
 
 
 class SessionMonitor:
@@ -92,6 +165,8 @@ class SessionMonitor:
         self._file_mtimes: dict[str, float] = {}  # session_id -> last_seen_mtime
         # Track sessions with active "working" status to avoid re-emitting
         self._working_status_active: set[str] = set()  # session_ids
+        # Last emitted tool status text per session (for dedup)
+        self._last_tool_status: dict[str, str] = {}  # session_id -> status text
 
     def set_message_callback(
         self, callback: Callable[[NewMessage], Awaitable[None]]
@@ -365,12 +440,27 @@ class SessionMonitor:
                     if config.clean_output:
                         # In clean mode: skip tool spam, thinking, local commands
                         if entry.content_type in (
-                            "tool_use", "tool_result", "thinking", "local_command",
+                            "tool_use",
+                            "tool_result",
+                            "thinking",
+                            "local_command",
                         ):
                             has_working_entries = True
+                            # Track rich tool status for progress display
+                            if entry.content_type in ("tool_use", "thinking"):
+                                tool_status = _format_tool_status(
+                                    entry.tool_name
+                                    if entry.content_type == "tool_use"
+                                    else "thinking",
+                                    entry.text,
+                                )
+                                self._last_tool_status[session_info.session_id] = (
+                                    tool_status
+                                )
                             # Still pass through interactive tools (permissions, questions)
                             if entry.tool_name in (
-                                "AskUserQuestion", "ExitPlanMode",
+                                "AskUserQuestion",
+                                "ExitPlanMode",
                             ):
                                 new_messages.append(
                                     NewMessage(
@@ -405,7 +495,9 @@ class SessionMonitor:
                                 if m:
                                     fpath = m.group(1)
                                     try:
-                                        resolved = Path(fpath.strip()).expanduser().resolve()
+                                        resolved = (
+                                            Path(fpath.strip()).expanduser().resolve()
+                                        )
                                     except (OSError, ValueError):
                                         continue
                                     if config.allowed_roots:
@@ -460,25 +552,42 @@ class SessionMonitor:
                         for m in new_messages
                     )
                     if has_text_for_session:
-                        # Claude responded with text — clear working flag
+                        # Claude responded with text — clear working state
                         self._working_status_active.discard(sid)
-                    elif has_working_entries and sid not in self._working_status_active:
-                        # First batch of tool work — emit status once
-                        self._working_status_active.add(sid)
-                        new_messages.append(
-                            NewMessage(
-                                session_id=sid,
-                                text="⏳ Работаю…",
-                                is_complete=True,
-                                content_type="status",
-                                role="assistant",
+                        self._last_tool_status.pop(sid, None)
+                    elif has_working_entries:
+                        status_text = self._last_tool_status.get(sid, "⏳ Работаю…")
+                        # Emit status: always on first appearance,
+                        # or when tool changed (update in-place via enqueue)
+                        if sid not in self._working_status_active:
+                            self._working_status_active.add(sid)
+                            new_messages.append(
+                                NewMessage(
+                                    session_id=sid,
+                                    text=status_text,
+                                    is_complete=True,
+                                    content_type="status",
+                                    role="assistant",
+                                )
                             )
-                        )
+                        else:
+                            # Tool changed — emit updated status
+                            new_messages.append(
+                                NewMessage(
+                                    session_id=sid,
+                                    text=status_text,
+                                    is_complete=True,
+                                    content_type="status",
+                                    role="assistant",
+                                )
+                            )
 
                 self.state.update_session(tracked)
 
             except Exception as e:
-                logger.error("Error processing session %s: %s", session_info.session_id, e)
+                logger.error(
+                    "Error processing session %s: %s", session_info.session_id, e
+                )
 
         self.state.save_if_dirty()
         return new_messages

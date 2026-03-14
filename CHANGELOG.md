@@ -1,5 +1,21 @@
 # Changelog
 
+## [Fork] 2026-03-15 — Rich Progress Status (Live Tool Activity Display)
+
+In clean output mode, instead of showing just "⏳ Работаю…", the bot now displays what Claude is actually doing in real-time:
+
+- `📖 Читаю src/auth.py` — when Claude reads a file
+- `✏️ Редактирую config.ts` — when Claude edits code
+- `⚡ npm test` — when Claude runs a command
+- `🔍 Ищу: authentication` — when Claude searches code
+- `🤖 Агент: code review` — when Claude launches a sub-agent
+- `🧠 Думаю…` — when Claude is reasoning
+- `🔌 tool_name` — for MCP tool calls
+
+Status updates in-place via `edit_message_text` — zero message spam. Updates on each new tool call, clears when Claude responds with text.
+
+---
+
 ## [Fork] 2026-03-15 — Multi-message Input Batching
 
 When a user sends multiple messages rapidly (within 1.5 seconds), they are now combined into a single prompt before being sent to Claude Code. This prevents Claude from processing each message as a separate prompt, which caused fragmented responses and wasted context.
