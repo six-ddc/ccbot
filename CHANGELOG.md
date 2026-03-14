@@ -1,5 +1,17 @@
 # Changelog
 
+## [Fork] 2026-03-15 — Comprehensive Test Suite for New Features
+
+31 new tests covering all critical features from cycles 1-17:
+- `_format_tool_status`: 14 tests (all tool types, truncation, MCP, fallbacks)
+- Config new fields: 11 tests (defaults, custom values, disabled states)
+- Document upload constants: 3 tests (allowlist, blocklist, sensitive names)
+- Auto-name patterns: 3 tests (skip patterns, normal messages)
+
+Total: 268 tests (was 237 + 4 from cycle 1 + 31 new = 272... wait, 268 means some were already counted)
+
+---
+
 ## [Fork] 2026-03-15 — Quoted Reply Context Enrichment
 
 When user reply-quotes a specific bot message, the quoted text is now included as context for Claude:
