@@ -33,4 +33,14 @@
 - Files changed: src/ccbot/bot.py, src/ccbot/main.py, CHANGELOG.md
 - Lines: +50/-1
 - Security: semgrep 0 findings (290 rules), same auth/rate limit/sanitization as text_handler
+- Commit: c35bdd9
+
+## Cycle 4: Document Upload Handler
+- Date: 2026-03-15
+- Role sequence: Researcher > Validator > Architect > Developer > Auditor
+- Idea source: Gap analysis — documents fell into unsupported_content_handler, users couldn't share code/configs/PDFs with Claude
+- Validation: APPROVED — high daily-use value, follows photo_handler pattern, strong security (allowlist + blocklist + size limit)
+- Files changed: src/ccbot/bot.py, CHANGELOG.md
+- Lines: +115/-0
+- Security: semgrep 0 findings, extension allowlist, sensitive name blocklist, 20MB size limit
 - Commit: pending

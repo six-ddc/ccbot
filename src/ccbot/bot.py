@@ -624,8 +624,82 @@ async def unsupported_content_handler(
     )
 
 
-# --- Image directory for incoming photos ---
+# --- Image and document directories for incoming files ---
 _IMAGES_DIR = ccbot_dir() / "images"
+_DOCS_DIR = ccbot_dir() / "documents"
+
+# Allowed extensions for incoming document uploads (no executables)
+_RECEIVABLE_DOC_EXTS = {
+    ".txt",
+    ".md",
+    ".csv",
+    ".json",
+    ".yaml",
+    ".yml",
+    ".toml",
+    ".xml",
+    ".ini",
+    ".cfg",
+    ".py",
+    ".js",
+    ".ts",
+    ".tsx",
+    ".jsx",
+    ".html",
+    ".htm",
+    ".css",
+    ".scss",
+    ".sh",
+    ".bash",
+    ".zsh",
+    ".fish",
+    ".rs",
+    ".go",
+    ".java",
+    ".kt",
+    ".c",
+    ".cpp",
+    ".h",
+    ".hpp",
+    ".cs",
+    ".rb",
+    ".php",
+    ".swift",
+    ".r",
+    ".sql",
+    ".lua",
+    ".vim",
+    ".pdf",
+    ".docx",
+    ".doc",
+    ".xlsx",
+    ".xls",
+    ".rtf",
+    ".epub",
+    ".env.example",
+    ".gitignore",
+    ".dockerignore",
+    ".editorconfig",
+    ".log",
+    ".patch",
+    ".diff",
+}
+
+# Sensitive filenames that must never be accepted
+_SENSITIVE_UPLOAD_NAMES = {
+    ".env",
+    "credentials",
+    "credentials.json",
+    "id_rsa",
+    "id_ed25519",
+    "id_dsa",
+    ".netrc",
+    ".pgpass",
+    "secrets.yaml",
+    "secrets.yml",
+}
+
+_MAX_DOCUMENT_SIZE = 20 * 1024 * 1024  # 20 MB
 
 # Rate limiting for user input to tmux (defense against compromised accounts)
 _user_rate: dict[int, list[float]] = defaultdict(list)
@@ -658,6 +732,7 @@ def _check_rate_limit(user_id: int) -> bool:
 
 
 _IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+_DOCS_DIR.mkdir(parents=True, exist_ok=True)
 
 
 # Message ID → (thread_id, window_id, timestamp) tracking for reaction routing
@@ -921,6 +996,106 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     await safe_reply(update.message, f'"{text}"')
+
+
+async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle document uploads: download and forward file path to Claude Code.
+
+    Accepts common text, code, and document formats. Blocks executables
+    and sensitive filenames. Files are saved to ~/.ccbot/documents/.
+    """
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        if update.message:
+            await safe_reply(update.message, "Нет доступа.")
+        return
+    if not _check_rate_limit(user.id):
+        if update.message:
+            await safe_reply(update.message, "Слишком много сообщений. Подожди минуту.")
+        return
+
+    if not update.message or not update.message.document:
+        return
+
+    doc = update.message.document
+    filename = doc.file_name or "unnamed"
+    file_ext = Path(filename).suffix.lower()
+
+    # Block sensitive filenames
+    if filename.lower() in _SENSITIVE_UPLOAD_NAMES:
+        await safe_reply(
+            update.message,
+            "Этот файл содержит потенциально чувствительные данные и не принимается.",
+        )
+        return
+
+    # Check extension allowlist
+    if file_ext not in _RECEIVABLE_DOC_EXTS:
+        await safe_reply(
+            update.message,
+            f"Формат {file_ext or '(без расширения)'} не поддерживается.\n"
+            "Поддерживаются: текст, код, документы (pdf, docx, md, py, js, json и др.).",
+        )
+        return
+
+    # Check size
+    if doc.file_size and doc.file_size > _MAX_DOCUMENT_SIZE:
+        await safe_reply(update.message, "Файл слишком большой (максимум 20 МБ).")
+        return
+
+    chat = update.message.chat
+    thread_id = _get_thread_id(update)
+    if chat.type in ("group", "supergroup") and thread_id is not None:
+        session_manager.set_group_chat_id(user.id, thread_id, chat.id)
+
+    if thread_id is None:
+        await safe_reply(
+            update.message,
+            "Используй именованный топик. Создай новый топик для старта сессии.",
+        )
+        return
+
+    wid = session_manager.get_window_for_thread(user.id, thread_id)
+    if wid is None:
+        await safe_reply(
+            update.message,
+            "Нет привязанной сессии. Сначала отправь текстовое сообщение.",
+        )
+        return
+
+    w = await tmux_manager.find_window_by_id(wid)
+    if not w:
+        display = session_manager.get_display_name(wid)
+        session_manager.unbind_thread(user.id, thread_id)
+        await safe_reply(
+            update.message,
+            f"Окно '{display}' больше не существует. Привязка удалена.\n"
+            "Отправь сообщение чтобы начать новую сессию.",
+        )
+        return
+
+    # Download document
+    tg_file = await doc.get_file()
+    safe_filename = f"{int(time.time())}_{filename}"
+    file_path = _DOCS_DIR / safe_filename
+    await tg_file.download_to_drive(file_path)
+
+    # Build message for Claude Code
+    caption = update.message.caption or ""
+    if caption:
+        text_to_send = f"{caption}\n\n(document attached: {file_path})"
+    else:
+        text_to_send = f"(document attached: {file_path})"
+
+    await update.message.chat.send_action(ChatAction.TYPING)
+    clear_status_msg_info(user.id, thread_id)
+
+    success, message = await session_manager.send_to_window(wid, text_to_send)
+    if not success:
+        await safe_reply(update.message, f"Ошибка: {message}")
+        return
+
+    await safe_reply(update.message, f"Документ '{filename}' отправлен в Claude Code.")
 
 
 # Active bash capture tasks: (user_id, thread_id) → asyncio.Task
@@ -2288,6 +2463,8 @@ def create_bot() -> Application:
     application.add_handler(MessageHandler(filters.PHOTO, photo_handler))
     # Voice: transcribe via OpenAI and forward text to Claude Code
     application.add_handler(MessageHandler(filters.VOICE, voice_handler))
+    # Documents: download and forward file path to Claude Code
+    application.add_handler(MessageHandler(filters.Document.ALL, document_handler))
     # Catch-all: non-text content (stickers, video, etc.)
     application.add_handler(
         MessageHandler(

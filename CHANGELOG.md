@@ -1,5 +1,17 @@
 # Changelog
 
+## [Fork] 2026-03-15 — Document Upload Handler
+
+Users can now send files (code, configs, PDFs, docs) to Claude Code via Telegram:
+- Downloads document to `~/.ccbot/documents/` with timestamp prefix
+- Forwards file path + optional caption to Claude Code session
+- Extension allowlist: 50+ formats (code, text, documents — no executables)
+- Sensitive filename blocklist (`.env`, credentials, keys)
+- Size limit: 20 MB
+- Same auth, rate limiting, and input validation as other handlers
+
+---
+
 ## [Fork] 2026-03-15 — Message Edit Forwarding
 
 When a user edits a previously sent message in Telegram, the corrected text is now forwarded to Claude Code with a "(Исправление)" prefix. Previously, edits were silently ignored.
