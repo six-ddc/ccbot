@@ -138,7 +138,7 @@ from .terminal_parser import extract_bash_output, is_interactive_ui
 from .tmux_manager import tmux_manager
 from .transcribe import close_client as close_transcribe_client
 from .transcribe import transcribe_voice
-from .utils import ccbot_dir
+from .utils import ccbot_dir, read_and_clear_shutdown_marker, write_shutdown_marker
 
 logger = logging.getLogger(__name__)
 
@@ -583,11 +583,16 @@ def _check_rate_limit(user_id: int) -> bool:
     _rate_cleanup_counter += 1
     if _rate_cleanup_counter >= 50:
         _rate_cleanup_counter = 0
-        stale = [uid for uid, ts in _user_rate.items()
-                 if not ts or now - max(ts) > 2 * _RATE_LIMIT_WINDOW]
+        stale = [
+            uid
+            for uid, ts in _user_rate.items()
+            if not ts or now - max(ts) > 2 * _RATE_LIMIT_WINDOW
+        ]
         for uid in stale:
             del _user_rate[uid]
     return True
+
+
 _IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
 
@@ -606,7 +611,7 @@ def _track_message_thread(message_id: int, thread_id: int, window_id: str) -> No
             del _msg_thread_map[mid]
         if len(_msg_thread_map) > 10000:
             oldest = sorted(_msg_thread_map, key=lambda k: _msg_thread_map[k][2])
-            for mid in oldest[:len(_msg_thread_map) - 5000]:
+            for mid in oldest[: len(_msg_thread_map) - 5000]:
                 del _msg_thread_map[mid]
 
 
@@ -674,7 +679,10 @@ async def reaction_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if success:
                 logger.info(
                     "Reaction %s -> '%s' sent to window %s (thread=%d, exact match)",
-                    emoji, message_text, wid, thread_id,
+                    emoji,
+                    message_text,
+                    wid,
+                    thread_id,
                 )
             return
 
@@ -688,7 +696,10 @@ async def reaction_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             if success:
                 logger.info(
                     "Reaction %s -> '%s' sent to window %s (thread=%d, fallback)",
-                    emoji, message_text, wid, thread_id,
+                    emoji,
+                    message_text,
+                    wid,
+                    thread_id,
                 )
             break
 
@@ -847,6 +858,7 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     await safe_reply(update.message, f'"{text}"')
 
+
 # Active bash capture tasks: (user_id, thread_id) → asyncio.Task
 _bash_capture_tasks: dict[tuple[int, int], asyncio.Task[None]] = {}
 
@@ -966,10 +978,16 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     # Smart TG file request detection: append hint for Claude
     _TG_SEND_PATTERNS = (
-        "пришли в тг", "пришли файл в тг", "отправь в тг",
-        "скинь в тг", "кинь в тг", "кинь файл в тг",
-        "скинь файл в тг", "отправь файл в тг",
-        "пришли в телеграм", "отправь в телеграм",
+        "пришли в тг",
+        "пришли файл в тг",
+        "отправь в тг",
+        "скинь в тг",
+        "кинь в тг",
+        "кинь файл в тг",
+        "скинь файл в тг",
+        "отправь файл в тг",
+        "пришли в телеграм",
+        "отправь в телеграм",
         "скинь в телеграм",
     )
     text_lower = text.lower()
@@ -1463,7 +1481,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         selected = Path(selected_path).expanduser().resolve()
         if config.allowed_roots:
             if not any(selected.is_relative_to(root) for root in config.allowed_roots):
-                await query.answer("Путь за пределами разрешённых директорий", show_alert=True)
+                await query.answer(
+                    "Путь за пределами разрешённых директорий", show_alert=True
+                )
                 return
 
         # Check for existing sessions in this directory
@@ -1595,7 +1615,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data.get(UNBOUND_WINDOWS_KEY, []) if context.user_data else []
         )
         if idx < 0 or idx >= len(cached_windows):
-            await query.answer("Список окон изменился, попробуй ещё раз", show_alert=True)
+            await query.answer(
+                "Список окон изменился, попробуй ещё раз", show_alert=True
+            )
             return
         selected_wid = cached_windows[idx]
 
@@ -1603,7 +1625,9 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         w = await tmux_manager.find_window_by_id(selected_wid)
         if not w:
             display = session_manager.get_display_name(selected_wid)
-            await query.answer(f"Окно '{display}' больше не существует", show_alert=True)
+            await query.answer(
+                f"Окно '{display}' больше не существует", show_alert=True
+            )
             return
 
         thread_id = _get_thread_id(update)
@@ -1951,7 +1975,9 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                         await bot.send_document(**send_kwargs)
                     logger.info(
                         "Sent file %s to chat %d thread %s",
-                        fpath.name, resolved_chat, thread_id,
+                        fpath.name,
+                        resolved_chat,
+                        thread_id,
                     )
                 except Exception as e:
                     logger.error("Failed to send file %s: %s", fpath, e)
@@ -2042,9 +2068,47 @@ async def post_init(application: Application) -> None:
     _status_poll_task = asyncio.create_task(status_poll_loop(application.bot))
     logger.info("Status polling task started")
 
+    # Check if previous shutdown was clean and notify users
+    shutdown_ts = read_and_clear_shutdown_marker()
+    if shutdown_ts:
+        logger.info(f"Clean restart detected (shutdown at {shutdown_ts})")
+        notified = 0
+        for user_id, thread_id, _window_id in session_manager.iter_thread_bindings():
+            chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+            try:
+                await application.bot.send_message(
+                    chat_id=chat_id,
+                    message_thread_id=thread_id,
+                    text="Бот снова в сети. Ваши сессии восстановлены.",
+                )
+                notified += 1
+            except Exception as exc:
+                logger.debug(f"Startup notify failed for thread {thread_id}: {exc}")
+        if notified:
+            logger.info(f"Notified {notified} topic(s) about restart")
+
 
 async def post_shutdown(application: Application) -> None:
     global _status_poll_task
+
+    # Notify all bound topics that the bot is shutting down
+    notified = 0
+    for user_id, thread_id, _window_id in session_manager.iter_thread_bindings():
+        chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+        try:
+            await application.bot.send_message(
+                chat_id=chat_id,
+                message_thread_id=thread_id,
+                text="Бот перезапускается. Ваши сессии сохранены.",
+            )
+            notified += 1
+        except Exception as exc:
+            logger.debug(f"Shutdown notify failed for thread {thread_id}: {exc}")
+    if notified:
+        logger.info(f"Notified {notified} topic(s) about shutdown")
+
+    # Write clean shutdown marker
+    write_shutdown_marker()
 
     # Stop status polling
     if _status_poll_task:

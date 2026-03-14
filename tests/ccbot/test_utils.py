@@ -1,11 +1,17 @@
-"""Tests for ccbot.utils: ccbot_dir, atomic_write_json, read_cwd_from_jsonl."""
+"""Tests for ccbot.utils: ccbot_dir, atomic_write_json, read_cwd_from_jsonl, shutdown markers."""
 
 import json
 from pathlib import Path
 
 import pytest
 
-from ccbot.utils import atomic_write_json, ccbot_dir, read_cwd_from_jsonl
+from ccbot.utils import (
+    atomic_write_json,
+    ccbot_dir,
+    read_and_clear_shutdown_marker,
+    read_cwd_from_jsonl,
+    write_shutdown_marker,
+)
 
 
 class TestCcbotDir:
@@ -70,3 +76,38 @@ class TestReadCwdFromJsonl:
 
     def test_missing_file_returns_empty(self, tmp_path: Path):
         assert read_cwd_from_jsonl(tmp_path / "nonexistent.jsonl") == ""
+
+
+class TestShutdownMarker:
+    def test_write_and_read_marker(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("CCBOT_DIR", str(tmp_path))
+        write_shutdown_marker()
+        marker = tmp_path / ".shutdown_clean"
+        assert marker.exists()
+        timestamp = read_and_clear_shutdown_marker()
+        assert timestamp is not None
+        assert "T" in timestamp
+        assert not marker.exists()
+
+    def test_read_nonexistent_marker(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("CCBOT_DIR", str(tmp_path))
+        assert read_and_clear_shutdown_marker() is None
+
+    def test_read_clears_marker(self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch):
+        monkeypatch.setenv("CCBOT_DIR", str(tmp_path))
+        write_shutdown_marker()
+        assert read_and_clear_shutdown_marker() is not None
+        assert read_and_clear_shutdown_marker() is None
+
+    def test_marker_contains_iso_timestamp(
+        self, tmp_path: Path, monkeypatch: pytest.MonkeyPatch
+    ):
+        monkeypatch.setenv("CCBOT_DIR", str(tmp_path))
+        write_shutdown_marker()
+        timestamp = read_and_clear_shutdown_marker()
+        assert timestamp is not None
+        assert timestamp.endswith("+00:00")

@@ -1,5 +1,20 @@
 # Changelog
 
+## [Fork] 2026-03-14 — Graceful Shutdown with User Notifications
+
+When the bot receives SIGTERM/SIGINT (e.g. Railway redeploy, systemd restart), it now:
+1. Sends "Бот перезапускается. Ваши сессии сохранены." to all bound topics
+2. Writes a clean shutdown marker to config directory
+3. On next startup, detects the marker and sends "Бот снова в сети. Ваши сессии восстановлены."
+
+| File | Changes |
+|------|---------|
+| `src/ccbot/bot.py` | Enhanced `post_init` and `post_shutdown` with user notifications |
+| `src/ccbot/utils.py` | Added `write_shutdown_marker()` and `read_and_clear_shutdown_marker()` |
+| `tests/ccbot/test_utils.py` | Added 4 tests for shutdown marker lifecycle |
+
+---
+
 ## [Fork] 2026-03-14 — Russian Edition + Security Hardening + Deepgram + Clean Output
 
 690 lines added, 157 removed across 15 files. Full security audit (4 parallel agents, 19 findings fixed).
