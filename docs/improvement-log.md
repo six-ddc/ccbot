@@ -93,4 +93,14 @@
 - Files changed: src/ccbot/handlers/status_polling.py, src/ccbot/config.py, CHANGELOG.md
 - Lines: +45/-15
 - Security: semgrep 0 findings, shlex.quote for session_id, retry limit prevents loops
+- Commit: faf05f2
+
+## Cycle 10: Native /kill and /restart Commands
+- Date: 2026-03-15
+- Role sequence: Researcher (gap analysis + streaming REJECTED via Sequential Thinking) > Validator > Architect > Developer > Auditor
+- Idea source: /kill was listed in BotCommand menu but had NO handler (fell to forward_command → did nothing). /restart solves daily "stuck session" pain with one command.
+- Validation: APPROVED — /kill fixes broken menu command + /restart transforms "stuck session" workflow from 5 steps to 1
+- Files changed: src/ccbot/bot.py, CHANGELOG.md
+- Lines: +100/-0
+- Security: semgrep 0 findings, standard auth/thread validation, topic deletion requires bot admin rights
 - Commit: pending

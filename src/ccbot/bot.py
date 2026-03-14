@@ -332,6 +332,110 @@ async def unbind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     )
 
 
+async def kill_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Kill the session, tmux window, and delete the forum topic."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    thread_id = _get_thread_id(update)
+    if thread_id is None:
+        await safe_reply(update.message, "Эта команда работает только в топике.")
+        return
+
+    wid = session_manager.get_window_for_thread(user.id, thread_id)
+    if not wid:
+        await safe_reply(update.message, "Нет привязанной сессии в этом топике.")
+        return
+
+    display = session_manager.get_display_name(wid)
+
+    # Kill tmux window
+    await tmux_manager.kill_window(wid)
+    session_manager.unbind_thread(user.id, thread_id)
+    await clear_topic_state(user.id, thread_id, context.bot, context.user_data)
+
+    # Notify before deletion
+    await safe_reply(update.message, f"Сессия '{display}' завершена. Топик удаляется.")
+
+    # Delete the forum topic
+    chat_id = session_manager.resolve_chat_id(user.id, thread_id)
+    try:
+        await context.bot.delete_forum_topic(
+            chat_id=chat_id, message_thread_id=thread_id
+        )
+        logger.info(
+            "Killed session '%s' and deleted topic (user=%d, thread=%d)",
+            display,
+            user.id,
+            thread_id,
+        )
+    except Exception as exc:
+        logger.warning("Failed to delete topic %d: %s", thread_id, exc)
+
+
+async def restart_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Kill the current session and start a fresh one in the same directory."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    thread_id = _get_thread_id(update)
+    if thread_id is None:
+        await safe_reply(update.message, "Эта команда работает только в топике.")
+        return
+
+    wid = session_manager.get_window_for_thread(user.id, thread_id)
+    if not wid:
+        await safe_reply(update.message, "Нет привязанной сессии в этом топике.")
+        return
+
+    # Get cwd before killing
+    w = await tmux_manager.find_window_by_id(wid)
+    if not w:
+        await safe_reply(update.message, "Окно больше не существует.")
+        session_manager.unbind_thread(user.id, thread_id)
+        return
+
+    work_dir = w.cwd
+    display = session_manager.get_display_name(wid)
+
+    # Kill old session
+    await tmux_manager.kill_window(wid)
+    session_manager.unbind_thread(user.id, thread_id)
+    await clear_topic_state(user.id, thread_id, context.bot, context.user_data)
+
+    # Create new session in same directory
+    success, message, new_name, new_wid = await tmux_manager.create_window(work_dir)
+    if not success:
+        await safe_reply(update.message, f"Не удалось создать сессию: {message}")
+        return
+
+    # Wait for hook registration
+    await session_manager.wait_for_session_map_entry(new_wid, timeout=5.0)
+
+    # Bind new session to same topic
+    session_manager.bind_thread(user.id, thread_id, new_wid, window_name=new_name)
+
+    await safe_reply(
+        update.message,
+        f"Сессия '{display}' перезапущена.\n"
+        f"Новая сессия '{new_name}' в {work_dir}. Пиши сюда.",
+    )
+    logger.info(
+        "Restarted session: killed '%s', created '%s' at %s (user=%d, thread=%d)",
+        display,
+        new_name,
+        work_dir,
+        user.id,
+        thread_id,
+    )
+
+
 async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Send Escape key to interrupt Claude."""
     user = update.effective_user
@@ -2474,6 +2578,7 @@ async def post_init(application: Application) -> None:
         BotCommand("usage", "Остаток лимита Claude Code"),
         BotCommand("health", "Диагностика бота"),
         BotCommand("summary", "Обзор текущей сессии"),
+        BotCommand("restart", "Перезапустить сессию (свежий Claude)"),
     ]
     # Add Claude Code slash commands
     for cmd_name, desc in CC_COMMANDS.items():
@@ -2586,6 +2691,8 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("screenshot", screenshot_command))
     application.add_handler(CommandHandler("esc", esc_command))
     application.add_handler(CommandHandler("unbind", unbind_command))
+    application.add_handler(CommandHandler("kill", kill_command))
+    application.add_handler(CommandHandler("restart", restart_command))
     application.add_handler(CommandHandler("usage", usage_command))
     application.add_handler(CommandHandler("health", health_command))
     application.add_handler(CommandHandler("summary", summary_command))

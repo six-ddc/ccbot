@@ -1,5 +1,13 @@
 # Changelog
 
+## [Fork] 2026-03-15 — Native /kill and /restart Commands
+
+**`/kill`** — properly kills tmux window, unbinds thread, and deletes the forum topic. Previously, /kill fell through to forward_command_handler and did nothing useful.
+
+**`/restart`** — kills current session and creates a fresh Claude session in the SAME directory and topic. One command to start fresh when stuck (context overflow, wrong model, etc.). Previously required: close topic → create new → navigate to same directory → wait.
+
+---
+
 ## [Fork] 2026-03-15 — Auto-restart Claude on Crash
 
 When Claude Code process exits unexpectedly, the bot now automatically restarts it with `--resume <session_id>` in the same tmux window. User sees "Сессия перезапущена автоматически" and work continues seamlessly.
