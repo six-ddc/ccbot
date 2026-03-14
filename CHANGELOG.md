@@ -1,5 +1,18 @@
 # Changelog
 
+## [Fork] 2026-03-15 — Forwarded Message Context Enrichment
+
+Forwarded messages are now enriched with sender context before reaching Claude:
+- Text: "(Переслано от Имя)\n{text}"
+- Photos: "(Переслано от Имя)\n{caption}\n(image attached: path)"
+- Documents: same pattern
+- Voice: "(Переслано от Имя)\n{transcription}"
+
+Supports all forward_origin types: users, chats, channels.
+Previously, Claude received forwarded content as plain text without any context that it was forwarded.
+
+---
+
 ## [Fork] 2026-03-15 — /sessions Global Session Dashboard
 
 New `/sessions` command shows all active sessions at a glance:

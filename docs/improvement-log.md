@@ -113,4 +113,14 @@
 - Files changed: src/ccbot/bot.py, CHANGELOG.md
 - Lines: +45/-0
 - Security: semgrep 0 findings, read-only internal state display
+- Commit: f68f8f5
+
+## Cycle 12: Forwarded Message Context Enrichment
+- Date: 2026-03-15
+- Role sequence: Researcher (input pipeline analysis) > Validator (Sequential Thinking) > Developer > Auditor
+- Idea source: Forwarded messages arrived as plain text — Claude had no idea they were forwarded from someone else. Makes forwarding a first-class input channel.
+- Validation: APPROVED — enriches ALL message types (text, photo, document, voice) with forward_origin metadata
+- Files changed: src/ccbot/bot.py, CHANGELOG.md
+- Lines: +40/-5
+- Security: semgrep 0 findings, forward_origin is trusted Telegram API data
 - Commit: pending

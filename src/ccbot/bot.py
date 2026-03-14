@@ -216,6 +216,36 @@ def is_user_allowed(user_id: int | None) -> bool:
     return user_id is not None and config.is_user_allowed(user_id)
 
 
+def _extract_forward_context(message: object) -> str:
+    """Extract forwarding context from a Telegram message.
+
+    Returns a prefix string like "(Переслано от Имя)" if the message
+    was forwarded, empty string otherwise.
+    """
+    from telegram import Message
+
+    if not isinstance(message, Message):
+        return ""
+
+    origin = message.forward_origin
+    if origin is None:
+        return ""
+
+    from telegram import MessageOriginChannel, MessageOriginChat, MessageOriginUser
+
+    if isinstance(origin, MessageOriginUser):
+        name = origin.sender_user.first_name
+        return f"(Переслано от {name})\n"
+    elif isinstance(origin, MessageOriginChat):
+        name = origin.sender_chat.title or origin.sender_chat.first_name or ""
+        return f"(Переслано из чата: {name})\n"
+    elif isinstance(origin, MessageOriginChannel):
+        name = origin.chat.title or ""
+        return f"(Переслано из канала: {name})\n"
+    else:
+        return "(Переслано)\n"
+
+
 def _get_thread_id(update: Update) -> int | None:
     """Extract thread_id from an update, returning None if not in a named topic."""
     msg = update.message or (
@@ -1188,11 +1218,12 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await tg_file.download_to_drive(file_path)
 
     # Build the message to send to Claude Code
+    fwd_ctx = _extract_forward_context(update.message)
     caption = update.message.caption or ""
     if caption:
-        text_to_send = f"{caption}\n\n(image attached: {file_path})"
+        text_to_send = f"{fwd_ctx}{caption}\n\n(image attached: {file_path})"
     else:
-        text_to_send = f"(image attached: {file_path})"
+        text_to_send = f"{fwd_ctx}(image attached: {file_path})"
 
     await update.message.chat.send_action(ChatAction.TYPING)
     clear_status_msg_info(user.id, thread_id)
@@ -1274,6 +1305,11 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         logger.error("Voice transcription failed: %s", e)
         await safe_reply(update.message, f"Ошибка транскрипции: {e}")
         return
+
+    # Enrich with forward context if this was a forwarded voice message
+    fwd_ctx = _extract_forward_context(update.message)
+    if fwd_ctx:
+        text = fwd_ctx + text
 
     await update.message.chat.send_action(ChatAction.TYPING)
     clear_status_msg_info(user.id, thread_id)
@@ -1369,11 +1405,12 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await tg_file.download_to_drive(file_path)
 
     # Build message for Claude Code
+    fwd_ctx = _extract_forward_context(update.message)
     caption = update.message.caption or ""
     if caption:
-        text_to_send = f"{caption}\n\n(document attached: {file_path})"
+        text_to_send = f"{fwd_ctx}{caption}\n\n(document attached: {file_path})"
     else:
-        text_to_send = f"(document attached: {file_path})"
+        text_to_send = f"{fwd_ctx}(document attached: {file_path})"
 
     await update.message.chat.send_action(ChatAction.TYPING)
     clear_status_msg_info(user.id, thread_id)
@@ -1502,6 +1539,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         session_manager.set_group_chat_id(user.id, thread_id, chat.id)
 
     text = update.message.text
+
+    # Enrich forwarded messages with sender context
+    fwd_ctx = _extract_forward_context(update.message)
+    if fwd_ctx:
+        text = fwd_ctx + text
 
     # Smart TG file request detection: append hint for Claude
     _TG_SEND_PATTERNS = (
