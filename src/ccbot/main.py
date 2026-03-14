@@ -45,9 +45,13 @@ def main() -> None:
 
     log_file = config.config_dir / "ccbot.log"
     file_handler = RotatingFileHandler(
-        log_file, maxBytes=1_000_000, backupCount=3, encoding="utf-8",
+        log_file,
+        maxBytes=1_000_000,
+        backupCount=3,
+        encoding="utf-8",
     )
     import os as _os
+
     if log_file.exists():
         _os.chmod(log_file, 0o600)
     file_handler.setFormatter(
@@ -74,7 +78,14 @@ def main() -> None:
     from .bot import create_bot
 
     application = create_bot()
-    application.run_polling(allowed_updates=["message", "callback_query", "message_reaction"])
+    application.run_polling(
+        allowed_updates=[
+            "message",
+            "edited_message",
+            "callback_query",
+            "message_reaction",
+        ]
+    )
 
 
 if __name__ == "__main__":

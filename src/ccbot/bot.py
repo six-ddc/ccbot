@@ -1228,6 +1228,49 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         await handle_interactive_ui(context.bot, user.id, wid, thread_id)
 
 
+async def edited_message_handler(
+    update: Update, context: ContextTypes.DEFAULT_TYPE
+) -> None:
+    """Forward edited messages to Claude Code as corrections.
+
+    When a user edits a previously sent message, the corrected text is
+    forwarded to the bound Claude Code session with a "(Исправление)" prefix
+    so Claude understands this replaces previous input.
+    """
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+
+    msg = update.edited_message
+    if not msg or not msg.text:
+        return
+
+    if not _check_rate_limit(user.id):
+        return
+
+    thread_id = _get_thread_id(update)
+    if thread_id is None:
+        return
+
+    wid = session_manager.get_window_for_thread(user.id, thread_id)
+    if wid is None:
+        return
+
+    w = await tmux_manager.find_window_by_id(wid)
+    if not w:
+        return
+
+    corrected = f"(Исправление) {msg.text}"
+    success, _ = await session_manager.send_to_window(wid, corrected)
+    if success:
+        logger.info(
+            "Edited message forwarded to window %s (user=%d, thread=%d)",
+            wid,
+            user.id,
+            thread_id,
+        )
+
+
 # --- Window creation helper ---
 
 
@@ -2233,6 +2276,13 @@ def create_bot() -> Application:
     application.add_handler(MessageHandler(filters.COMMAND, forward_command_handler))
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler)
+    )
+    # Edited messages: forward corrections to Claude Code
+    application.add_handler(
+        MessageHandler(
+            filters.TEXT & filters.UpdateType.EDITED_MESSAGE,
+            edited_message_handler,
+        )
     )
     # Photos: download and forward file path to Claude Code
     application.add_handler(MessageHandler(filters.PHOTO, photo_handler))

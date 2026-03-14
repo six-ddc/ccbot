@@ -1,5 +1,15 @@
 # Changelog
 
+## [Fork] 2026-03-15 — Message Edit Forwarding
+
+When a user edits a previously sent message in Telegram, the corrected text is now forwarded to Claude Code with a "(Исправление)" prefix. Previously, edits were silently ignored.
+
+- Added `edited_message_handler` with full auth, rate limiting, and input validation
+- Added `"edited_message"` to `allowed_updates` in polling config
+- Same security pipeline as regular messages (sanitization via `send_to_window`)
+
+---
+
 ## [Fork] 2026-03-15 — /health Diagnostic Command
 
 New `/health` command shows bot diagnostics directly in Telegram:
