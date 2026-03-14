@@ -5,12 +5,14 @@ from pathlib import Path
 import pytest
 
 from ccbot.config import Config
+from ccbot.runtimes import RUNTIME_CLAUDE, RUNTIME_CODEX
 
 
 @pytest.fixture
 def _base_env(monkeypatch, tmp_path):
     # chdir to tmp_path so load_dotenv won't find the real .env in repo root
     monkeypatch.chdir(tmp_path)
+    monkeypatch.delenv("CCBOT_RUNTIME", raising=False)
     monkeypatch.setenv("TELEGRAM_BOT_TOKEN", "test:token")
     monkeypatch.setenv("ALLOWED_USERS", "12345")
     monkeypatch.setenv("CCBOT_DIR", str(tmp_path))
@@ -32,6 +34,45 @@ class TestConfigValid:
         monkeypatch.setenv("MONITOR_POLL_INTERVAL", "5.0")
         cfg = Config()
         assert cfg.monitor_poll_interval == 5.0
+
+    def test_runtime_defaults_to_claude(self):
+        cfg = Config()
+        assert cfg.runtime == RUNTIME_CLAUDE
+
+    def test_codex_runtime_config(self, monkeypatch, tmp_path):
+        monkeypatch.setenv("CCBOT_RUNTIME", RUNTIME_CODEX)
+        monkeypatch.setenv("CODEX_COMMAND", "codex --no-alt-screen")
+        monkeypatch.setenv("CODEX_HOME", str(tmp_path / ".codex"))
+        cfg = Config()
+        assert cfg.runtime == RUNTIME_CODEX
+        assert cfg.codex_command == (
+            "codex --no-alt-screen --enable codex_hooks "
+            "--enable default_mode_request_user_input"
+        )
+        assert cfg.codex_home == tmp_path / ".codex"
+        assert cfg.codex_sessions_path == tmp_path / ".codex" / "sessions"
+
+    def test_codex_command_keeps_existing_hook_flag(self, monkeypatch):
+        monkeypatch.setenv("CCBOT_RUNTIME", RUNTIME_CODEX)
+        monkeypatch.setenv(
+            "CODEX_COMMAND",
+            "codex --no-alt-screen --enable codex_hooks "
+            "--enable default_mode_request_user_input",
+        )
+        cfg = Config()
+        assert cfg.codex_command == (
+            "codex --no-alt-screen --enable codex_hooks "
+            "--enable default_mode_request_user_input"
+        )
+
+    def test_codex_command_adds_only_missing_feature(self, monkeypatch):
+        monkeypatch.setenv("CCBOT_RUNTIME", RUNTIME_CODEX)
+        monkeypatch.setenv("CODEX_COMMAND", "codex --no-alt-screen --enable codex_hooks")
+        cfg = Config()
+        assert cfg.codex_command == (
+            "codex --no-alt-screen --enable codex_hooks "
+            "--enable default_mode_request_user_input"
+        )
 
     def test_is_user_allowed_true(self):
         cfg = Config()
@@ -57,6 +98,11 @@ class TestConfigMissingEnv:
     def test_non_numeric_allowed_users(self, monkeypatch):
         monkeypatch.setenv("ALLOWED_USERS", "abc")
         with pytest.raises(ValueError, match="non-numeric"):
+            Config()
+
+    def test_invalid_runtime(self, monkeypatch):
+        monkeypatch.setenv("CCBOT_RUNTIME", "unknown")
+        with pytest.raises(ValueError, match="CCBOT_RUNTIME"):
             Config()
 
 

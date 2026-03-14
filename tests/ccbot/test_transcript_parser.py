@@ -1,5 +1,7 @@
 """Tests for ccbot.transcript_parser — pure logic, no I/O."""
 
+import json
+
 import pytest
 
 from ccbot.transcript_parser import (
@@ -83,6 +85,11 @@ class TestFormatToolUseSummary:
                 {"questions": [{"question": "Continue?"}]},
                 "**AskUserQuestion**(Continue?)",
             ),
+            (
+                "request_user_input",
+                {"questions": [{"question": "Pick one"}]},
+                "**request_user_input**(Pick one)",
+            ),
             ("ExitPlanMode", {}, "**ExitPlanMode**"),
             ("Skill", {"skill": "code-review"}, "**Skill**(code-review)"),
             (
@@ -103,6 +110,7 @@ class TestFormatToolUseSummary:
             "TodoWrite",
             "TodoRead",
             "AskUserQuestion",
+            "request_user_input",
             "ExitPlanMode",
             "Skill",
             "unknown_tool",
@@ -508,3 +516,185 @@ class TestParseEntries:
         result, pending = TranscriptParser.parse_entries(entries)
         user_entries = [e for e in result if e.role == "user"]
         assert len(user_entries) == 0
+
+
+class TestCodexResponseItems:
+    def test_response_item_message_entry(self):
+        entries = [
+            {
+                "type": "response_item",
+                "timestamp": "2026-03-11T12:00:00Z",
+                "payload": {
+                    "type": "message",
+                    "role": "assistant",
+                    "content": [{"type": "output_text", "text": "done"}],
+                },
+            }
+        ]
+
+        result, pending = TranscriptParser.parse_entries(entries)
+
+        assert pending == {}
+        assert len(result) == 1
+        assert result[0].role == "assistant"
+        assert result[0].content_type == "text"
+        assert result[0].text == "done"
+
+    def test_function_call_and_output_pair(self):
+        data = {
+            "type": "response_item",
+            "payload": {
+                "type": "message",
+                "role": "user",
+                "content": [{"type": "input_text", "text": "continue"}],
+            },
+        }
+
+        assert TranscriptParser.is_user_message(data) is True
+
+        entries = [
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "exec_command",
+                    "arguments": '{"cmd":"ls -la"}',
+                    "call_id": "call-1",
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call_output",
+                    "call_id": "call-1",
+                    "output": "file1\nfile2",
+                },
+            },
+        ]
+
+        result, pending = TranscriptParser.parse_entries(entries)
+
+        assert pending == {}
+        assert [entry.content_type for entry in result] == ["tool_use", "tool_result"]
+        assert result[0].tool_name == "exec_command"
+        assert result[0].tool_use_id == "call-1"
+        assert "Output 2 lines" in result[1].text
+
+    def test_request_user_input_is_structured_prompt(self):
+        entries = [
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "request_user_input",
+                    "arguments": json.dumps(
+                        {
+                            "questions": [
+                                {
+                                    "header": "Scope",
+                                    "id": "scope",
+                                    "question": "Which scope?",
+                                    "options": [
+                                        {
+                                            "label": "Full (Recommended)",
+                                            "description": "Do the full thing",
+                                        },
+                                        {
+                                            "label": "Minimal",
+                                            "description": "Do less",
+                                        },
+                                    ],
+                                }
+                            ]
+                        }
+                    ),
+                    "call_id": "call-rui-1",
+                },
+            }
+        ]
+
+        result, pending = TranscriptParser.parse_entries(entries)
+
+        assert pending["call-rui-1"].tool_name == "request_user_input"
+        assert len(result) == 1
+        entry = result[0]
+        assert entry.content_type == "tool_use"
+        assert entry.tool_name == "request_user_input"
+        assert entry.interactive_prompt is not None
+        assert entry.interactive_prompt.questions[0].question == "Which scope?"
+        assert (
+            entry.interactive_prompt.questions[0].options[0].label
+            == "Full (Recommended)"
+        )
+
+    def test_request_user_input_output_is_suppressed(self):
+        entries = [
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call",
+                    "name": "request_user_input",
+                    "arguments": json.dumps(
+                        {
+                            "questions": [
+                                {
+                                    "header": "Scope",
+                                    "id": "scope",
+                                    "question": "Which scope?",
+                                    "options": [
+                                        {
+                                            "label": "Full",
+                                            "description": "Do the full thing",
+                                        },
+                                        {"label": "Minimal", "description": "Do less"},
+                                    ],
+                                }
+                            ]
+                        }
+                    ),
+                    "call_id": "call-rui-2",
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "function_call_output",
+                    "call_id": "call-rui-2",
+                    "output": '{"answers":{"scope":{"answers":["Full"]}}}',
+                },
+            },
+        ]
+
+        result, pending = TranscriptParser.parse_entries(entries)
+
+        assert pending == {}
+        assert len(result) == 1
+        assert result[0].tool_name == "request_user_input"
+
+    def test_custom_tool_call_pair(self):
+        entries = [
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call",
+                    "name": "apply_patch",
+                    "input": "*** Begin Patch",
+                    "call_id": "call-2",
+                },
+            },
+            {
+                "type": "response_item",
+                "payload": {
+                    "type": "custom_tool_call_output",
+                    "call_id": "call-2",
+                    "output": "Success",
+                },
+            },
+        ]
+
+        result, pending = TranscriptParser.parse_entries(entries)
+
+        assert pending == {}
+        assert [entry.content_type for entry in result] == ["tool_use", "tool_result"]
+        assert result[0].tool_name == "apply_patch"
+        assert result[1].tool_use_id == "call-2"

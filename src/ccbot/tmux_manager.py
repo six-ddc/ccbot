@@ -1,7 +1,7 @@
 """Tmux session/window management via libtmux.
 
 Wraps libtmux to provide async-friendly operations on a single tmux session:
-  - list_windows / find_window_by_name: discover Claude Code windows.
+  - list_windows / find_window_by_name: discover runtime windows.
   - capture_pane: read terminal content (plain or with ANSI colors).
   - send_keys: forward user input or control keys to a window.
   - create_window / kill_window: lifecycle management.
@@ -15,12 +15,14 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
 import libtmux
 
 from .config import SENSITIVE_ENV_VARS, config
+from .runtimes import RUNTIME_CLAUDE, RUNTIME_CODEX
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +38,7 @@ class TmuxWindow:
 
 
 class TmuxManager:
-    """Manages tmux windows for Claude Code sessions."""
+    """Manages tmux windows for runtime sessions."""
 
     def __init__(self, session_name: str | None = None):
         """Initialize tmux manager.
@@ -364,20 +366,43 @@ class TmuxManager:
 
         return await asyncio.to_thread(_sync_kill)
 
+    def _build_runtime_command(
+        self,
+        *,
+        window_id: str,
+        window_name: str,
+        work_dir: Path,
+        resume_session_id: str | None,
+    ) -> str:
+        """Build the shell command used to start the configured runtime."""
+        if config.runtime == RUNTIME_CLAUDE:
+            cmd = config.claude_command
+            if resume_session_id:
+                cmd = f"{cmd} --resume {shlex.quote(resume_session_id)}"
+            return cmd
+
+        if config.runtime == RUNTIME_CODEX:
+            cmd = config.codex_command
+            if resume_session_id:
+                cmd = f"{cmd} resume {shlex.quote(resume_session_id)}"
+            return f"CCBOT_RUNTIME={shlex.quote(config.runtime)} {cmd}"
+
+        raise ValueError(f"Unsupported runtime: {config.runtime}")
+
     async def create_window(
         self,
         work_dir: str,
         window_name: str | None = None,
-        start_claude: bool = True,
+        start_runtime: bool = True,
         resume_session_id: str | None = None,
     ) -> tuple[bool, str, str, str]:
-        """Create a new tmux window and optionally start Claude Code.
+        """Create a new tmux window and optionally start the configured runtime.
 
         Args:
             work_dir: Working directory for the new window
             window_name: Optional window name (defaults to directory name)
-            start_claude: Whether to start claude command
-            resume_session_id: If set, append --resume <id> to claude command
+            start_runtime: Whether to start the configured runtime command
+            resume_session_id: Optional resume identifier forwarded to the runtime
 
         Returns:
             Tuple of (success, message, window_name, window_id)
@@ -414,13 +439,16 @@ class TmuxManager:
                 # Prevent Claude Code from overriding window name
                 window.set_window_option("allow-rename", "off")
 
-                # Start Claude Code if requested
-                if start_claude:
+                # Start the configured runtime if requested
+                if start_runtime:
                     pane = window.active_pane
                     if pane:
-                        cmd = config.claude_command
-                        if resume_session_id:
-                            cmd = f"{cmd} --resume {resume_session_id}"
+                        cmd = self._build_runtime_command(
+                            window_id=wid,
+                            window_name=final_window_name,
+                            work_dir=path,
+                            resume_session_id=resume_session_id,
+                        )
                         pane.send_keys(cmd, enter=True)
 
                 logger.info(

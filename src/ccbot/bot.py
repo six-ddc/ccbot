@@ -68,6 +68,10 @@ from .handlers.callback_data import (
     CB_ASK_SPACE,
     CB_ASK_TAB,
     CB_ASK_UP,
+    CB_CODEX_PROMPT_CANCEL,
+    CB_CODEX_PROMPT_OPTION,
+    CB_CODEX_PROMPT_OTHER,
+    CB_CODEX_PROMPT_REFRESH,
     CB_DIR_CANCEL,
     CB_DIR_CONFIRM,
     CB_DIR_PAGE,
@@ -105,12 +109,19 @@ from .handlers.cleanup import clear_topic_state
 from .handlers.history import send_history
 from .handlers.interactive_ui import (
     INTERACTIVE_TOOL_NAMES,
+    advance_codex_prompt_with_option,
+    arm_codex_prompt_notes_text,
     clear_interactive_mode,
     clear_interactive_msg,
+    get_codex_prompt_state,
     get_interactive_msg_id,
     get_interactive_window,
+    handle_codex_prompt,
     handle_interactive_ui,
+    has_codex_prompt,
+    is_waiting_for_codex_notes_text,
     set_interactive_mode,
+    submit_codex_prompt_notes_text,
 )
 from .handlers.message_queue import (
     clear_status_msg_info,
@@ -129,6 +140,7 @@ from .handlers.message_sender import (
 from .markdown_v2 import convert_markdown
 from .handlers.response_builder import build_response_parts
 from .handlers.status_polling import status_poll_loop
+from .runtimes import RUNTIME_CODEX
 from .screenshot import text_to_image
 from .session import session_manager
 from .session_monitor import NewMessage, SessionMonitor
@@ -139,6 +151,7 @@ from .transcribe import transcribe_voice
 from .utils import ccbot_dir
 
 logger = logging.getLogger(__name__)
+_PROACTIVE_INTERACTIVE_COMMANDS = frozenset({"/model"})
 
 # Session monitor instance
 session_monitor: SessionMonitor | None = None
@@ -146,19 +159,80 @@ session_monitor: SessionMonitor | None = None
 # Status polling task
 _status_poll_task: asyncio.Task | None = None
 
-# Claude Code commands shown in bot menu (forwarded via tmux)
-CC_COMMANDS: dict[str, str] = {
-    "clear": "↗ Clear conversation history",
-    "compact": "↗ Compact conversation context",
-    "cost": "↗ Show token/cost usage",
-    "help": "↗ Show Claude Code help",
-    "memory": "↗ Edit CLAUDE.md",
-    "model": "↗ Switch AI model",
-}
-
-
 def is_user_allowed(user_id: int | None) -> bool:
     return user_id is not None and config.is_user_allowed(user_id)
+
+
+def _runtime_display_name() -> str:
+    """Return the user-facing runtime name."""
+    if config.runtime == RUNTIME_CODEX:
+        return "Codex"
+    return "Claude Code"
+
+
+def _runtime_monitor_title() -> str:
+    """Return the Telegram welcome title for the active runtime."""
+    if config.runtime == RUNTIME_CODEX:
+        return "Codex Monitor"
+    return "Claude Code Monitor"
+
+
+def _runtime_forwarded_bot_commands() -> dict[str, str]:
+    """Return menu commands forwarded to the active runtime."""
+    if config.runtime == RUNTIME_CODEX:
+        # Keep the visible Codex menu aligned with the public slash command docs:
+        # https://developers.openai.com/codex/cli/slash-commands/
+        return {
+            "clear": "↗ Clear conversation history",
+            "compact": "↗ Compact conversation context",
+            "plan": "↗ Use plan mode for the next task",
+        }
+
+    return {
+        "clear": "↗ Clear conversation history",
+        "compact": "↗ Compact conversation context",
+        "cost": "↗ Show token/cost usage",
+        "help": "↗ Show Claude Code help",
+        "memory": "↗ Edit CLAUDE.md",
+        "model": "↗ Switch Claude model",
+    }
+
+
+def _runtime_status_slash_command() -> str:
+    """Return the runtime-native slash command for status/usage info."""
+    if config.runtime == RUNTIME_CODEX:
+        return "/status"
+    return "/usage"
+
+
+def _runtime_status_bot_command() -> tuple[str, str]:
+    """Return the Telegram bot command name/description shown in the menu."""
+    if config.runtime == RUNTIME_CODEX:
+        return ("status", "Show Codex status")
+    return ("usage", "Show Claude Code usage remaining")
+
+
+def _runtime_escape_description() -> str:
+    """Return the menu description for the /esc command."""
+    return f"Send Escape to interrupt {_runtime_display_name()}"
+
+
+def _build_bot_commands() -> list[BotCommand]:
+    """Build the Telegram command menu for the active runtime."""
+    commands = [
+        BotCommand("start", "Show welcome message"),
+        BotCommand("history", "Message history for this topic"),
+        BotCommand("screenshot", "Terminal screenshot with control keys"),
+        BotCommand("esc", _runtime_escape_description()),
+        BotCommand("kill", "Kill session for this topic"),
+        BotCommand("unbind", "Unbind topic from session (keeps window running)"),
+        BotCommand(*_runtime_status_bot_command()),
+    ]
+    commands.extend(
+        BotCommand(cmd_name, desc)
+        for cmd_name, desc in _runtime_forwarded_bot_commands().items()
+    )
+    return commands
 
 
 def _get_thread_id(update: Update) -> int | None:
@@ -189,7 +263,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if update.message:
         await safe_reply(
             update.message,
-            "🤖 *Claude Code Monitor*\n\n"
+            f"🤖 *{_runtime_monitor_title()}*\n\n"
             "Each topic is a session. Create a new topic to start.",
         )
 
@@ -248,7 +322,7 @@ async def screenshot_command(
 
 
 async def unbind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Unbind this topic from its Claude session without killing the window."""
+    """Unbind this topic from its runtime session without killing the window."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         return
@@ -272,13 +346,64 @@ async def unbind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await safe_reply(
         update.message,
         f"✅ Topic unbound from window '{display}'.\n"
-        "The Claude session is still running in tmux.\n"
+        f"The {_runtime_display_name()} session is still running in tmux.\n"
         "Send a message to bind to a new session.",
     )
 
 
+async def kill_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Kill the tmux window bound to this topic and clear local state."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    thread_id = _get_thread_id(update)
+    if thread_id is None:
+        await safe_reply(update.message, "❌ This command only works in a topic.")
+        return
+
+    wid = session_manager.get_window_for_thread(user.id, thread_id)
+    if not wid:
+        await safe_reply(update.message, "❌ No session bound to this topic.")
+        return
+
+    display = session_manager.get_display_name(wid)
+    w = await tmux_manager.find_window_by_id(wid)
+    if config.runtime == RUNTIME_CODEX and w:
+        sent_exit, detail = await session_manager.send_to_window(wid, "/exit")
+        if not sent_exit:
+            logger.warning(
+                "Codex /kill: failed to send /exit to %s (%s): %s",
+                display,
+                wid,
+                detail,
+            )
+        else:
+            await asyncio.sleep(1.0)
+        w = await tmux_manager.find_window_by_id(wid)
+
+    if w:
+        killed = await tmux_manager.kill_window(w.window_id)
+        if not killed:
+            await safe_reply(
+                update.message,
+                f"❌ Failed to kill window '{display}'.",
+            )
+            return
+
+    session_manager.unbind_thread(user.id, thread_id)
+    session_manager.remove_window(wid)
+    await clear_topic_state(user.id, thread_id, context.bot, context.user_data)
+    await safe_reply(
+        update.message,
+        f"✅ Killed session '{display}'.\nSend a message to start a new session.",
+    )
+
+
 async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send Escape key to interrupt Claude."""
+    """Send Escape key to interrupt the active runtime."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         return
@@ -303,7 +428,7 @@ async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Fetch Claude Code usage stats from TUI and send to Telegram."""
+    """Fetch runtime status/usage info from the active tmux session."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         return
@@ -321,8 +446,10 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await safe_reply(update.message, f"Window '{wid}' no longer exists.")
         return
 
-    # Send /usage command to Claude Code TUI
-    await tmux_manager.send_keys(w.window_id, "/usage")
+    runtime_command = _runtime_status_slash_command()
+
+    # Send the runtime-native command to the TUI.
+    await tmux_manager.send_keys(w.window_id, runtime_command)
     # Wait for the modal to render
     await asyncio.sleep(2.0)
     # Capture the pane content
@@ -331,7 +458,7 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await tmux_manager.send_keys(w.window_id, "Escape", enter=False, literal=False)
 
     if not pane_text:
-        await safe_reply(update.message, "Failed to capture usage info.")
+        await safe_reply(update.message, "Failed to capture session status.")
         return
 
     # Try to parse structured usage info
@@ -530,10 +657,26 @@ async def forward_command_handler(
             logger.info("Clearing session for window %s after /clear", display)
             session_manager.clear_window_session(wid)
 
-        # Interactive commands (e.g. /model) render a terminal-based UI
-        # with no JSONL tool_use entry.  The status poller already detects
-        # interactive UIs every 1s (status_polling.py), so no
-        # proactive detection needed here — the poller handles it.
+        normalized_command = cc_slash.strip().lower()
+        if normalized_command in _PROACTIVE_INTERACTIVE_COMMANDS:
+            for _ in range(20):
+                await asyncio.sleep(0.1)
+                handled = await handle_interactive_ui(
+                    context.bot, user.id, wid, thread_id
+                )
+                if handled:
+                    break
+            else:
+                pane_text = await tmux_manager.capture_pane(w.window_id)
+                if (
+                    pane_text
+                    and "Model selection is disabled until startup completes."
+                    in pane_text
+                ):
+                    await safe_reply(
+                        update.message,
+                        "Codex is still starting up. Wait for startup to finish, then run /model again.",
+                    )
     else:
         await safe_reply(update.message, f"❌ {message}")
 
@@ -551,7 +694,8 @@ async def unsupported_content_handler(
     logger.debug("Unsupported content from user %d", user.id)
     await safe_reply(
         update.message,
-        "⚠ Only text, photo, and voice messages are supported. Stickers, video, and other media cannot be forwarded to Claude Code.",
+        "⚠ Only text, photo, and voice messages are supported. "
+        f"Stickers, video, and other media cannot be forwarded to {_runtime_display_name()}.",
     )
 
 
@@ -584,6 +728,14 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
+    if has_codex_prompt(user.id, thread_id):
+        await safe_reply(
+            update.message,
+            "Please answer the pending Codex question with the buttons above. "
+            "If you need free text, tap Add notes and then send text.",
+        )
+        return
+
     wid = session_manager.get_window_for_thread(user.id, thread_id)
     if wid is None:
         await safe_reply(
@@ -612,7 +764,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     file_path = _IMAGES_DIR / filename
     await tg_file.download_to_drive(file_path)
 
-    # Build the message to send to Claude Code
+    # Build the message to send to the active runtime
     caption = update.message.caption or ""
     if caption:
         text_to_send = f"{caption}\n\n(image attached: {file_path})"
@@ -628,7 +780,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     # Confirm to user
-    await safe_reply(update.message, "📷 Image sent to Claude Code.")
+    await safe_reply(update.message, f"📷 Image sent to {_runtime_display_name()}.")
 
 
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -659,6 +811,14 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await safe_reply(
             update.message,
             "❌ Please use a named topic. Create a new topic to start a session.",
+        )
+        return
+
+    if has_codex_prompt(user.id, thread_id):
+        await safe_reply(
+            update.message,
+            "Please answer the pending Codex question with the buttons above. "
+            "If you need free text, tap Add notes and then send text.",
         )
         return
 
@@ -877,6 +1037,25 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
+    if has_codex_prompt(user.id, thread_id):
+        if is_waiting_for_codex_notes_text(user.id, thread_id):
+            success, message = await submit_codex_prompt_notes_text(
+                context.bot,
+                user.id,
+                thread_id,
+                text,
+            )
+            if not success:
+                await safe_reply(update.message, f"❌ {message}")
+            return
+
+        await safe_reply(
+            update.message,
+            "Please answer the pending Codex question with the buttons above. "
+            "If you need free text, tap Add notes first.",
+        )
+        return
+
     wid = session_manager.get_window_for_thread(user.id, thread_id)
     if wid is None:
         # Unbound topic — check for unbound windows first
@@ -1020,24 +1199,24 @@ async def _create_and_bind_window(
             pending_thread_id,
             resume_session_id,
         )
-        # Wait for Claude Code's SessionStart hook to register in session_map.
+        # Wait for the runtime to register its session in session_map.
         # Resume sessions take longer to start (loading session state), so use
         # a longer timeout to avoid silently dropping messages.
-        hook_timeout = 15.0 if resume_session_id else 5.0
-        hook_ok = await session_manager.wait_for_session_map_entry(
-            created_wid, timeout=hook_timeout
+        registration_timeout = 15.0 if resume_session_id else 5.0
+        session_registered = await session_manager.wait_for_session_map_entry(
+            created_wid, timeout=registration_timeout
         )
 
-        # --resume creates a new session_id in the hook, but messages continue
+        # --resume may create a new runtime session ID during startup, but messages continue
         # writing to the resumed session's JSONL file. Override window_state to
         # track the original session_id so the monitor can route messages back.
         if resume_session_id:
             ws = session_manager.get_window_state(created_wid)
-            if not hook_ok:
-                # Hook timed out — manually populate window_state so the
+            if not session_registered:
+                # Session registration timed out — manually populate window_state so the
                 # monitor can still route messages back to this topic.
                 logger.warning(
-                    "Hook timed out for resume window %s, "
+                    "Session registration timed out for resume window %s, "
                     "manually setting session_id=%s cwd=%s",
                     created_wid,
                     resume_session_id,
@@ -1046,6 +1225,7 @@ async def _create_and_bind_window(
                 ws.session_id = resume_session_id
                 ws.cwd = str(selected_path)
                 ws.window_name = created_wname
+                ws.runtime = config.runtime
                 session_manager._save_state()
             elif ws.session_id != resume_session_id:
                 logger.info(
@@ -1533,6 +1713,77 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         await safe_edit(query, "Cancelled")
         await query.answer("Cancelled")
 
+    elif data.startswith(CB_CODEX_PROMPT_OPTION):
+        rest = data[len(CB_CODEX_PROMPT_OPTION) :]
+        try:
+            question_idx_str, option_idx_str, window_id = rest.split(":", 2)
+            question_index = int(question_idx_str)
+            option_index = int(option_idx_str)
+        except (ValueError, TypeError):
+            await query.answer("Invalid data", show_alert=True)
+            return
+
+        thread_id = _get_thread_id(update)
+        success, message = await advance_codex_prompt_with_option(
+            context.bot,
+            user.id,
+            window_id,
+            thread_id,
+            question_index,
+            option_index,
+        )
+        await query.answer(message, show_alert=not success)
+
+    elif data.startswith(CB_CODEX_PROMPT_OTHER):
+        rest = data[len(CB_CODEX_PROMPT_OTHER) :]
+        try:
+            question_idx_str, window_id = rest.split(":", 1)
+            question_index = int(question_idx_str)
+        except (ValueError, TypeError):
+            await query.answer("Invalid data", show_alert=True)
+            return
+
+        thread_id = _get_thread_id(update)
+        success, message = await arm_codex_prompt_notes_text(
+            context.bot,
+            user.id,
+            window_id,
+            thread_id,
+            question_index,
+        )
+        await query.answer(message, show_alert=not success)
+
+    elif data.startswith(CB_CODEX_PROMPT_CANCEL):
+        window_id = data[len(CB_CODEX_PROMPT_CANCEL) :]
+        thread_id = _get_thread_id(update)
+        w = await tmux_manager.find_window_by_id(window_id)
+        if w:
+            await tmux_manager.send_keys(
+                w.window_id, "Escape", enter=False, literal=False
+            )
+        await clear_interactive_msg(user.id, context.bot, thread_id)
+        await query.answer("Cancelled")
+
+    elif data.startswith(CB_CODEX_PROMPT_REFRESH):
+        window_id = data[len(CB_CODEX_PROMPT_REFRESH) :]
+        thread_id = _get_thread_id(update)
+        state = get_codex_prompt_state(user.id, thread_id)
+        if not state or state.window_id != window_id:
+            await query.answer("Prompt is no longer active", show_alert=True)
+            return
+        handled = await handle_codex_prompt(
+            context.bot,
+            user.id,
+            window_id,
+            state.prompt,
+            state.tool_use_id,
+            thread_id,
+        )
+        await query.answer(
+            "Refreshed" if handled else "Refresh failed",
+            show_alert=not handled,
+        )
+
     # Screenshot: Refresh
     elif data.startswith(CB_SCREENSHOT_REFRESH):
         window_id = data[len(CB_SCREENSHOT_REFRESH) :]
@@ -1736,6 +1987,35 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         return
 
     for user_id, wid, thread_id in active_users:
+        if (
+            msg.interactive_prompt is not None
+            and msg.tool_name == "request_user_input"
+            and msg.content_type == "tool_use"
+            and msg.tool_use_id
+        ):
+            queue = get_message_queue(user_id)
+            if queue:
+                await queue.join()
+            handled = await handle_codex_prompt(
+                bot,
+                user_id,
+                wid,
+                msg.interactive_prompt,
+                msg.tool_use_id,
+                thread_id,
+            )
+            if handled:
+                session = await session_manager.resolve_session_for_window(wid)
+                if session and session.file_path:
+                    try:
+                        file_size = Path(session.file_path).stat().st_size
+                        session_manager.update_user_window_offset(
+                            user_id, wid, file_size
+                        )
+                    except OSError:
+                        pass
+                continue
+
         # Handle interactive tools specially - capture terminal and send UI
         if msg.tool_name in INTERACTIVE_TOOL_NAMES and msg.content_type == "tool_use":
             # Mark interactive mode BEFORE sleeping so polling skips this window
@@ -1813,20 +2093,7 @@ async def post_init(application: Application) -> None:
 
     await application.bot.delete_my_commands()
 
-    bot_commands = [
-        BotCommand("start", "Show welcome message"),
-        BotCommand("history", "Message history for this topic"),
-        BotCommand("screenshot", "Terminal screenshot with control keys"),
-        BotCommand("esc", "Send Escape to interrupt Claude"),
-        BotCommand("kill", "Kill session and delete topic"),
-        BotCommand("unbind", "Unbind topic from session (keeps window running)"),
-        BotCommand("usage", "Show Claude Code usage remaining"),
-    ]
-    # Add Claude Code slash commands
-    for cmd_name, desc in CC_COMMANDS.items():
-        bot_commands.append(BotCommand(cmd_name, desc))
-
-    await application.bot.set_my_commands(bot_commands)
+    await application.bot.set_my_commands(_build_bot_commands())
 
     # Re-resolve stale window IDs from persisted state against live tmux windows
     await session_manager.resolve_stale_ids()
@@ -1894,8 +2161,11 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("history", history_command))
     application.add_handler(CommandHandler("screenshot", screenshot_command))
     application.add_handler(CommandHandler("esc", esc_command))
+    application.add_handler(CommandHandler("kill", kill_command))
     application.add_handler(CommandHandler("unbind", unbind_command))
     application.add_handler(CommandHandler("usage", usage_command))
+    if config.runtime == RUNTIME_CODEX:
+        application.add_handler(CommandHandler("status", usage_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Topic closed event — auto-kill associated window
     application.add_handler(

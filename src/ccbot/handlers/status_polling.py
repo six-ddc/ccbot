@@ -30,6 +30,7 @@ from .interactive_ui import (
     clear_interactive_msg,
     get_interactive_window,
     handle_interactive_ui,
+    has_codex_prompt,
 )
 from .cleanup import clear_topic_state
 from .message_queue import enqueue_status_update, get_message_queue
@@ -73,13 +74,18 @@ async def update_status_message(
         # Transient capture failure - keep existing status message
         return
 
+    if has_codex_prompt(user_id, thread_id):
+        return
+
     interactive_window = get_interactive_window(user_id, thread_id)
     should_check_new_ui = True
 
     if interactive_window == window_id:
         # User is in interactive mode for THIS window
         if is_interactive_ui(pane_text):
-            # Interactive UI still showing — skip status update (user is interacting)
+            # Interactive UI still showing — refresh the existing Telegram panel
+            # in case the terminal advanced to a new step (e.g. /model stage 2).
+            await handle_interactive_ui(bot, user_id, window_id, thread_id)
             return
         # Interactive UI gone — clear interactive mode, fall through to status check.
         # Don't re-check for new UI this cycle (the old one just disappeared).

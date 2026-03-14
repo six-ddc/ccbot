@@ -1,13 +1,13 @@
-"""Claude Code session management — the core state hub.
+"""Runtime session management — the core state hub.
 
 Manages the key mappings:
-  Window→Session (window_states): which Claude session_id a window holds (keyed by window_id).
+  Window→Session (window_states): which runtime session_id a window holds (keyed by window_id).
   User→Thread→Window (thread_bindings): topic-to-window bindings (1 topic = 1 window_id).
 
 Responsibilities:
   - Persist/load state to ~/.ccbot/state.json.
   - Sync window↔session bindings from session_map.json (written by hook).
-  - Resolve window IDs to ClaudeSession objects (JSONL file reading).
+  - Resolve window IDs to session objects (JSONL file reading).
   - Track per-user read offsets for unread-message detection.
   - Manage thread↔window bindings for Telegram topic routing.
   - Send keystrokes to tmux windows and retrieve message history.
@@ -33,9 +33,10 @@ from typing import Any
 import aiofiles
 
 from .config import config
+from .runtimes import RUNTIME_CLAUDE, RUNTIME_CODEX
 from .tmux_manager import tmux_manager
 from .transcript_parser import TranscriptParser
-from .utils import atomic_write_json
+from .utils import atomic_write_json, read_cwd_from_jsonl
 
 logger = logging.getLogger(__name__)
 
@@ -45,22 +46,29 @@ class WindowState:
     """Persistent state for a tmux window.
 
     Attributes:
-        session_id: Associated Claude session ID (empty if not yet detected)
+        session_id: Associated runtime session ID (empty if not yet detected)
         cwd: Working directory for direct file path construction
         window_name: Display name of the window
+        runtime: Runtime name associated with the session
+        transcript_path: Optional absolute path to the runtime transcript file
     """
 
     session_id: str = ""
     cwd: str = ""
     window_name: str = ""
+    runtime: str = RUNTIME_CLAUDE
+    transcript_path: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
             "session_id": self.session_id,
             "cwd": self.cwd,
+            "runtime": self.runtime,
         }
         if self.window_name:
             d["window_name"] = self.window_name
+        if self.transcript_path:
+            d["transcript_path"] = self.transcript_path
         return d
 
     @classmethod
@@ -69,12 +77,14 @@ class WindowState:
             session_id=data.get("session_id", ""),
             cwd=data.get("cwd", ""),
             window_name=data.get("window_name", ""),
+            runtime=data.get("runtime", RUNTIME_CLAUDE),
+            transcript_path=data.get("transcript_path", ""),
         )
 
 
 @dataclass
 class ClaudeSession:
-    """Information about a Claude Code session."""
+    """Information about a persisted runtime session."""
 
     session_id: str
     summary: str
@@ -84,7 +94,7 @@ class ClaudeSession:
 
 @dataclass
 class SessionManager:
-    """Manages session state for Claude Code.
+    """Manages session state for tmux-backed runtimes.
 
     All internal keys use window_id (e.g. '@0', '@12') for uniqueness.
     Display names (window_name) are stored separately for UI presentation.
@@ -528,18 +538,28 @@ class SessionManager:
             new_sid = info.get("session_id", "")
             new_cwd = info.get("cwd", "")
             new_wname = info.get("window_name", "")
+            new_runtime = info.get("runtime", RUNTIME_CLAUDE)
+            new_transcript_path = info.get("transcript_path", "")
             if not new_sid:
                 continue
             state = self.get_window_state(window_id)
-            if state.session_id != new_sid or state.cwd != new_cwd:
+            if (
+                state.session_id != new_sid
+                or state.cwd != new_cwd
+                or state.runtime != new_runtime
+                or state.transcript_path != new_transcript_path
+            ):
                 logger.info(
-                    "Session map: window_id %s updated sid=%s, cwd=%s",
+                    "Session map: window_id %s updated sid=%s runtime=%s cwd=%s",
                     window_id,
                     new_sid,
+                    new_runtime,
                     new_cwd,
                 )
                 state.session_id = new_sid
                 state.cwd = new_cwd
+                state.runtime = new_runtime
+                state.transcript_path = new_transcript_path
                 changed = True
             # Update display name
             if new_wname:
@@ -570,8 +590,26 @@ class SessionManager:
         """Clear session association for a window (e.g., after /clear command)."""
         state = self.get_window_state(window_id)
         state.session_id = ""
+        state.runtime = config.runtime
+        state.transcript_path = ""
         self._save_state()
         logger.info("Cleared session for window_id %s", window_id)
+
+    def remove_window(self, window_id: str) -> None:
+        """Remove persisted state for a tmux window that no longer exists."""
+        self.window_states.pop(window_id, None)
+        self.window_display_names.pop(window_id, None)
+
+        empty_users: list[int] = []
+        for user_id, offsets in self.user_window_offsets.items():
+            offsets.pop(window_id, None)
+            if not offsets:
+                empty_users.append(user_id)
+        for user_id in empty_users:
+            del self.user_window_offsets[user_id]
+
+        self._save_state()
+        logger.info("Removed state for window_id %s", window_id)
 
     @staticmethod
     def _encode_cwd(cwd: str) -> str:
@@ -582,21 +620,64 @@ class SessionManager:
         """
         return re.sub(r"[^a-zA-Z0-9-]", "-", cwd)
 
-    def _build_session_file_path(self, session_id: str, cwd: str) -> Path | None:
-        """Build the direct file path for a session from session_id and cwd."""
+    def _build_claude_session_file_path(self, session_id: str, cwd: str) -> Path | None:
+        """Build the direct Claude transcript path for a session from session_id and cwd."""
         if not session_id or not cwd:
             return None
         encoded_cwd = self._encode_cwd(cwd)
         return config.claude_projects_path / encoded_cwd / f"{session_id}.jsonl"
 
-    async def _get_session_direct(
-        self, session_id: str, cwd: str
-    ) -> ClaudeSession | None:
-        """Get a ClaudeSession directly from session_id and cwd (no scanning)."""
-        file_path = self._build_session_file_path(session_id, cwd)
+    def _build_codex_session_file_path(
+        self, session_id: str, transcript_path: str = ""
+    ) -> Path | None:
+        """Build the direct Codex transcript path for a session."""
+        if transcript_path:
+            return Path(transcript_path)
+        if not session_id:
+            return None
+        if not config.codex_sessions_path.is_dir():
+            return None
 
-        # Fallback: glob search if direct path doesn't exist
-        if not file_path or not file_path.exists():
+        matches = sorted(
+            config.codex_sessions_path.rglob(f"*{session_id}.jsonl"),
+            key=lambda p: p.stat().st_mtime,
+            reverse=True,
+        )
+        return matches[0] if matches else None
+
+    def resolve_session_file_path(
+        self,
+        session_id: str,
+        cwd: str,
+        *,
+        runtime: str = RUNTIME_CLAUDE,
+        transcript_path: str = "",
+    ) -> Path | None:
+        """Resolve the transcript file path for the configured runtime."""
+        if runtime == RUNTIME_CODEX:
+            return self._build_codex_session_file_path(
+                session_id, transcript_path=transcript_path
+            )
+        return self._build_claude_session_file_path(session_id, cwd)
+
+    async def _get_session_direct(
+        self,
+        session_id: str,
+        cwd: str,
+        *,
+        runtime: str = RUNTIME_CLAUDE,
+        transcript_path: str = "",
+    ) -> ClaudeSession | None:
+        """Get a session directly from session_id + runtime metadata (no scanning)."""
+        file_path = self.resolve_session_file_path(
+            session_id,
+            cwd,
+            runtime=runtime,
+            transcript_path=transcript_path,
+        )
+
+        # Fallback: glob search if direct Claude path doesn't exist
+        if runtime == RUNTIME_CLAUDE and (not file_path or not file_path.exists()):
             pattern = f"*/{session_id}.jsonl"
             matches = list(config.claude_projects_path.glob(pattern))
             if matches:
@@ -604,8 +685,11 @@ class SessionManager:
                 logger.debug("Found session via glob: %s", file_path)
             else:
                 return None
+        elif not file_path or not file_path.exists():
+            return None
 
         # Single pass: read file once, extract summary + count messages
+        resolved_session_id = session_id
         summary = ""
         last_user_msg = ""
         message_count = 0
@@ -618,12 +702,22 @@ class SessionManager:
                     message_count += 1
                     try:
                         data = json.loads(line)
-                        # Check for summary
-                        if data.get("type") == "summary":
+                        if runtime == RUNTIME_CODEX and data.get("type") == "session_meta":
+                            payload = data.get("payload", {})
+                            if isinstance(payload, dict):
+                                payload_id = str(payload.get("id", "")).strip()
+                                if payload_id:
+                                    resolved_session_id = payload_id
+                                s = (
+                                    str(payload.get("thread_name", "")).strip()
+                                    or str(payload.get("title", "")).strip()
+                                )
+                                if s:
+                                    summary = s
+                        elif data.get("type") == "summary":
                             s = data.get("summary", "")
                             if s:
                                 summary = s
-                        # Track last user message as fallback
                         elif TranscriptParser.is_user_message(data):
                             parsed = TranscriptParser.parse_message(data)
                             if parsed and parsed.text.strip():
@@ -637,7 +731,7 @@ class SessionManager:
             summary = last_user_msg[:50] if last_user_msg else "Untitled"
 
         return ClaudeSession(
-            session_id=session_id,
+            session_id=resolved_session_id,
             summary=summary,
             message_count=message_count,
             file_path=str(file_path),
@@ -646,14 +740,37 @@ class SessionManager:
     # --- Directory session listing ---
 
     async def list_sessions_for_directory(self, cwd: str) -> list[ClaudeSession]:
-        """List existing Claude sessions for a directory.
+        """List existing runtime sessions for a directory.
 
-        Encodes the cwd path to find the project directory under
-        ~/.claude/projects/{encoded_cwd}/, globs *.jsonl files, and
-        extracts summary info from each.
-
-        Returns a list sorted by mtime (most recent first), capped at 10.
+        Uses the active runtime's transcript storage and returns sessions sorted
+        by mtime (most recent first), capped at 10.
         """
+        if config.runtime == RUNTIME_CODEX:
+            if not config.codex_sessions_path.is_dir():
+                return []
+
+            sessions: list[ClaudeSession] = []
+            jsonl_files = sorted(
+                config.codex_sessions_path.rglob("*.jsonl"),
+                key=lambda p: p.stat().st_mtime,
+                reverse=True,
+            )
+            for transcript_file in jsonl_files:
+                if len(sessions) >= 10:
+                    break
+                session = await self._get_session_direct(
+                    transcript_file.stem,
+                    cwd,
+                    runtime=RUNTIME_CODEX,
+                    transcript_path=str(transcript_file),
+                )
+                if not session:
+                    continue
+                file_cwd = read_cwd_from_jsonl(transcript_file)
+                if file_cwd == cwd and session.message_count > 0:
+                    sessions.append(session)
+            return sessions
+
         encoded_cwd = self._encode_cwd(cwd)
         project_dir = config.claude_projects_path / encoded_cwd
         if not project_dir.is_dir():
@@ -674,7 +791,9 @@ class SessionManager:
             if len(sessions) >= 10:
                 break
             session_id = f.stem
-            session = await self._get_session_direct(session_id, cwd)
+            session = await self._get_session_direct(
+                session_id, cwd, runtime=RUNTIME_CLAUDE
+            )
             if session and session.message_count > 0:
                 sessions.append(session)
         return sessions
@@ -682,7 +801,7 @@ class SessionManager:
     # --- Window → Session resolution ---
 
     async def resolve_session_for_window(self, window_id: str) -> ClaudeSession | None:
-        """Resolve a tmux window to the best matching Claude session.
+        """Resolve a tmux window to the best matching runtime session.
 
         Uses persisted session_id + cwd to construct file path directly.
         Returns None if no session is associated with this window.
@@ -692,7 +811,12 @@ class SessionManager:
         if not state.session_id or not state.cwd:
             return None
 
-        session = await self._get_session_direct(state.session_id, state.cwd)
+        session = await self._get_session_direct(
+            state.session_id,
+            state.cwd,
+            runtime=state.runtime,
+            transcript_path=state.transcript_path,
+        )
         if session:
             return session
 
@@ -705,6 +829,8 @@ class SessionManager:
         )
         state.session_id = ""
         state.cwd = ""
+        state.runtime = config.runtime
+        state.transcript_path = ""
         self._save_state()
         return None
 

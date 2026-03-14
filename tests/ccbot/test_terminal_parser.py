@@ -128,6 +128,23 @@ class TestExtractInteractiveContent:
         assert "Sonnet" in result.content
         assert "Enter to confirm" in result.content
 
+    def test_codex_reasoning_picker(self):
+        pane = (
+            "  Select Reasoning Level for gpt-5.4\n"
+            "\n"
+            "  1. Low                   Fast responses with lighter reasoning\n"
+            "  2. Medium (default)      Balances speed and reasoning depth for everyday tasks\n"
+            "  3. High                  Greater reasoning depth for complex problems\n"
+            "› 4. Extra high (current)  Extra high reasoning depth for complex problems\n"
+            "\n"
+            "  Press enter to confirm or esc to go back\n"
+        )
+        result = extract_interactive_content(pane)
+        assert result is not None
+        assert result.name == "Settings"
+        assert "Select Reasoning Level" in result.content
+        assert "Press enter to confirm" in result.content
+
     def test_settings_esc_to_cancel_bottom(self):
         pane = (
             "  Settings: press tab to cycle\n"

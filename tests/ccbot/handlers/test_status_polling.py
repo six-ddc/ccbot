@@ -24,13 +24,19 @@ def mock_bot():
 @pytest.fixture
 def _clear_interactive_state():
     """Ensure interactive state is clean before and after each test."""
-    from ccbot.handlers.interactive_ui import _interactive_mode, _interactive_msgs
+    from ccbot.handlers.interactive_ui import (
+        _codex_prompt_states,
+        _interactive_mode,
+        _interactive_msgs,
+    )
 
     _interactive_mode.clear()
     _interactive_msgs.clear()
+    _codex_prompt_states.clear()
     yield
     _interactive_mode.clear()
     _interactive_msgs.clear()
+    _codex_prompt_states.clear()
 
 
 @pytest.mark.usefixtures("_clear_interactive_state")
@@ -101,6 +107,74 @@ class TestStatusPollerSettingsDetection:
             )
 
             mock_handle_ui.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_active_codex_prompt_skips_status_updates(self, mock_bot: AsyncMock):
+        """While a Telegram-native Codex prompt is active, polling stays quiet."""
+        window_id = "@5"
+        mock_window = MagicMock()
+        mock_window.window_id = window_id
+        pane = "normal output\n✻ Thinking\n──────────────────────────────────────\n❯\n"
+
+        with (
+            patch("ccbot.handlers.status_polling.tmux_manager") as mock_tmux,
+            patch(
+                "ccbot.handlers.status_polling.has_codex_prompt",
+                return_value=True,
+            ),
+            patch(
+                "ccbot.handlers.status_polling.handle_interactive_ui",
+                new_callable=AsyncMock,
+            ) as mock_handle_ui,
+            patch(
+                "ccbot.handlers.status_polling.enqueue_status_update",
+                new_callable=AsyncMock,
+            ) as mock_enqueue_status,
+        ):
+            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tmux.capture_pane = AsyncMock(return_value=pane)
+
+            await update_status_message(
+                mock_bot, user_id=1, window_id=window_id, thread_id=42
+            )
+
+        mock_handle_ui.assert_not_called()
+        mock_enqueue_status.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_existing_interactive_ui_is_refreshed(self, mock_bot: AsyncMock):
+        window_id = "@5"
+        mock_window = MagicMock()
+        mock_window.window_id = window_id
+        pane = (
+            "  Select Reasoning Level for gpt-5.4\n"
+            "\n"
+            "  1. Low\n"
+            "› 2. Extra high\n"
+            "\n"
+            "  Press enter to confirm or esc to go back\n"
+        )
+
+        with (
+            patch("ccbot.handlers.status_polling.tmux_manager") as mock_tmux,
+            patch(
+                "ccbot.handlers.status_polling.get_interactive_window",
+                return_value=window_id,
+            ),
+            patch(
+                "ccbot.handlers.status_polling.handle_interactive_ui",
+                new_callable=AsyncMock,
+            ) as mock_handle_ui,
+        ):
+            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tmux.capture_pane = AsyncMock(return_value=pane)
+            mock_handle_ui.return_value = True
+
+            await update_status_message(
+                mock_bot, user_id=1, window_id=window_id, thread_id=42
+            )
+
+        mock_handle_ui.assert_called_once_with(mock_bot, 1, window_id, 42)
 
     @pytest.mark.asyncio
     async def test_settings_ui_end_to_end_sends_telegram_keyboard(

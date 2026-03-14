@@ -42,6 +42,12 @@ CB_ASK_SPACE = "aq:spc:"  # aq:spc:<window>
 CB_ASK_TAB = "aq:tab:"  # aq:tab:<window>
 CB_ASK_REFRESH = "aq:ref:"  # aq:ref:<window>
 
+# Codex request_user_input prompts
+CB_CODEX_PROMPT_OPTION = "cq:o:"  # cq:o:<question_idx>:<option_idx>:<window>
+CB_CODEX_PROMPT_OTHER = "cq:t:"  # cq:t:<question_idx>:<window> (add notes)
+CB_CODEX_PROMPT_CANCEL = "cq:c:"  # cq:c:<window>
+CB_CODEX_PROMPT_REFRESH = "cq:r:"  # cq:r:<window>
+
 # Session picker (resume existing session)
 CB_SESSION_SELECT = "rs:sel:"  # rs:sel:<index>
 CB_SESSION_NEW = "rs:new"  # start a new session

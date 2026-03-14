@@ -107,12 +107,14 @@ UI_PATTERNS: list[UIPattern] = [
         top=(
             re.compile(r"^\s*Settings:.*tab to cycle"),
             re.compile(r"^\s*Select model"),
+            re.compile(r"^\s*Select Reasoning Level\b"),
         ),
         bottom=(
             re.compile(r"Esc to cancel"),
             re.compile(r"Esc to exit"),
             re.compile(r"Enter to confirm"),
             re.compile(r"^\s*Type to filter"),
+            re.compile(r"^\s*Press enter to confirm or esc to go back"),
         ),
     ),
 ]

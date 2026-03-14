@@ -4,6 +4,8 @@ import json
 
 import pytest
 
+from ccbot.runtimes import RUNTIME_CODEX
+from ccbot.session import WindowState
 from ccbot.monitor_state import TrackedSession
 from ccbot.session_monitor import SessionMonitor
 
@@ -93,3 +95,57 @@ class TestReadNewLinesOffsetRecovery:
         # Should reset offset to 0 and read the line
         assert session.last_byte_offset == jsonl_file.stat().st_size
         assert len(result) == 1
+
+    @pytest.mark.asyncio
+    async def test_resolve_active_sessions_for_codex(
+        self, monitor, tmp_path, monkeypatch
+    ):
+        """Codex runtime reads active transcript files from session_map state."""
+        from ccbot import session as session_module
+        from ccbot import session_monitor as monitor_module
+
+        transcript_file = (
+            tmp_path
+            / "2026"
+            / "03"
+            / "11"
+            / "rollout-2026-03-11T18-27-22-019cdc6f-d3c8-7003-9730-bf3608dcaec9.jsonl"
+        )
+        transcript_file.parent.mkdir(parents=True)
+        transcript_file.write_text(
+            json.dumps(
+                {
+                    "type": "session_meta",
+                    "payload": {
+                        "id": "019cdc6f-d3c8-7003-9730-bf3608dcaec9",
+                        "cwd": "/tmp/project",
+                    },
+                }
+            )
+            + "\n",
+            encoding="utf-8",
+        )
+
+        monkeypatch.setattr(monitor_module.config, "runtime", RUNTIME_CODEX)
+        monkeypatch.setattr(session_module.config, "runtime", RUNTIME_CODEX)
+        monkeypatch.setattr(session_module.config, "codex_sessions_path", tmp_path)
+        monkeypatch.setattr(
+            session_module.session_manager,
+            "window_states",
+            {
+                "@3": WindowState(
+                    session_id="019cdc6f-d3c8-7003-9730-bf3608dcaec9",
+                    cwd="/tmp/project",
+                    runtime=RUNTIME_CODEX,
+                    transcript_path=str(transcript_file),
+                )
+            },
+        )
+
+        sessions = await monitor._resolve_active_sessions(
+            {"019cdc6f-d3c8-7003-9730-bf3608dcaec9"}
+        )
+
+        assert len(sessions) == 1
+        assert sessions[0].session_id == "019cdc6f-d3c8-7003-9730-bf3608dcaec9"
+        assert sessions[0].file_path == transcript_file

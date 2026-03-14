@@ -63,6 +63,10 @@ def read_cwd_from_jsonl(file_path: str | Path) -> str:
                 try:
                     data = json.loads(line)
                     cwd = data.get("cwd")
+                    if not cwd and data.get("type") == "session_meta":
+                        payload = data.get("payload", {})
+                        if isinstance(payload, dict):
+                            cwd = payload.get("cwd")
                     if cwd:
                         return cwd
                 except json.JSONDecodeError:

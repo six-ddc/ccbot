@@ -1,7 +1,8 @@
-"""JSONL transcript parser for Claude Code session files.
+"""JSONL transcript parser for runtime session files.
 
-Parses Claude Code session JSONL files and extracts structured messages.
-Handles: text, thinking, tool_use, tool_result, local_command, and user messages.
+Parses Claude Code and Codex session JSONL files and extracts structured
+messages. Handles: text, thinking, tool_use, tool_result, local_command, and
+user messages.
 Tool pairing: tool_use blocks in assistant messages are matched with
 tool_result blocks in subsequent user messages via tool_use_id.
 
@@ -31,6 +32,31 @@ class ParsedMessage:
     tool_name: str | None = None  # For tool_use messages
 
 
+@dataclass(frozen=True)
+class CodexPromptOption:
+    """A single option from Codex request_user_input."""
+
+    label: str
+    description: str = ""
+
+
+@dataclass(frozen=True)
+class CodexPromptQuestion:
+    """A single Codex request_user_input question."""
+
+    header: str
+    question_id: str
+    question: str
+    options: tuple[CodexPromptOption, ...]
+
+
+@dataclass(frozen=True)
+class CodexPromptPayload:
+    """Structured prompt payload for Codex request_user_input."""
+
+    questions: tuple[CodexPromptQuestion, ...]
+
+
 @dataclass
 class ParsedEntry:
     """A single parsed message entry ready for display."""
@@ -48,6 +74,7 @@ class ParsedEntry:
     image_data: list[tuple[str, bytes]] | None = (
         None  # For tool_result entries with images: (media_type, raw_bytes)
     )
+    interactive_prompt: CodexPromptPayload | None = None
 
 
 @dataclass
@@ -57,15 +84,15 @@ class PendingToolInfo:
     summary: str  # Formatted tool summary (e.g. "**Read**(file.py)")
     tool_name: str  # Tool name (e.g. "Read", "Edit")
     input_data: Any = None  # Tool input parameters (for Edit to generate diff)
+    interactive_prompt: CodexPromptPayload | None = None
 
 
 class TranscriptParser:
-    """Parser for Claude Code JSONL session files.
+    """Parser for runtime JSONL session files.
 
     Expected JSONL entry structure:
-    - type: "user" | "assistant" | "summary" | "file-history-snapshot" | ...
-    - message.content: list of blocks (text, tool_use, tool_result, thinking)
-    - sessionId, cwd, timestamp, uuid: metadata fields
+    - Claude: type "user" | "assistant" | "summary" | ...
+    - Codex: type "session_meta" | "response_item" | "event_msg" | ...
 
     Tool pairing model: tool_use blocks appear in assistant messages,
     matching tool_result blocks appear in the next user message (keyed by tool_use_id).
@@ -102,12 +129,25 @@ class TranscriptParser:
         Returns:
             Message type: "user", "assistant", "file-history-snapshot", etc.
         """
+        if data.get("type") == "response_item":
+            payload = data.get("payload", {})
+            if isinstance(payload, dict) and payload.get("type") == "message":
+                return str(payload.get("role", "assistant"))
+        if data.get("type") == "message":
+            return str(data.get("role", "assistant"))
         return data.get("type")
 
     @staticmethod
     def is_user_message(data: dict) -> bool:
         """Check if this is a user message."""
-        return data.get("type") == "user"
+        return data.get("type") == "user" or (
+            data.get("type") == "message" and data.get("role") == "user"
+        ) or (
+            data.get("type") == "response_item"
+            and isinstance(data.get("payload"), dict)
+            and data["payload"].get("type") == "message"
+            and data["payload"].get("role") == "user"
+        )
 
     @staticmethod
     def extract_text_only(content_list: list[Any]) -> str:
@@ -204,7 +244,7 @@ class TranscriptParser:
                 summary = f"{len(todos)} item(s)"
         elif name == "TodoRead":
             summary = ""
-        elif name == "AskUserQuestion":
+        elif name in ("AskUserQuestion", "request_user_input"):
             questions = input_data.get("questions", [])
             if isinstance(questions, list) and questions:
                 q = questions[0]
@@ -272,6 +312,74 @@ class TranscriptParser:
                 logger.debug("Failed to decode base64 image in tool_result")
         return images if images else None
 
+    @staticmethod
+    def _decode_tool_input(raw_input: Any) -> Any:
+        """Decode a tool input payload when it arrives as a JSON string."""
+        if not isinstance(raw_input, str):
+            return raw_input
+        raw_input = raw_input.strip()
+        if not raw_input:
+            return {}
+        try:
+            return json.loads(raw_input)
+        except json.JSONDecodeError:
+            return raw_input
+
+    @staticmethod
+    def _parse_codex_prompt_payload(raw_input: Any) -> CodexPromptPayload | None:
+        """Parse Codex request_user_input arguments into a structured payload."""
+        if not isinstance(raw_input, dict):
+            return None
+
+        raw_questions = raw_input.get("questions")
+        if not isinstance(raw_questions, list):
+            return None
+
+        questions: list[CodexPromptQuestion] = []
+        for index, item in enumerate(raw_questions):
+            if not isinstance(item, dict):
+                continue
+
+            question_text = str(item.get("question", "")).strip()
+            if not question_text:
+                continue
+
+            raw_options = item.get("options", [])
+            if not isinstance(raw_options, list):
+                continue
+
+            options: list[CodexPromptOption] = []
+            for opt in raw_options:
+                if not isinstance(opt, dict):
+                    continue
+                label = str(opt.get("label", "")).strip()
+                if not label:
+                    continue
+                options.append(
+                    CodexPromptOption(
+                        label=label,
+                        description=str(opt.get("description", "")).strip(),
+                    )
+                )
+
+            if not options:
+                continue
+
+            header = str(item.get("header", "")).strip()
+            question_id = str(item.get("id", "")).strip() or f"question_{index + 1}"
+            questions.append(
+                CodexPromptQuestion(
+                    header=header,
+                    question_id=question_id,
+                    question=question_text,
+                    options=tuple(options),
+                )
+            )
+
+        if not questions:
+            return None
+        return CodexPromptPayload(questions=tuple(questions))
+
     @classmethod
     def parse_message(cls, data: dict) -> ParsedMessage | None:
         """Parse a message entry from the JSONL data.
@@ -287,15 +395,38 @@ class TranscriptParser:
         if msg_type not in ("user", "assistant"):
             return None
 
-        message = data.get("message")
-        if not isinstance(message, dict):
-            return None
-        content = message.get("content", "")
+        if data.get("type") == "response_item":
+            payload = data.get("payload")
+            if not isinstance(payload, dict) or payload.get("type") != "message":
+                return None
+            content = payload.get("content", [])
+            if not isinstance(content, list):
+                content = []
 
-        if isinstance(content, list):
-            text = cls.extract_text_only(content)
+            text_parts: list[str] = []
+            for item in content:
+                if not isinstance(item, dict):
+                    continue
+                item_type = item.get("type")
+                if msg_type == "assistant" and item_type == "output_text":
+                    text = str(item.get("text", "")).strip()
+                    if text:
+                        text_parts.append(text)
+                elif msg_type == "user" and item_type in {"input_text", "user_message"}:
+                    text = str(item.get("text", "")).strip()
+                    if text:
+                        text_parts.append(text)
+            text = "\n".join(text_parts)
         else:
-            text = str(content) if content else ""
+            message = data.get("message")
+            if not isinstance(message, dict):
+                return None
+            content = message.get("content", "")
+
+            if isinstance(content, list):
+                text = cls.extract_text_only(content)
+            else:
+                text = str(content) if content else ""
         text = cls._RE_ANSI_ESCAPE.sub("", text)
 
         # Detect local command responses in user messages.
@@ -367,7 +498,7 @@ class TranscriptParser:
             stats = f"  ⎿  Wrote {line_count} lines"
             return stats
 
-        elif tool_name == "Bash":
+        elif tool_name in {"Bash", "exec_command", "write_stdin"}:
             # Bash: show output line count
             if line_count > 0:
                 stats = f"  ⎿  Output {line_count} lines"
@@ -409,6 +540,203 @@ class TranscriptParser:
         return cls._format_expandable_quote(text)
 
     @classmethod
+    def _build_tool_result_entry(
+        cls,
+        *,
+        timestamp: str | None,
+        tool_use_id: str | None,
+        tool_summary: str | None,
+        tool_name: str | None,
+        tool_input_data: Any,
+        result_text: str,
+        result_images: list[tuple[str, bytes]] | None = None,
+        is_error: bool = False,
+        is_interrupted: bool = False,
+    ) -> ParsedEntry | None:
+        """Build a display-ready tool_result entry."""
+        if is_interrupted:
+            entry_text = tool_summary or ""
+            if entry_text:
+                entry_text += "\n⏹ Interrupted"
+            else:
+                entry_text = "⏹ Interrupted"
+            return ParsedEntry(
+                role="assistant",
+                text=entry_text,
+                content_type="tool_result",
+                tool_use_id=tool_use_id,
+                timestamp=timestamp,
+            )
+
+        if is_error:
+            entry_text = tool_summary or "**Error**"
+            if result_text:
+                error_summary = result_text.split("\n")[0]
+                if len(error_summary) > 100:
+                    error_summary = error_summary[:100] + "…"
+                entry_text += f"\n  ⎿  Error: {error_summary}"
+                if "\n" in result_text:
+                    entry_text += "\n" + cls._format_expandable_quote(result_text)
+            else:
+                entry_text += "\n  ⎿  Error"
+            return ParsedEntry(
+                role="assistant",
+                text=entry_text,
+                content_type="tool_result",
+                tool_use_id=tool_use_id,
+                timestamp=timestamp,
+                image_data=result_images,
+            )
+
+        if tool_summary:
+            entry_text = tool_summary
+            if tool_name == "Edit" and tool_input_data and result_text:
+                old_s = tool_input_data.get("old_string", "")
+                new_s = tool_input_data.get("new_string", "")
+                if old_s and new_s:
+                    diff_text = cls._format_edit_diff(old_s, new_s)
+                    if diff_text:
+                        added = sum(
+                            1
+                            for line in diff_text.split("\n")
+                            if line.startswith("+") and not line.startswith("+++")
+                        )
+                        removed = sum(
+                            1
+                            for line in diff_text.split("\n")
+                            if line.startswith("-") and not line.startswith("---")
+                        )
+                        stats = (
+                            f"  ⎿  Added {added} lines, removed {removed} lines"
+                        )
+                        entry_text += (
+                            "\n" + stats + "\n" + cls._format_expandable_quote(diff_text)
+                        )
+            elif result_text and cls.EXPANDABLE_QUOTE_START not in tool_summary:
+                entry_text += "\n" + cls._format_tool_result_text(result_text, tool_name)
+            return ParsedEntry(
+                role="assistant",
+                text=entry_text,
+                content_type="tool_result",
+                tool_use_id=tool_use_id,
+                timestamp=timestamp,
+                image_data=result_images,
+            )
+
+        if result_text or result_images:
+            return ParsedEntry(
+                role="assistant",
+                text=cls._format_tool_result_text(result_text, tool_name)
+                if result_text
+                else "",
+                content_type="tool_result",
+                tool_use_id=tool_use_id,
+                timestamp=timestamp,
+                image_data=result_images,
+            )
+
+        return None
+
+    @classmethod
+    def _parse_codex_response_item(
+        cls,
+        data: dict,
+        pending_tools: dict[str, PendingToolInfo],
+    ) -> list[ParsedEntry] | None:
+        """Parse a native Codex `response_item` entry."""
+        if data.get("type") != "response_item":
+            return None
+
+        payload = data.get("payload")
+        if not isinstance(payload, dict):
+            return []
+
+        entry_timestamp = cls.get_timestamp(data)
+        payload_type = payload.get("type")
+
+        if payload_type == "message":
+            parsed = cls.parse_message(data)
+            if not parsed or not parsed.text.strip():
+                return []
+            return [
+                ParsedEntry(
+                    role=parsed.message_type,
+                    text=parsed.text.strip(),
+                    content_type="text",
+                    timestamp=entry_timestamp,
+                )
+            ]
+
+        if payload_type in {"function_call", "custom_tool_call"}:
+            tool_id = str(payload.get("call_id", "")).strip() or None
+            name = str(payload.get("name", "unknown")).strip() or "unknown"
+            raw_input = (
+                payload.get("arguments")
+                if payload_type == "function_call"
+                else payload.get("input")
+            )
+            tool_input = cls._decode_tool_input(raw_input)
+            summary = cls.format_tool_use_summary(name, tool_input)
+            input_data = tool_input if name in ("Edit", "NotebookEdit") else None
+            interactive_prompt = (
+                cls._parse_codex_prompt_payload(tool_input)
+                if name == "request_user_input"
+                else None
+            )
+            if tool_id:
+                pending_tools[tool_id] = PendingToolInfo(
+                    summary=summary,
+                    tool_name=name,
+                    input_data=input_data,
+                    interactive_prompt=interactive_prompt,
+                )
+            return [
+                ParsedEntry(
+                    role="assistant",
+                    text=summary,
+                    content_type="tool_use",
+                    tool_use_id=tool_id,
+                    timestamp=entry_timestamp,
+                    tool_name=name,
+                    interactive_prompt=interactive_prompt,
+                )
+            ]
+
+        if payload_type == "web_search_call":
+            action = payload.get("action", {})
+            query = ""
+            if isinstance(action, dict):
+                query = str(action.get("query", "")).strip()
+            summary = cls.format_tool_use_summary("WebSearch", {"query": query})
+            return [
+                ParsedEntry(
+                    role="assistant",
+                    text=summary,
+                    content_type="tool_use",
+                    timestamp=entry_timestamp,
+                    tool_name="WebSearch",
+                )
+            ]
+
+        if payload_type in {"function_call_output", "custom_tool_call_output"}:
+            tool_id = str(payload.get("call_id", "")).strip() or None
+            result_text = str(payload.get("output", "")).strip()
+            tool_info = pending_tools.pop(tool_id, None) if tool_id else None
+            if tool_info and tool_info.tool_name == "request_user_input":
+                return []
+            entry = cls._build_tool_result_entry(
+                timestamp=entry_timestamp,
+                tool_use_id=tool_id,
+                tool_summary=tool_info.summary if tool_info else None,
+                tool_name=tool_info.tool_name if tool_info else None,
+                tool_input_data=tool_info.input_data if tool_info else None,
+                result_text=result_text,
+            )
+            return [entry] if entry is not None else []
+
+        return []
+
+    @classmethod
     def parse_entries(
         cls,
         entries: list[dict],
@@ -431,6 +759,7 @@ class TranscriptParser:
         """
         result: list[ParsedEntry] = []
         last_cmd_name: str | None = None
+        codex_tool_use_ids: set[str] = set()
         # Pending tool_use blocks keyed by id
         _carry_over = pending_tools is not None
         if pending_tools is None:
@@ -439,6 +768,14 @@ class TranscriptParser:
             pending_tools = dict(pending_tools)  # don't mutate caller's dict
 
         for data in entries:
+            codex_entries = cls._parse_codex_response_item(data, pending_tools)
+            if codex_entries is not None:
+                result.extend(codex_entries)
+                for entry in codex_entries:
+                    if entry.content_type == "tool_use" and entry.tool_use_id:
+                        codex_tool_use_ids.add(entry.tool_use_id)
+                continue
+
             msg_type = cls.get_message_type(data)
             if msg_type not in ("user", "assistant"):
                 continue
@@ -746,6 +1083,8 @@ class TranscriptParser:
         remaining_pending = dict(pending_tools)
         if not _carry_over:
             for tool_id, tool_info in pending_tools.items():
+                if tool_id in codex_tool_use_ids:
+                    continue
                 result.append(
                     ParsedEntry(
                         role="assistant",
