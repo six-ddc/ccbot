@@ -184,4 +184,14 @@
 - Lines: +155 (31 test cases)
 - Security: semgrep 0 findings
 - Test results: 268 total (237 original + 31 new), all passing
+- Commit: fd930db
+
+## Cycle 19: Global Error Handler with Developer Alerts
+- Date: 2026-03-15
+- Role sequence: Researcher (resilience gap analysis) > Validator (Sequential Thinking) > Developer > Auditor
+- Idea source: No add_error_handler registered — unhandled exceptions in any handler caused silent failures. The safety net for all 18 features.
+- Validation: APPROVED — production-essential, catches ALL unhandled exceptions, user gets feedback, developer gets traceback
+- Files changed: src/ccbot/bot.py, CHANGELOG.md
+- Lines: +50/-0
+- Security: semgrep 0 findings, traceback to ALLOWED_USER only, rate-limited, truncated
 - Commit: pending

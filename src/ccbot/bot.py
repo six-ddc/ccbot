@@ -3003,6 +3003,54 @@ async def post_shutdown(application: Application) -> None:
     await close_transcribe_client()
 
 
+# Error notification rate limiting: user_id → last_error_time
+_last_error_notify: dict[int, float] = {}
+_ERROR_NOTIFY_COOLDOWN = 10.0  # seconds
+
+
+async def error_handler(update: object, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Global error handler: log exception, notify user, alert developer.
+
+    Catches all unhandled exceptions from handlers, jobs, and callbacks.
+    Sends a user-facing error message and a developer notification with
+    truncated traceback.
+    """
+    import traceback
+
+    logger.error("Unhandled exception:", exc_info=context.error)
+
+    # Notify the user who triggered the error
+    if isinstance(update, Update) and update.effective_user:
+        uid = update.effective_user.id
+        now = time.monotonic()
+        last = _last_error_notify.get(uid, 0.0)
+        if now - last >= _ERROR_NOTIFY_COOLDOWN:
+            _last_error_notify[uid] = now
+            msg = update.effective_message
+            if msg:
+                try:
+                    await safe_reply(msg, "Произошла ошибка. Попробуй ещё раз.")
+                except Exception:
+                    pass
+
+    # Alert first allowed user with traceback details
+    if context.error and config.allowed_users:
+        dev_uid = next(iter(config.allowed_users))
+        tb_lines = traceback.format_exception(
+            type(context.error), context.error, context.error.__traceback__
+        )
+        tb_text = "".join(tb_lines)
+        if len(tb_text) > 3000:
+            tb_text = tb_text[:1500] + "\n...\n" + tb_text[-1500:]
+        try:
+            await context.bot.send_message(
+                chat_id=dev_uid,
+                text=f"```\nError:\n{tb_text}\n```",
+            )
+        except Exception:
+            pass
+
+
 def create_bot() -> Application:
     application = (
         Application.builder()
@@ -3066,5 +3114,8 @@ def create_bot() -> Application:
     )
     # Reactions: forward as short messages to Claude Code
     application.add_handler(MessageReactionHandler(reaction_handler))
+
+    # Global error handler — catches all unhandled exceptions
+    application.add_error_handler(error_handler)
 
     return application

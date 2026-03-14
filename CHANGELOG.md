@@ -1,5 +1,16 @@
 # Changelog
 
+## [Fork] 2026-03-15 — Global Error Handler with Developer Alerts
+
+Unhandled exceptions in any handler are now caught, logged, and reported:
+- **User notification**: "Произошла ошибка. Попробуй ещё раз." (rate-limited: 1 per 10s per user)
+- **Developer alert**: truncated traceback sent to first ALLOWED_USER via Telegram
+- Registered via `application.add_error_handler()` — catches all handler/callback/job exceptions
+
+Previously, unhandled exceptions caused silent failures with no user feedback.
+
+---
+
 ## [Fork] 2026-03-15 — Comprehensive Test Suite for New Features
 
 31 new tests covering all critical features from cycles 1-17:
