@@ -73,4 +73,14 @@
 - Files changed: src/ccbot/session_monitor.py, CHANGELOG.md
 - Lines: +70/-8
 - Security: semgrep 0 findings, no new attack surface (display-only formatting of existing data)
+- Commit: 598e1bf
+
+## Cycle 8: /summary Session Context Digest
+- Date: 2026-03-15
+- Role sequence: Researcher > Validator (Sequential Thinking) > Architect > Developer > Auditor
+- Idea source: Multi-session workflow pain — user returns to a topic after hours and doesn't remember context. /history shows raw messages, not actionable digest.
+- Validation: APPROVED — solves real context-recall problem, pure data extraction from existing transcripts, no external dependencies
+- Files changed: src/ccbot/bot.py, CHANGELOG.md
+- Lines: +80/-0
+- Security: semgrep 0 findings, display-only data extraction
 - Commit: pending

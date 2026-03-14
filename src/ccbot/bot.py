@@ -464,6 +464,97 @@ async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
     await safe_reply(update.message, f"```\n{text}\n```")
 
 
+async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show a structured digest of the current session: recent responses, files touched, commands run."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    thread_id = _get_thread_id(update)
+    wid = session_manager.resolve_window_for_thread(user.id, thread_id)
+    if not wid:
+        await safe_reply(update.message, "Нет привязанной сессии в этом топике.")
+        return
+
+    messages, total = await session_manager.get_recent_messages(wid)
+    if not messages:
+        await safe_reply(update.message, "История пуста.")
+        return
+
+    # Extract structured data from messages
+    recent_texts: list[str] = []
+    files_touched: set[str] = set()
+    commands_run: list[str] = []
+
+    for msg in messages:
+        role = msg.get("role", "")
+        text = msg.get("text", "")
+        ctype = msg.get("content_type", "")
+
+        if role == "assistant" and ctype == "text" and text:
+            recent_texts.append(text)
+
+        if ctype in ("tool_use", "tool_result") and text:
+            # Extract file paths from tool summaries
+            for tool in ("Read", "Write", "Edit", "Glob"):
+                marker = f"**{tool}**("
+                if marker in text:
+                    start = text.index(marker) + len(marker)
+                    end = text.index(")", start) if ")" in text[start:] else -1
+                    if end > start:
+                        fpath = text[start : start + (end - start)].strip("`")
+                        if fpath and not fpath.startswith("("):
+                            files_touched.add(fpath)
+
+            # Extract commands from Bash tool
+            if "**Bash**(" in text:
+                start = text.index("**Bash**(") + len("**Bash**(")
+                end = text.index(")", start) if ")" in text[start:] else -1
+                if end > start:
+                    cmd = text[start : start + (end - start)].strip("`")
+                    if cmd:
+                        short = cmd[:80] + "…" if len(cmd) > 80 else cmd
+                        commands_run.append(short)
+
+    # Build summary
+    lines: list[str] = []
+    lines.append(f"Сессия: {session_manager.get_display_name(wid)}")
+    lines.append(f"Всего сообщений: {total}")
+    lines.append("")
+
+    # Last 3 assistant responses
+    last_responses = [t for t in recent_texts[-3:]]
+    if last_responses:
+        lines.append("Последние ответы Claude:")
+        for i, resp in enumerate(reversed(last_responses), 1):
+            preview = resp[:120].replace("\n", " ")
+            if len(resp) > 120:
+                preview += "…"
+            lines.append(f"  {i}. {preview}")
+        lines.append("")
+
+    # Files touched
+    if files_touched:
+        lines.append(f"Файлы ({len(files_touched)}):")
+        for f in sorted(files_touched)[:15]:
+            lines.append(f"  • {f}")
+        if len(files_touched) > 15:
+            lines.append(f"  … и ещё {len(files_touched) - 15}")
+        lines.append("")
+
+    # Commands run
+    if commands_run:
+        unique_cmds = list(dict.fromkeys(commands_run[-10:]))
+        lines.append(f"Команды ({len(unique_cmds)}):")
+        for cmd in unique_cmds:
+            lines.append(f"  $ {cmd}")
+
+    summary_text = "\n".join(lines)
+    await safe_reply(update.message, f"```\n{summary_text}\n```")
+
+
 # --- Screenshot keyboard with quick control keys ---
 
 # key_id → (tmux_key, enter, literal)
@@ -2382,6 +2473,7 @@ async def post_init(application: Application) -> None:
         BotCommand("unbind", "Отвязать топик (окно останется)"),
         BotCommand("usage", "Остаток лимита Claude Code"),
         BotCommand("health", "Диагностика бота"),
+        BotCommand("summary", "Обзор текущей сессии"),
     ]
     # Add Claude Code slash commands
     for cmd_name, desc in CC_COMMANDS.items():
@@ -2496,6 +2588,7 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("unbind", unbind_command))
     application.add_handler(CommandHandler("usage", usage_command))
     application.add_handler(CommandHandler("health", health_command))
+    application.add_handler(CommandHandler("summary", summary_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Topic closed event — auto-kill associated window
     application.add_handler(

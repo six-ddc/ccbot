@@ -1,5 +1,17 @@
 # Changelog
 
+## [Fork] 2026-03-15 — /summary Session Context Digest
+
+New `/summary` command extracts a structured digest from the current session transcript:
+- Last 3 Claude responses (truncated previews)
+- Files touched (Read/Write/Edit tool calls)
+- Commands run (Bash tool calls)
+- Total message count
+
+Solves the context-recall problem when returning to a session after a break.
+
+---
+
 ## [Fork] 2026-03-15 — Rich Progress Status (Live Tool Activity Display)
 
 In clean output mode, instead of showing just "⏳ Работаю…", the bot now displays what Claude is actually doing in real-time:
