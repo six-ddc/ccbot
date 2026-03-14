@@ -153,6 +153,38 @@ session_monitor: SessionMonitor | None = None
 # Status polling task
 _status_poll_task: asyncio.Task | None = None
 
+# File cleanup task
+_cleanup_task: asyncio.Task[None] | None = None
+_CLEANUP_INTERVAL = 6 * 3600  # 6 hours
+
+
+async def _file_cleanup_loop() -> None:
+    """Periodically delete old downloaded files (images + documents).
+
+    Runs every 6 hours. Deletes files older than config.file_retention_days.
+    """
+    while True:
+        await asyncio.sleep(_CLEANUP_INTERVAL)
+        if config.file_retention_days <= 0:
+            continue
+        cutoff = time.time() - config.file_retention_days * 86400
+        deleted = 0
+        for directory in (_IMAGES_DIR, _DOCS_DIR):
+            if not directory.exists():
+                continue
+            for fpath in directory.iterdir():
+                if not fpath.is_file():
+                    continue
+                try:
+                    if fpath.stat().st_mtime < cutoff:
+                        fpath.unlink()
+                        deleted += 1
+                except OSError:
+                    pass
+        if deleted:
+            logger.info("File cleanup: deleted %d old files", deleted)
+
+
 # Bot startup timestamp (set in post_init)
 _bot_start_time: float = 0.0
 
@@ -2849,6 +2881,13 @@ async def post_init(application: Application) -> None:
     _status_poll_task = asyncio.create_task(status_poll_loop(application.bot))
     logger.info("Status polling task started")
 
+    # Start file cleanup task
+    if config.file_retention_days > 0:
+        _cleanup_task = asyncio.create_task(_file_cleanup_loop())
+        logger.info(
+            "File cleanup task started (retention: %d days)", config.file_retention_days
+        )
+
     # Check if previous shutdown was clean and notify users
     shutdown_ts = read_and_clear_shutdown_marker()
     if shutdown_ts:
@@ -2873,7 +2912,7 @@ async def post_init(application: Application) -> None:
 
 
 async def post_shutdown(application: Application) -> None:
-    global _status_poll_task
+    global _status_poll_task, _cleanup_task
 
     # Notify all bound topics that the bot is shutting down
     notified = 0
@@ -2903,6 +2942,15 @@ async def post_shutdown(application: Application) -> None:
             pass
         _status_poll_task = None
         logger.info("Status polling stopped")
+
+    # Stop file cleanup task
+    if _cleanup_task:
+        _cleanup_task.cancel()
+        try:
+            await _cleanup_task
+        except asyncio.CancelledError:
+            pass
+        _cleanup_task = None
 
     # Stop all queue workers
     await shutdown_workers()

@@ -1,5 +1,15 @@
 # Changelog
 
+## [Fork] 2026-03-15 — Automatic File Cleanup (Retention Policy)
+
+Downloaded images and documents now have automatic age-based cleanup:
+- Background task runs every 6 hours
+- Deletes files older than 7 days (configurable: `CCBOT_FILE_RETENTION_DAYS`, 0 = keep forever)
+- Scans `~/.ccbot/images/` and `~/.ccbot/documents/`
+- Prevents disk space leaks on long-running deployments
+
+---
+
 ## [Fork] 2026-03-15 — Auto-name Topics from First Message
 
 When a user sends their first substantive message in a new topic, the bot automatically renames the Telegram topic to match the message content (first 30 chars). Also syncs the tmux window display name.

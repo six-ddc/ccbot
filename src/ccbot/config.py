@@ -112,6 +112,11 @@ class Config:
         # Auto-restart Claude on crash with --resume (max 2 attempts per session)
         self.auto_restart = _getbool("CCBOT_AUTO_RESTART", True)
 
+        # File retention: days to keep downloaded images/documents. 0 = keep forever.
+        self.file_retention_days = max(
+            0, int(os.getenv("CCBOT_FILE_RETENTION_DAYS", "7"))
+        )
+
         # Long response threshold: responses above this char count are sent as
         # preview text + .md file attachment instead of [1/N] message splits.
         # 0 = disabled (always use message splitting).

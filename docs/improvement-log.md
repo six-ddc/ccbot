@@ -153,4 +153,14 @@
 - Files changed: src/ccbot/bot.py, CHANGELOG.md
 - Lines: +60/-0
 - Security: semgrep 0 findings, plain text topic names (no injection), edit_forum_topic requires permission
+- Commit: 8f14fbc
+
+## Cycle 16: Automatic File Cleanup (Retention Policy)
+- Date: 2026-03-15
+- Role sequence: Researcher (disk space analysis) > Validator (Sequential Thinking) > Developer > Auditor
+- Idea source: Downloaded files accumulate forever in ~/.ccbot/images/ and documents/. On cheap VPS/Railway, this is a ticking time bomb.
+- Validation: APPROVED — prevents disk space leak, zero UX impact, configurable retention, background task
+- Files changed: src/ccbot/bot.py, src/ccbot/config.py, CHANGELOG.md
+- Lines: +40/-0
+- Security: semgrep 0 findings, operates only on bot-controlled directories
 - Commit: pending
