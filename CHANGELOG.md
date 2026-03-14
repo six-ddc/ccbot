@@ -1,5 +1,19 @@
 # Changelog
 
+## [Fork] 2026-03-15 — Auto-restart Claude on Crash
+
+When Claude Code process exits unexpectedly, the bot now automatically restarts it with `--resume <session_id>` in the same tmux window. User sees "Сессия перезапущена автоматически" and work continues seamlessly.
+
+- Max 2 restart attempts per session with 60s cooldown between attempts
+- After 2 failures, falls through to existing kill+unbind behavior
+- `shlex.quote()` for session_id in resume command (injection prevention)
+- Configurable: `CCBOT_AUTO_RESTART` (default true)
+- Claude running again → restart counter resets
+
+Previously, any Claude crash required manual session recreation.
+
+---
+
 ## [Fork] 2026-03-15 — /summary Session Context Digest
 
 New `/summary` command extracts a structured digest from the current session transcript:

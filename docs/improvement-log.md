@@ -83,4 +83,14 @@
 - Files changed: src/ccbot/bot.py, CHANGELOG.md
 - Lines: +80/-0
 - Security: semgrep 0 findings, display-only data extraction
+- Commit: 77ec556
+
+## Cycle 9: Auto-restart Claude on Crash
+- Date: 2026-03-15
+- Role sequence: Researcher (crash recovery analysis) > Validator (Sequential Thinking) > Architect > Developer > Auditor
+- Idea source: Analysis of dead process handler — current behavior kills window on crash, requiring manual recreation. Auto-restart with --resume transforms crash from "session lost" to "transparent recovery".
+- Validation: APPROVED — transforms crash UX fundamentally, uses existing infrastructure (is_claude_running, send_keys, session_id), safety via retry limit (2) + cooldown (60s)
+- Files changed: src/ccbot/handlers/status_polling.py, src/ccbot/config.py, CHANGELOG.md
+- Lines: +45/-15
+- Security: semgrep 0 findings, shlex.quote for session_id, retry limit prevents loops
 - Commit: pending

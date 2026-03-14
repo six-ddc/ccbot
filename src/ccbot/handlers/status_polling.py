@@ -47,6 +47,11 @@ TOPIC_CHECK_INTERVAL = 60.0  # seconds
 _exit_detected_at: dict[str, float] = {}
 _EXIT_GRACE_PERIOD = 5.0
 
+# Auto-restart tracking: window_id → (attempt_count, last_restart_time)
+_restart_attempts: dict[str, tuple[int, float]] = {}
+_MAX_RESTART_ATTEMPTS = 2
+_RESTART_COOLDOWN = 60.0  # seconds between restart attempts
+
 # Idle reminder tracking: (user_id, thread_id) → timestamp
 _last_user_activity: dict[tuple[int, int], float] = {}
 _last_claude_response: dict[tuple[int, int], float] = {}
@@ -204,7 +209,7 @@ async def status_poll_loop(bot: Bot) -> None:
                         )
                         continue
 
-                    # Detect dead Claude process — auto-cleanup with grace period
+                    # Detect dead Claude process — auto-restart or cleanup
                     if not await tmux_manager.is_claude_running(wid):
                         now = time.monotonic()
                         if wid not in _exit_detected_at:
@@ -214,6 +219,56 @@ async def status_poll_loop(bot: Bot) -> None:
                             continue
                         _exit_detected_at.pop(wid, None)
                         display = session_manager.get_display_name(wid)
+                        resolved_chat = session_manager.resolve_chat_id(
+                            user_id, thread_id
+                        )
+
+                        # Auto-restart: try to resume the session
+                        ws = session_manager.get_window_state(wid)
+                        attempts, last_time = _restart_attempts.get(wid, (0, 0.0))
+                        can_restart = (
+                            config.auto_restart
+                            and ws.session_id
+                            and attempts < _MAX_RESTART_ATTEMPTS
+                            and (now - last_time) > _RESTART_COOLDOWN
+                        )
+
+                        if can_restart:
+                            import shlex
+
+                            cmd = (
+                                f"{config.claude_command} "
+                                f"--resume {shlex.quote(ws.session_id)}"
+                            )
+                            success = await tmux_manager.send_keys(
+                                wid, cmd, enter=True, literal=False
+                            )
+                            _restart_attempts[wid] = (attempts + 1, now)
+                            if success:
+                                logger.info(
+                                    "Auto-restarting Claude in '%s' (%s) "
+                                    "with --resume %s (attempt %d)",
+                                    display,
+                                    wid,
+                                    ws.session_id,
+                                    attempts + 1,
+                                )
+                                try:
+                                    from .message_sender import safe_send
+
+                                    await safe_send(
+                                        bot,
+                                        resolved_chat,
+                                        f"Сессия '{display}' перезапущена "
+                                        f"автоматически (попытка {attempts + 1}).",
+                                        message_thread_id=thread_id,
+                                    )
+                                except Exception:
+                                    pass
+                                continue
+
+                        # No restart possible — fall through to kill+unbind
+                        _restart_attempts.pop(wid, None)
                         await tmux_manager.kill_window(wid)
                         session_manager.unbind_thread(user_id, thread_id)
                         await clear_topic_state(user_id, thread_id, bot)
@@ -223,9 +278,6 @@ async def status_poll_loop(bot: Bot) -> None:
                             wid,
                             user_id,
                             thread_id,
-                        )
-                        resolved_chat = session_manager.resolve_chat_id(
-                            user_id, thread_id
                         )
                         try:
                             from .message_sender import safe_send
@@ -242,6 +294,8 @@ async def status_poll_loop(bot: Bot) -> None:
                         continue
                     else:
                         _exit_detected_at.pop(wid, None)
+                        # Claude is running — clear restart counter
+                        _restart_attempts.pop(wid, None)
 
                     # UI detection happens unconditionally in update_status_message.
                     # Status enqueue is skipped inside update_status_message when

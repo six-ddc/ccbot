@@ -109,6 +109,9 @@ class Config:
             0, int(os.getenv("CCBOT_IDLE_REMINDER_SECONDS", "120"))
         )
 
+        # Auto-restart Claude on crash with --resume (max 2 attempts per session)
+        self.auto_restart = _getbool("CCBOT_AUTO_RESTART", True)
+
         # Input batching: collect rapid-fire messages for N seconds before
         # sending as one combined prompt. 0 = disabled (send immediately).
         self.input_batch_seconds = max(
