@@ -352,6 +352,36 @@ def _extract_forward_context(message: object) -> str:
         return "(Переслано)\n"
 
 
+def _extract_reply_context(message: object) -> str:
+    """Extract quoted reply context from a Telegram message.
+
+    When user reply-quotes a previous message, returns a prefix like
+    "(В ответ на: {quoted text})\n" so Claude understands what the
+    user is responding to. Returns empty string if not a reply.
+    """
+    from telegram import Message
+
+    if not isinstance(message, Message):
+        return ""
+
+    reply = message.reply_to_message
+    if reply is None:
+        return ""
+
+    quoted = reply.text or reply.caption or ""
+    if not quoted:
+        return ""
+
+    # Truncate long quoted text
+    if len(quoted) > 200:
+        quoted = quoted[:200] + "…"
+
+    # Replace newlines with spaces for compact display
+    quoted = quoted.replace("\n", " ")
+
+    return f"(В ответ на: {quoted})\n"
+
+
 def _get_thread_id(update: Update) -> int | None:
     """Extract thread_id from an update, returning None if not in a named topic."""
     msg = update.message or (
@@ -1324,12 +1354,14 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await tg_file.download_to_drive(file_path)
 
     # Build the message to send to Claude Code
-    fwd_ctx = _extract_forward_context(update.message)
+    ctx = _extract_forward_context(update.message) + _extract_reply_context(
+        update.message
+    )
     caption = update.message.caption or ""
     if caption:
-        text_to_send = f"{fwd_ctx}{caption}\n\n(image attached: {file_path})"
+        text_to_send = f"{ctx}{caption}\n\n(image attached: {file_path})"
     else:
-        text_to_send = f"{fwd_ctx}(image attached: {file_path})"
+        text_to_send = f"{ctx}(image attached: {file_path})"
 
     await update.message.chat.send_action(ChatAction.TYPING)
     clear_status_msg_info(user.id, thread_id)
@@ -1412,10 +1444,12 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await safe_reply(update.message, f"Ошибка транскрипции: {e}")
         return
 
-    # Enrich with forward context if this was a forwarded voice message
-    fwd_ctx = _extract_forward_context(update.message)
-    if fwd_ctx:
-        text = fwd_ctx + text
+    # Enrich with forward/reply context
+    ctx = _extract_forward_context(update.message) + _extract_reply_context(
+        update.message
+    )
+    if ctx:
+        text = ctx + text
 
     await update.message.chat.send_action(ChatAction.TYPING)
     clear_status_msg_info(user.id, thread_id)
@@ -1511,12 +1545,14 @@ async def document_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
     await tg_file.download_to_drive(file_path)
 
     # Build message for Claude Code
-    fwd_ctx = _extract_forward_context(update.message)
+    ctx = _extract_forward_context(update.message) + _extract_reply_context(
+        update.message
+    )
     caption = update.message.caption or ""
     if caption:
-        text_to_send = f"{fwd_ctx}{caption}\n\n(document attached: {file_path})"
+        text_to_send = f"{ctx}{caption}\n\n(document attached: {file_path})"
     else:
-        text_to_send = f"{fwd_ctx}(document attached: {file_path})"
+        text_to_send = f"{ctx}(document attached: {file_path})"
 
     await update.message.chat.send_action(ChatAction.TYPING)
     clear_status_msg_info(user.id, thread_id)
@@ -1650,6 +1686,11 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     fwd_ctx = _extract_forward_context(update.message)
     if fwd_ctx:
         text = fwd_ctx + text
+
+    # Enrich quoted replies with context
+    reply_ctx = _extract_reply_context(update.message)
+    if reply_ctx:
+        text = reply_ctx + text
 
     # Smart TG file request detection: append hint for Claude
     _TG_SEND_PATTERNS = (

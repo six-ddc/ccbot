@@ -163,4 +163,14 @@
 - Files changed: src/ccbot/bot.py, src/ccbot/config.py, CHANGELOG.md
 - Lines: +40/-0
 - Security: semgrep 0 findings, operates only on bot-controlled directories
+- Commit: 8348907
+
+## Cycle 17: Quoted Reply Context Enrichment
+- Date: 2026-03-15
+- Role sequence: Researcher (conversational UX analysis) > Validator (Sequential Thinking) > Developer > Auditor
+- Idea source: Telegram reply-quote is natural UX for referencing specific messages. Currently ignored — Claude sees only the new text without knowing what user is responding to.
+- Validation: APPROVED — natural conversational context, applied to all 4 input handlers, truncation prevents overflow
+- Files changed: src/ccbot/bot.py, CHANGELOG.md
+- Lines: +40/-5
+- Security: semgrep 0 findings, trusted Telegram API data, 200-char truncation
 - Commit: pending

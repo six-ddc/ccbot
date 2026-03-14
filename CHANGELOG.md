@@ -1,5 +1,15 @@
 # Changelog
 
+## [Fork] 2026-03-15 — Quoted Reply Context Enrichment
+
+When user reply-quotes a specific bot message, the quoted text is now included as context for Claude:
+- Text handler: "(В ответ на: {quoted text})\n{user message}"
+- Applied to ALL input types: text, photo, document, voice
+- Quoted text truncated to 200 chars to prevent overflow
+- Enables precise context referencing when Claude sends multiple messages
+
+---
+
 ## [Fork] 2026-03-15 — Automatic File Cleanup (Retention Policy)
 
 Downloaded images and documents now have automatic age-based cleanup:
