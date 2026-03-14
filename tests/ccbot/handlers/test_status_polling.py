@@ -9,7 +9,11 @@ from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
 
-from ccbot.handlers.status_polling import update_status_message
+from ccbot.handlers.status_polling import (
+    INTERACTIVE_MISS_BEFORE_CLEAR,
+    _interactive_miss_counts,
+    update_status_message,
+)
 
 
 @pytest.fixture
@@ -28,9 +32,11 @@ def _clear_interactive_state():
 
     _interactive_mode.clear()
     _interactive_msgs.clear()
+    _interactive_miss_counts.clear()
     yield
     _interactive_mode.clear()
     _interactive_msgs.clear()
+    _interactive_miss_counts.clear()
 
 
 @pytest.mark.usefixtures("_clear_interactive_state")
@@ -139,3 +145,38 @@ class TestStatusPollerSettingsDetection:
             assert keyboard is not None
             # Verify the message text contains model picker content
             assert "Select model" in call_kwargs["text"]
+
+    @pytest.mark.asyncio
+    async def test_interactive_clear_requires_consecutive_misses(self, mock_bot: AsyncMock):
+        """Single false-negative capture must not clear interactive mode immediately."""
+        window_id = "@5"
+        mock_window = MagicMock()
+        mock_window.window_id = window_id
+        non_ui_pane = "regular output\nno picker here\n"
+
+        with (
+            patch("ccbot.handlers.status_polling.tmux_manager") as mock_tmux,
+            patch(
+                "ccbot.handlers.status_polling.get_interactive_window",
+                return_value=window_id,
+            ),
+            patch(
+                "ccbot.handlers.status_polling.clear_interactive_msg",
+                new_callable=AsyncMock,
+            ) as mock_clear,
+        ):
+            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tmux.capture_pane = AsyncMock(return_value=non_ui_pane)
+
+            # First N-1 misses: no clear yet.
+            for _ in range(INTERACTIVE_MISS_BEFORE_CLEAR - 1):
+                await update_status_message(
+                    mock_bot, user_id=1, window_id=window_id, thread_id=42
+                )
+            mock_clear.assert_not_called()
+
+            # Nth miss triggers clear.
+            await update_status_message(
+                mock_bot, user_id=1, window_id=window_id, thread_id=42
+            )
+            mock_clear.assert_called_once_with(1, mock_bot, 42)

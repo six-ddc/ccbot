@@ -2,12 +2,46 @@
 
 Handles two execution modes:
   1. `ccbot hook` — delegates to hook.hook_main() for Claude Code hook processing.
-  2. Default — configures logging, initializes tmux session, and starts the
+  2. `ccbot codex-map` — updates session_map.json for Codex rollout sessions.
+  3. Default — configures logging, initializes tmux session, and starts the
      Telegram bot polling loop via bot.create_bot().
 """
 
+import asyncio
+import argparse
 import logging
+import os
 import sys
+
+
+def _parse_forward_ports(args: list[str]) -> list[int]:
+    parser = argparse.ArgumentParser(
+        prog="ccbot",
+        description="Telegram monitor for AI CLI sessions",
+    )
+    parser.add_argument(
+        "--forward",
+        action="append",
+        default=[],
+        metavar="PORT[,PORT...]",
+        help="Forward local port(s) to public URL and announce in Telegram",
+    )
+    parsed = parser.parse_args(args)
+
+    ports: list[int] = []
+    for group in parsed.forward:
+        for token in group.split(","):
+            part = token.strip()
+            if not part:
+                continue
+            try:
+                port = int(part)
+            except ValueError as e:
+                raise SystemExit(f"Invalid --forward value: {part}") from e
+            if port < 1 or port > 65535:
+                raise SystemExit(f"Invalid --forward port: {port}")
+            ports.append(port)
+    return ports
 
 
 def main() -> None:
@@ -17,6 +51,17 @@ def main() -> None:
 
         hook_main()
         return
+
+    if len(sys.argv) > 1 and sys.argv[1] == "codex-map":
+        from .codex_mapper import codex_session_mapper
+
+        changed = asyncio.run(codex_session_mapper.sync_session_map())
+        print("updated" if changed else "no changes")
+        return
+
+    forward_ports = _parse_forward_ports(sys.argv[1:])
+    if forward_ports:
+        os.environ["CCBOT_FORWARD_PORTS"] = ",".join(str(p) for p in forward_ports)
 
     logging.basicConfig(
         format="%(asctime)s - %(name)s - %(levelname)s - %(message)s",
@@ -48,7 +93,8 @@ def main() -> None:
     from .tmux_manager import tmux_manager
 
     logger.info("Allowed users: %s", config.allowed_users)
-    logger.info("Claude projects path: %s", config.claude_projects_path)
+    logger.info("Provider: %s", config.provider)
+    logger.info("Provider data root: %s", config.provider_data_root)
 
     # Ensure tmux session exists
     session = tmux_manager.get_or_create_session()

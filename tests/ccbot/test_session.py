@@ -109,8 +109,14 @@ class TestWindowState:
 
 
 class TestResolveWindowForThread:
-    def test_none_thread_id_returns_none(self, mgr: SessionManager) -> None:
+    def test_none_thread_id_without_private_binding_returns_none(
+        self, mgr: SessionManager
+    ) -> None:
         assert mgr.resolve_window_for_thread(100, None) is None
+
+    def test_none_thread_id_uses_private_binding(self, mgr: SessionManager) -> None:
+        mgr.bind_thread(100, 0, "@9")
+        assert mgr.resolve_window_for_thread(100, None) == "@9"
 
     def test_unbound_thread_returns_none(self, mgr: SessionManager) -> None:
         assert mgr.resolve_window_for_thread(100, 42) is None
@@ -142,6 +148,66 @@ class TestDisplayNames:
         mgr.bind_thread(100, 1, "@1")
         # No display name set, fallback to window_id
         assert mgr.get_display_name("@1") == "@1"
+
+
+class TestOffsets:
+    def test_update_user_window_offset_skips_unchanged_value(
+        self, mgr: SessionManager, monkeypatch
+    ) -> None:
+        save_calls = 0
+
+        def fake_save_state() -> None:
+            nonlocal save_calls
+            save_calls += 1
+
+        monkeypatch.setattr(mgr, "_save_state", fake_save_state)
+
+        mgr.update_user_window_offset(100, "@1", 123)
+        mgr.update_user_window_offset(100, "@1", 123)
+        mgr.update_user_window_offset(100, "@1", 124)
+
+        assert save_calls == 2
+
+
+class TestFindUsersForSession:
+    @pytest.mark.asyncio
+    async def test_fast_path_uses_window_state_without_resolve(
+        self, mgr: SessionManager, monkeypatch
+    ) -> None:
+        mgr.bind_thread(100, 1, "@1")
+        mgr.get_window_state("@1").session_id = "sid-1"
+
+        resolve_calls = 0
+
+        async def fake_resolve(_window_id: str):
+            nonlocal resolve_calls
+            resolve_calls += 1
+            return None
+
+        monkeypatch.setattr(mgr, "resolve_session_for_window", fake_resolve)
+
+        result = await mgr.find_users_for_session("sid-1")
+
+        assert result == [(100, "@1", 1)]
+        assert resolve_calls == 0
+
+    @pytest.mark.asyncio
+    async def test_fallback_resolve_when_window_state_missing(
+        self, mgr: SessionManager, monkeypatch
+    ) -> None:
+        mgr.bind_thread(100, 1, "@1")
+
+        class _Resolved:
+            session_id = "sid-1"
+
+        async def fake_resolve(_window_id: str):
+            return _Resolved()
+
+        monkeypatch.setattr(mgr, "resolve_session_for_window", fake_resolve)
+
+        result = await mgr.find_users_for_session("sid-1")
+
+        assert result == [(100, "@1", 1)]
 
 
 class TestIsWindowId:

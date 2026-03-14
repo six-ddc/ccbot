@@ -1,17 +1,17 @@
 """Telegram bot handlers — the main UI layer of CCBot.
 
 Registers all command/callback/message handlers and manages the bot lifecycle.
-Each Telegram topic maps 1:1 to a tmux window (Claude session).
+Each Telegram topic maps 1:1 to a tmux window (agent session).
 
 Core responsibilities:
   - Command handlers: /start, /history, /screenshot, /esc, /kill, /unbind,
-    plus forwarding unknown /commands to Claude Code via tmux.
+    plus forwarding unknown /commands to the active agent via tmux.
   - Callback query handler: directory browser, history pagination,
     interactive UI navigation, screenshot refresh.
   - Topic-based routing: each named topic binds to one tmux window.
     Unbound topics trigger the directory browser to create a new session.
   - Photo handling: photos sent by user are downloaded and forwarded
-    to Claude Code as file paths (photo_handler).
+    to the active agent as file paths (photo_handler).
   - Voice handling: voice messages are transcribed via OpenAI API and
     forwarded as text (voice_handler).
   - Automatic cleanup: closing a topic kills the associated window
@@ -58,6 +58,7 @@ from telegram.ext import (
 )
 
 from .config import config
+from .codex_mapper import codex_session_mapper
 from .handlers.callback_data import (
     CB_ASK_DOWN,
     CB_ASK_ENTER,
@@ -65,6 +66,7 @@ from .handlers.callback_data import (
     CB_ASK_LEFT,
     CB_ASK_REFRESH,
     CB_ASK_RIGHT,
+    CB_ASK_SELECT,
     CB_ASK_SPACE,
     CB_ASK_TAB,
     CB_ASK_UP,
@@ -107,6 +109,7 @@ from .handlers.interactive_ui import (
     INTERACTIVE_TOOL_NAMES,
     clear_interactive_mode,
     clear_interactive_msg,
+    get_interactive_choice_state,
     get_interactive_msg_id,
     get_interactive_window,
     handle_interactive_ui,
@@ -129,6 +132,7 @@ from .handlers.message_sender import (
 from .markdown_v2 import convert_markdown
 from .handlers.response_builder import build_response_parts
 from .handlers.status_polling import status_poll_loop
+from .port_forward import PortForwardManager, PortTunnel
 from .screenshot import text_to_image
 from .session import session_manager
 from .session_monitor import NewMessage, SessionMonitor
@@ -140,14 +144,20 @@ from .utils import ccbot_dir
 
 logger = logging.getLogger(__name__)
 
+# Keep startup responsive even when tmux/state files are slow.
+_POST_INIT_RESOLVE_TIMEOUT_SECONDS = 8.0
+
 # Session monitor instance
 session_monitor: SessionMonitor | None = None
 
 # Status polling task
 _status_poll_task: asyncio.Task | None = None
+_port_forward_manager: PortForwardManager | None = None
+_port_forward_task: asyncio.Task[None] | None = None
+_forward_pin_message_ids: dict[int, int] = {}
 
-# Claude Code commands shown in bot menu (forwarded via tmux)
-CC_COMMANDS: dict[str, str] = {
+# Claude commands shown in bot menu (forwarded via tmux)
+CLAUDE_COMMANDS: dict[str, str] = {
     "clear": "↗ Clear conversation history",
     "compact": "↗ Compact conversation context",
     "cost": "↗ Show token/cost usage",
@@ -155,6 +165,12 @@ CC_COMMANDS: dict[str, str] = {
     "memory": "↗ Edit CLAUDE.md",
     "model": "↗ Switch AI model",
 }
+
+
+def _provider_menu_commands() -> dict[str, str]:
+    if config.provider == "claude":
+        return CLAUDE_COMMANDS
+    return {}
 
 
 def is_user_allowed(user_id: int | None) -> bool:
@@ -174,6 +190,50 @@ def _get_thread_id(update: Update) -> int | None:
     return tid
 
 
+async def _ensure_private_window_binding(user_id: int) -> tuple[str | None, str]:
+    """Ensure private chat has a stable bound window (thread_id=0)."""
+    private_tid = 0
+    bound = session_manager.get_window_for_thread(user_id, private_tid)
+    if bound:
+        w = await tmux_manager.find_window_by_id(bound)
+        if w:
+            return bound, ""
+        session_manager.unbind_thread(user_id, private_tid)
+
+    # Reuse a stable named window if it already exists.
+    existing = await tmux_manager.find_window_by_name(config.tmux_session_name)
+    if existing:
+        session_manager.bind_thread(
+            user_id,
+            private_tid,
+            existing.window_id,
+            window_name=existing.window_name,
+        )
+        return existing.window_id, ""
+
+    # Otherwise create one in current cwd.
+    success, message, created_wname, created_wid = await tmux_manager.create_window(
+        str(Path.cwd()),
+        window_name=config.tmux_session_name,
+    )
+    if not success:
+        return None, message
+
+    if config.provider == "codex":
+        await codex_session_mapper.sync_session_map()
+    await session_manager.wait_for_session_map_entry(
+        created_wid,
+        timeout=10.0 if config.provider == "codex" else 5.0,
+    )
+    session_manager.bind_thread(
+        user_id,
+        private_tid,
+        created_wid,
+        window_name=created_wname,
+    )
+    return created_wid, ""
+
+
 # --- Command handlers ---
 
 
@@ -189,7 +249,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if update.message:
         await safe_reply(
             update.message,
-            "🤖 *Claude Code Monitor*\n\n"
+            f"🤖 *{config.agent_name} Monitor*\n\n"
             "Each topic is a session. Create a new topic to start.",
         )
 
@@ -248,7 +308,7 @@ async def screenshot_command(
 
 
 async def unbind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Unbind this topic from its Claude session without killing the window."""
+    """Unbind this topic from its session without killing the window."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         return
@@ -256,29 +316,34 @@ async def unbind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         return
 
     thread_id = _get_thread_id(update)
-    if thread_id is None:
-        await safe_reply(update.message, "❌ This command only works in a topic.")
-        return
+    bind_tid = thread_id
+    if bind_tid is None:
+        chat = update.effective_chat
+        if chat and chat.type == "private":
+            bind_tid = 0
+        else:
+            await safe_reply(update.message, "❌ This command only works in a topic.")
+            return
 
-    wid = session_manager.get_window_for_thread(user.id, thread_id)
+    wid = session_manager.get_window_for_thread(user.id, bind_tid)
     if not wid:
         await safe_reply(update.message, "❌ No session bound to this topic.")
         return
 
     display = session_manager.get_display_name(wid)
-    session_manager.unbind_thread(user.id, thread_id)
-    await clear_topic_state(user.id, thread_id, context.bot, context.user_data)
+    session_manager.unbind_thread(user.id, bind_tid)
+    await clear_topic_state(user.id, bind_tid, context.bot, context.user_data)
 
     await safe_reply(
         update.message,
         f"✅ Topic unbound from window '{display}'.\n"
-        "The Claude session is still running in tmux.\n"
+        f"The {config.agent_name} session is still running in tmux.\n"
         "Send a message to bind to a new session.",
     )
 
 
 async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Send Escape key to interrupt Claude."""
+    """Send Escape key to interrupt the active agent."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         return
@@ -303,7 +368,14 @@ async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Fetch Claude Code usage stats from TUI and send to Telegram."""
+    """Fetch usage stats from TUI and send to Telegram."""
+    if not config.supports_usage_command:
+        if update.message:
+            await safe_reply(
+                update.message,
+                f"❌ /usage is not supported for provider '{config.provider}'.",
+            )
+        return
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         return
@@ -321,7 +393,7 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await safe_reply(update.message, f"Window '{wid}' no longer exists.")
         return
 
-    # Send /usage command to Claude Code TUI
+    # Send /usage command to TUI
     await tmux_manager.send_keys(w.window_id, "/usage")
     # Wait for the modal to render
     await asyncio.sleep(2.0)
@@ -486,7 +558,7 @@ async def topic_edited_handler(
 async def forward_command_handler(
     update: Update, context: ContextTypes.DEFAULT_TYPE
 ) -> None:
-    """Forward any non-bot command as a slash command to the active Claude Code session."""
+    """Forward non-bot slash commands to the active session."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         return
@@ -505,7 +577,18 @@ async def forward_command_handler(
     cmd_text = update.message.text or ""
     # The full text is already a slash command like "/clear" or "/compact foo"
     cc_slash = cmd_text.split("@")[0]  # strip bot mention
+    if not config.forward_slash_commands:
+        await safe_reply(
+            update.message,
+            f"❌ Slash command forwarding is disabled for provider '{config.provider}'.",
+        )
+        return
     wid = session_manager.resolve_window_for_thread(user.id, thread_id)
+    if wid is None and chat and chat.type == "private":
+        wid, err = await _ensure_private_window_binding(user.id)
+        if wid is None:
+            await safe_reply(update.message, f"❌ {err or 'Failed to create session'}")
+            return
     if not wid:
         await safe_reply(update.message, "❌ No session bound to this topic.")
         return
@@ -526,7 +609,7 @@ async def forward_command_handler(
         await safe_reply(update.message, f"⚡ [{display}] Sent: {cc_slash}")
         # If /clear command was sent, clear the session association
         # so we can detect the new session after first message
-        if cc_slash.strip().lower() == "/clear":
+        if config.provider == "claude" and cc_slash.strip().lower() == "/clear":
             logger.info("Clearing session for window %s after /clear", display)
             session_manager.clear_window_session(wid)
 
@@ -551,7 +634,8 @@ async def unsupported_content_handler(
     logger.debug("Unsupported content from user %d", user.id)
     await safe_reply(
         update.message,
-        "⚠ Only text, photo, and voice messages are supported. Stickers, video, and other media cannot be forwarded to Claude Code.",
+        f"⚠ Only text, photo, and voice messages are supported. "
+        f"Other media cannot be forwarded to {config.agent_name}.",
     )
 
 
@@ -561,7 +645,7 @@ _IMAGES_DIR.mkdir(parents=True, exist_ok=True)
 
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle photos sent by the user: download and forward path to Claude Code."""
+    """Handle photos sent by the user: download and forward file path."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         if update.message:
@@ -573,10 +657,96 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     chat = update.message.chat
     thread_id = _get_thread_id(update)
+    bind_tid = thread_id or 0
     if chat.type in ("group", "supergroup") and thread_id is not None:
         session_manager.set_group_chat_id(user.id, thread_id, chat.id)
 
-    # Must be in a named topic
+    is_private_chat = chat.type == "private"
+
+    if thread_id is None and not is_private_chat:
+        await safe_reply(
+            update.message,
+            "❌ Please use a named topic. Create a new topic to start a session.",
+        )
+        return
+
+    if is_private_chat:
+        wid, err = await _ensure_private_window_binding(user.id)
+        if wid is None:
+            await safe_reply(update.message, f"❌ {err or 'Failed to create session'}")
+            return
+    else:
+        wid = session_manager.resolve_window_for_thread(user.id, thread_id)
+        if wid is None:
+            await safe_reply(
+                update.message,
+                "❌ No session bound to this topic. Send a text message first to create one.",
+            )
+            return
+
+    w = await tmux_manager.find_window_by_id(wid)
+    if not w:
+        display = session_manager.get_display_name(wid)
+        session_manager.unbind_thread(user.id, bind_tid)
+        await safe_reply(
+            update.message,
+            f"❌ Window '{display}' no longer exists. Binding removed.\n"
+            "Send a message to start a new session.",
+        )
+        return
+
+    # Download the highest-resolution photo
+    photo = update.message.photo[-1]
+    tg_file = await photo.get_file()
+
+    # Save to ~/.ccbot/images/<timestamp>_<file_unique_id>.jpg
+    filename = f"{int(time.time())}_{photo.file_unique_id}.jpg"
+    file_path = _IMAGES_DIR / filename
+    await tg_file.download_to_drive(file_path)
+
+    # Build the message to send to the agent
+    caption = update.message.caption or ""
+    if caption:
+        text_to_send = f"{caption}\n\n(image attached: {file_path})"
+    else:
+        text_to_send = f"(image attached: {file_path})"
+
+    await update.message.chat.send_action(ChatAction.TYPING)
+    clear_status_msg_info(user.id, thread_id)
+
+    success, message = await session_manager.send_to_window(wid, text_to_send)
+    if not success:
+        await safe_reply(update.message, f"❌ {message}")
+        return
+
+    # Confirm to user
+    await safe_reply(update.message, f"📷 Image sent to {config.agent_name}.")
+
+
+async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle voice messages: transcribe via OpenAI and forward text to Claude Code."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        if update.message:
+            await safe_reply(update.message, "You are not authorized to use this bot.")
+        return
+
+    if not update.message or not update.message.voice:
+        return
+
+    if not config.openai_api_key:
+        await safe_reply(
+            update.message,
+            "⚠ Voice transcription requires an OpenAI API key.\n"
+            "Set `OPENAI_API_KEY` in your `.env` file and restart the bot.",
+        )
+        return
+
+    chat = update.message.chat
+    thread_id = _get_thread_id(update)
+    if chat.type in ("group", "supergroup") and thread_id is not None:
+        session_manager.set_group_chat_id(user.id, thread_id, chat.id)
+
     if thread_id is None:
         await safe_reply(
             update.message,
@@ -603,32 +773,30 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         )
         return
 
-    # Download the highest-resolution photo
-    photo = update.message.photo[-1]
-    tg_file = await photo.get_file()
+    # Download voice as in-memory bytes
+    voice_file = await update.message.voice.get_file()
+    ogg_data = bytes(await voice_file.download_as_bytearray())
 
-    # Save to ~/.ccbot/images/<timestamp>_<file_unique_id>.jpg
-    filename = f"{int(time.time())}_{photo.file_unique_id}.jpg"
-    file_path = _IMAGES_DIR / filename
-    await tg_file.download_to_drive(file_path)
-
-    # Build the message to send to Claude Code
-    caption = update.message.caption or ""
-    if caption:
-        text_to_send = f"{caption}\n\n(image attached: {file_path})"
-    else:
-        text_to_send = f"(image attached: {file_path})"
+    # Transcribe
+    try:
+        text = await transcribe_voice(ogg_data)
+    except ValueError as e:
+        await safe_reply(update.message, f"⚠ {e}")
+        return
+    except Exception as e:
+        logger.error("Voice transcription failed: %s", e)
+        await safe_reply(update.message, f"⚠ Transcription failed: {e}")
+        return
 
     await update.message.chat.send_action(ChatAction.TYPING)
     clear_status_msg_info(user.id, thread_id)
 
-    success, message = await session_manager.send_to_window(wid, text_to_send)
+    success, message = await session_manager.send_to_window(wid, text)
     if not success:
         await safe_reply(update.message, f"❌ {message}")
         return
 
-    # Confirm to user
-    await safe_reply(update.message, "📷 Image sent to Claude Code.")
+    await safe_reply(update.message, f'🎤 "{text}"')
 
 
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -708,10 +876,10 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
 
 # Active bash capture tasks: (user_id, thread_id) → asyncio.Task
-_bash_capture_tasks: dict[tuple[int, int], asyncio.Task[None]] = {}
+_bash_capture_tasks: dict[tuple[int, int | None], asyncio.Task[None]] = {}
 
 
-def _cancel_bash_capture(user_id: int, thread_id: int) -> None:
+def _cancel_bash_capture(user_id: int, thread_id: int | None) -> None:
     """Cancel any running bash capture for this topic."""
     key = (user_id, thread_id)
     task = _bash_capture_tasks.pop(key, None)
@@ -722,7 +890,7 @@ def _cancel_bash_capture(user_id: int, thread_id: int) -> None:
 async def _capture_bash_output(
     bot: Bot,
     user_id: int,
-    thread_id: int,
+    thread_id: int | None,
     window_id: str,
     command: str,
 ) -> None:
@@ -763,11 +931,14 @@ async def _capture_bash_output(
 
             if msg_id is None:
                 # First capture — send a new message
+                send_kwargs: dict[str, int] = {}
+                if thread_id is not None:
+                    send_kwargs["message_thread_id"] = thread_id
                 sent = await send_with_fallback(
                     bot,
                     chat_id,
                     output,
-                    message_thread_id=thread_id,
+                    **send_kwargs,  # type: ignore[arg-type]
                 )
                 if sent:
                     msg_id = sent.message_id
@@ -810,11 +981,12 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         return
 
     thread_id = _get_thread_id(update)
+    chat = update.effective_chat
+    is_private_chat = bool(chat and chat.type == "private")
 
     # Capture group chat_id for supergroup forum topic routing.
     # Required: Telegram Bot API needs group chat_id (not user_id) to send
     # messages with message_thread_id. Do NOT remove — see session.py docs.
-    chat = update.effective_chat
     if chat and chat.type in ("group", "supergroup"):
         session_manager.set_group_chat_id(user.id, thread_id, chat.id)
 
@@ -869,15 +1041,21 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         context.user_data.pop("_pending_thread_text", None)
         context.user_data.pop("_selected_path", None)
 
-    # Must be in a named topic
-    if thread_id is None:
+    # Must be in a named topic unless private-chat mode is enabled.
+    if thread_id is None and not is_private_chat:
         await safe_reply(
             update.message,
             "❌ Please use a named topic. Create a new topic to start a session.",
         )
         return
 
-    wid = session_manager.get_window_for_thread(user.id, thread_id)
+    if is_private_chat:
+        wid, err = await _ensure_private_window_binding(user.id)
+        if wid is None:
+            await safe_reply(update.message, f"❌ {err or 'Failed to create session'}")
+            return
+    else:
+        wid = session_manager.resolve_window_for_thread(user.id, thread_id)
     if wid is None:
         # Unbound topic — check for unbound windows first
         all_windows = await tmux_manager.list_windows()
@@ -939,7 +1117,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             user.id,
             thread_id,
         )
-        session_manager.unbind_thread(user.id, thread_id)
+        session_manager.unbind_thread(user.id, thread_id or 0)
         await safe_reply(
             update.message,
             f"❌ Window '{display}' no longer exists. Binding removed.\n"
@@ -1574,6 +1752,54 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await handle_interactive_ui(context.bot, user.id, window_id, thread_id)
         await query.answer()
 
+    # Interactive UI: Numeric quick-select (1..N)
+    elif data.startswith(CB_ASK_SELECT):
+        payload = data[len(CB_ASK_SELECT) :]
+        parts = payload.split(":", 1)
+        if len(parts) != 2:
+            await query.answer("Invalid selection", show_alert=True)
+            return
+        index_raw, window_id = parts
+        try:
+            target_index = int(index_raw)
+        except ValueError:
+            await query.answer("Invalid selection", show_alert=True)
+            return
+
+        thread_id = _get_thread_id(update)
+        choice_state = get_interactive_choice_state(user.id, thread_id)
+        if choice_state is None:
+            # State can be stale after restart — refresh once from terminal.
+            await handle_interactive_ui(context.bot, user.id, window_id, thread_id)
+            choice_state = get_interactive_choice_state(user.id, thread_id)
+        if choice_state is None:
+            await query.answer("No selectable options", show_alert=True)
+            return
+
+        selected_index, total_options = choice_state
+        if target_index < 1 or target_index > total_options:
+            await query.answer("Option out of range", show_alert=True)
+            return
+
+        w = await tmux_manager.find_window_by_id(window_id)
+        if not w:
+            await query.answer("Window no longer exists", show_alert=True)
+            return
+
+        delta = target_index - selected_index
+        if delta != 0:
+            nav_key = "Down" if delta > 0 else "Up"
+            for _ in range(abs(delta)):
+                await tmux_manager.send_keys(
+                    w.window_id, nav_key, enter=False, literal=False
+                )
+                await asyncio.sleep(0.05)
+
+        await tmux_manager.send_keys(w.window_id, "Enter", enter=False, literal=False)
+        await asyncio.sleep(0.35)
+        await handle_interactive_ui(context.bot, user.id, window_id, thread_id)
+        await query.answer(f"Selected {target_index}")
+
     # Interactive UI: Down arrow
     elif data.startswith(CB_ASK_DOWN):
         window_id = data[len(CB_ASK_DOWN) :]
@@ -1723,9 +1949,14 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
     Routes via thread_bindings to deliver to the correct topic.
     """
     status = "complete" if msg.is_complete else "streaming"
+    trace_id = msg.trace_id or f"{msg.session_id}:0-0"
+
     logger.info(
-        f"handle_new_message [{status}]: session={msg.session_id}, "
-        f"text_len={len(msg.text)}"
+        "handle_new_message [%s]: trace=%s session=%s text_len=%d",
+        status,
+        trace_id,
+        msg.session_id,
+        len(msg.text),
     )
 
     # Find users whose thread-bound window matches this session
@@ -1735,37 +1966,54 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         logger.info(f"No active users for session {msg.session_id}")
         return
 
+    async def _mark_window_read_offset(user_id: int, window_id: str) -> None:
+        state = session_manager.get_window_state(window_id)
+        file_path = state.file_path
+        if not file_path:
+            # Fallback for stale state
+            session = await session_manager.resolve_session_for_window(window_id)
+            if not session or not session.file_path:
+                return
+            file_path = session.file_path
+        try:
+            file_size = Path(file_path).stat().st_size
+            session_manager.update_user_window_offset(user_id, window_id, file_size)
+        except OSError:
+            pass
+
     for user_id, wid, thread_id in active_users:
+        queue = get_message_queue(user_id)
+
         # Handle interactive tools specially - capture terminal and send UI
         if msg.tool_name in INTERACTIVE_TOOL_NAMES and msg.content_type == "tool_use":
             # Mark interactive mode BEFORE sleeping so polling skips this window
             set_interactive_mode(user_id, wid, thread_id)
             # Flush pending messages (e.g. plan content) before sending interactive UI
-            queue = get_message_queue(user_id)
             if queue:
                 await queue.join()
-            # Wait briefly for Claude Code to render the question UI
+            # Wait briefly for the agent UI to render
             await asyncio.sleep(0.3)
             handled = await handle_interactive_ui(bot, user_id, wid, thread_id)
             if handled:
-                # Update user's read offset
-                session = await session_manager.resolve_session_for_window(wid)
-                if session and session.file_path:
-                    try:
-                        file_size = Path(session.file_path).stat().st_size
-                        session_manager.update_user_window_offset(
-                            user_id, wid, file_size
-                        )
-                    except OSError:
-                        pass
+                await _mark_window_read_offset(user_id, wid)
                 continue  # Don't send the normal tool_use message
             else:
                 # UI not rendered — clear the early-set mode
                 clear_interactive_mode(user_id, thread_id)
 
-        # Any non-interactive message means the interaction is complete — delete the UI message
+        # Non-interactive events can still arrive while an approval UI is visible.
+        # Only clear the interactive message when the UI is actually gone.
         if get_interactive_msg_id(user_id, thread_id):
-            await clear_interactive_msg(user_id, bot, thread_id)
+            should_clear_interactive = False
+            w = await tmux_manager.find_window_by_id(wid)
+            if not w:
+                should_clear_interactive = True
+            else:
+                pane_text = await tmux_manager.capture_pane(w.window_id)
+                if pane_text:
+                    should_clear_interactive = not is_interactive_ui(pane_text)
+            if should_clear_interactive:
+                await clear_interactive_msg(user_id, bot, thread_id)
 
         # Skip tool call notifications when CCBOT_SHOW_TOOL_CALLS=false
         if not config.show_tool_calls and msg.content_type in ("tool_use", "tool_result"):
@@ -1792,24 +2040,80 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 text=msg.text,
                 thread_id=thread_id,
                 image_data=msg.image_data,
+                session_id=msg.session_id,
+                trace_id=trace_id,
+                source_line_start=msg.source_line_start,
+                source_line_end=msg.source_line_end,
+                detected_at_monotonic=msg.detected_at_monotonic,
             )
 
-            # Update user's read offset to current file position
-            # This marks these messages as "read" for this user
-            session = await session_manager.resolve_session_for_window(wid)
-            if session and session.file_path:
-                try:
-                    file_size = Path(session.file_path).stat().st_size
-                    session_manager.update_user_window_offset(user_id, wid, file_size)
-                except OSError:
-                    pass
+            await _mark_window_read_offset(user_id, wid)
+
+
+async def _announce_forward_links(bot: Bot, tunnels: list[PortTunnel]) -> None:
+    """Send and pin forward links for allowed users."""
+    lines = [
+        "🌐 Dev port forwarding is enabled.",
+        "",
+    ]
+    for tunnel in tunnels:
+        lines.append(
+            f"- `localhost:{tunnel.port}` → {tunnel.public_url} ({tunnel.provider})"
+        )
+    text = "\n".join(lines)
+
+    for user_id in sorted(config.allowed_users):
+        sent = await send_with_fallback(bot, user_id, text)
+        if sent is None:
+            logger.warning(
+                "Failed to announce forward links to user %d", user_id
+            )
+            continue
+        try:
+            await bot.pin_chat_message(
+                chat_id=user_id,
+                message_id=sent.message_id,
+                disable_notification=True,
+            )
+            _forward_pin_message_ids[user_id] = sent.message_id
+            logger.info("Pinned forward links message for user %d", user_id)
+        except Exception as e:
+            logger.warning(
+                "Failed to pin forward links message for user %d: %s", user_id, e
+            )
+
+
+async def _announce_forward_error(bot: Bot, error_text: str) -> None:
+    text = (
+        "⚠ Failed to start dev port forwarding.\n\n"
+        f"{error_text}"
+    )
+    for user_id in sorted(config.allowed_users):
+        await send_with_fallback(bot, user_id, text)
+
+
+async def _run_port_forwarding(bot: Bot) -> None:
+    """Start forwarding in background and announce links/errors."""
+    global _port_forward_manager
+    manager = PortForwardManager(config.forward_ports)
+    try:
+        tunnels = await manager.start()
+        _port_forward_manager = manager
+        await _announce_forward_links(bot, tunnels)
+    except asyncio.CancelledError:
+        await manager.stop()
+        raise
+    except Exception as e:
+        logger.error("Forwarding startup failed: %s", e)
+        await _announce_forward_error(bot, str(e))
+        await manager.stop()
 
 
 # --- App lifecycle ---
 
 
 async def post_init(application: Application) -> None:
-    global session_monitor, _status_poll_task
+    global session_monitor, _status_poll_task, _port_forward_task
 
     await application.bot.delete_my_commands()
 
@@ -1817,19 +2121,36 @@ async def post_init(application: Application) -> None:
         BotCommand("start", "Show welcome message"),
         BotCommand("history", "Message history for this topic"),
         BotCommand("screenshot", "Terminal screenshot with control keys"),
-        BotCommand("esc", "Send Escape to interrupt Claude"),
+        BotCommand("esc", "Send Escape to interrupt active session"),
         BotCommand("kill", "Kill session and delete topic"),
         BotCommand("unbind", "Unbind topic from session (keeps window running)"),
-        BotCommand("usage", "Show Claude Code usage remaining"),
     ]
-    # Add Claude Code slash commands
-    for cmd_name, desc in CC_COMMANDS.items():
+    if config.supports_usage_command:
+        bot_commands.append(BotCommand("usage", "Show usage remaining"))
+    # Add provider slash commands
+    for cmd_name, desc in _provider_menu_commands().items():
         bot_commands.append(BotCommand(cmd_name, desc))
 
     await application.bot.set_my_commands(bot_commands)
 
-    # Re-resolve stale window IDs from persisted state against live tmux windows
-    await session_manager.resolve_stale_ids()
+    if config.forward_ports:
+        _port_forward_task = asyncio.create_task(_run_port_forwarding(application.bot))
+        logger.info("Port forwarding task started for ports: %s", config.forward_ports)
+
+    # Re-resolve stale window IDs from persisted state against live tmux windows.
+    # Guard with timeout so bot startup never hangs on slow tmux/state I/O.
+    try:
+        await asyncio.wait_for(
+            session_manager.resolve_stale_ids(),
+            timeout=_POST_INIT_RESOLVE_TIMEOUT_SECONDS,
+        )
+    except asyncio.TimeoutError:
+        logger.warning(
+            "Startup timeout: resolve_stale_ids exceeded %.1fs; continuing",
+            _POST_INIT_RESOLVE_TIMEOUT_SECONDS,
+        )
+    except Exception as e:
+        logger.warning("Startup warning: resolve_stale_ids failed: %s", e)
 
     # Pre-fill global rate limiter bucket on restart.
     # AsyncLimiter starts at _level=0 (full burst capacity), but Telegram's
@@ -1874,11 +2195,48 @@ async def post_shutdown(application: Application) -> None:
     await shutdown_workers()
 
     if session_monitor:
-        session_monitor.stop()
+        await session_monitor.stop()
         logger.info("Session monitor stopped")
 
     await close_transcribe_client()
 
+async def post_stop(application: Application) -> None:
+    """Run before shutdown while Telegram HTTP client is still active."""
+    global _port_forward_task, _port_forward_manager, _forward_pin_message_ids
+
+    if _port_forward_task:
+        if not _port_forward_task.done():
+            _port_forward_task.cancel()
+            try:
+                await _port_forward_task
+            except asyncio.CancelledError:
+                pass
+        _port_forward_task = None
+
+    if _port_forward_manager:
+        await _port_forward_manager.stop()
+        _port_forward_manager = None
+        logger.info("Port forwarding stopped")
+
+    for chat_id, message_id in list(_forward_pin_message_ids.items()):
+        try:
+            await application.bot.unpin_chat_message(
+                chat_id=chat_id,
+                message_id=message_id,
+            )
+            logger.info(
+                "Unpinned forward links message for user %d (message_id=%d)",
+                chat_id,
+                message_id,
+            )
+        except Exception as e:
+            logger.warning(
+                "Failed to unpin forward links message for user %d (message_id=%d): %s",
+                chat_id,
+                message_id,
+                e,
+            )
+    _forward_pin_message_ids = {}
 
 def create_bot() -> Application:
     application = (
@@ -1886,6 +2244,7 @@ def create_bot() -> Application:
         .token(config.telegram_bot_token)
         .rate_limiter(AIORateLimiter(max_retries=5))
         .post_init(post_init)
+        .post_stop(post_stop)
         .post_shutdown(post_shutdown)
         .build()
     )
@@ -1895,7 +2254,8 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("screenshot", screenshot_command))
     application.add_handler(CommandHandler("esc", esc_command))
     application.add_handler(CommandHandler("unbind", unbind_command))
-    application.add_handler(CommandHandler("usage", usage_command))
+    if config.supports_usage_command:
+        application.add_handler(CommandHandler("usage", usage_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Topic closed event — auto-kill associated window
     application.add_handler(
@@ -1911,12 +2271,12 @@ def create_bot() -> Application:
             topic_edited_handler,
         )
     )
-    # Forward any other /command to Claude Code
+    # Forward any other /command to the active session
     application.add_handler(MessageHandler(filters.COMMAND, forward_command_handler))
     application.add_handler(
         MessageHandler(filters.TEXT & ~filters.COMMAND, text_handler)
     )
-    # Photos: download and forward file path to Claude Code
+    # Photos: download and forward file path to the active session
     application.add_handler(MessageHandler(filters.PHOTO, photo_handler))
     # Voice: transcribe via OpenAI and forward text to Claude Code
     application.add_handler(MessageHandler(filters.VOICE, voice_handler))

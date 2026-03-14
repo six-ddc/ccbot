@@ -101,6 +101,15 @@ class TestExtractInteractiveContent:
         assert result.name == "PermissionPrompt"
         assert "Do you want to proceed?" in result.content
 
+    def test_bash_approval_prompt_with_wedge_cursor(
+        self, sample_pane_command_approval: str
+    ):
+        result = extract_interactive_content(sample_pane_command_approval)
+        assert result is not None
+        assert result.name in {"PermissionPrompt", "BashApproval"}
+        assert "1. Yes, proceed" in result.content
+        assert "Press enter to confirm or esc to cancel" in result.content
+
     def test_restore_checkpoint(self):
         pane = (
             "  Restore the code to a previous state?\n"
@@ -186,6 +195,11 @@ class TestIsInteractiveUI:
 
     def test_settings_is_interactive(self, sample_pane_settings: str):
         assert is_interactive_ui(sample_pane_settings) is True
+
+    def test_wedge_cursor_approval_is_interactive(
+        self, sample_pane_command_approval: str
+    ):
+        assert is_interactive_ui(sample_pane_command_approval) is True
 
     def test_false_for_empty_string(self):
         assert is_interactive_ui("") is False

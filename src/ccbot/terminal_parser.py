@@ -84,7 +84,7 @@ UI_PATTERNS: list[UIPattern] = [
     UIPattern(
         # Permission menu with numbered choices (no "Esc to cancel" line)
         name="PermissionPrompt",
-        top=(re.compile(r"^\s*❯\s*1\.\s*Yes"),),
+        top=(re.compile(r"^\s*[❯›>]\s*1\.\s*Yes\b", re.IGNORECASE),),
         bottom=(),
         min_gap=2,
     ),
@@ -94,8 +94,18 @@ UI_PATTERNS: list[UIPattern] = [
         top=(
             re.compile(r"^\s*Bash command\s*$"),
             re.compile(r"^\s*This command requires approval"),
+            re.compile(
+                r"^\s*Would you like to run the following command\?\s*$",
+                re.IGNORECASE,
+            ),
         ),
-        bottom=(re.compile(r"^\s*Esc to cancel"),),
+        bottom=(
+            re.compile(r"^\s*Esc to cancel", re.IGNORECASE),
+            re.compile(
+                r"^\s*Press enter to confirm or esc to cancel\s*$",
+                re.IGNORECASE,
+            ),
+        ),
     ),
     UIPattern(
         name="RestoreCheckpoint",

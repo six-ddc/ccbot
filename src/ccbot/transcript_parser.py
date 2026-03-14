@@ -105,9 +105,32 @@ class TranscriptParser:
         return data.get("type")
 
     @staticmethod
+    def is_codex_entry(data: dict) -> bool:
+        """Check if this line is from Codex rollout JSONL format."""
+        return data.get("type") in (
+            "session_meta",
+            "turn_context",
+            "event_msg",
+            "response_item",
+        )
+
+    @staticmethod
     def is_user_message(data: dict) -> bool:
         """Check if this is a user message."""
-        return data.get("type") == "user"
+        msg_type = data.get("type")
+        if msg_type == "user":
+            return True
+        if msg_type == "event_msg":
+            payload = data.get("payload", {})
+            return isinstance(payload, dict) and payload.get("type") == "user_message"
+        if msg_type == "response_item":
+            payload = data.get("payload", {})
+            return (
+                isinstance(payload, dict)
+                and payload.get("type") == "message"
+                and payload.get("role") == "user"
+            )
+        return False
 
     @staticmethod
     def extract_text_only(content_list: list[Any]) -> str:
@@ -139,12 +162,40 @@ class TranscriptParser:
 
         return "\n".join(texts)
 
+    @staticmethod
+    def _extract_codex_text_from_content(content_list: list[Any] | Any) -> str:
+        """Extract text payload from Codex response_item.message content."""
+        if isinstance(content_list, str):
+            return content_list
+        if not isinstance(content_list, list):
+            return ""
+
+        texts: list[str] = []
+        for item in content_list:
+            if isinstance(item, str):
+                texts.append(item)
+                continue
+            if not isinstance(item, dict):
+                continue
+            item_type = item.get("type", "")
+            if item_type in ("output_text", "input_text", "text"):
+                text = item.get("text", "")
+                if text:
+                    texts.append(text)
+        return "\n".join(texts)
+
     _RE_ANSI_ESCAPE = re.compile(r"\x1b\[[0-9;]*m")
 
     _RE_COMMAND_NAME = re.compile(r"<command-name>(.*?)</command-name>")
     _RE_LOCAL_STDOUT = re.compile(
         r"<local-command-stdout>(.*?)</local-command-stdout>", re.DOTALL
     )
+    _RE_CODEX_USER_SHELL = re.compile(
+        r"<user_shell_command>\s*<command>\s*(.*?)\s*</command>\s*"
+        r"<result>\s*(.*?)\s*</result>\s*</user_shell_command>",
+        re.DOTALL,
+    )
+    _RE_CODEX_OUTPUT = re.compile(r"Output:\s*\n(.*)", re.DOTALL)
     _RE_SYSTEM_TAGS = re.compile(
         r"<(bash-input|bash-stdout|bash-stderr|local-command-caveat|system-reminder)"
     )
@@ -284,6 +335,58 @@ class TranscriptParser:
         """
         msg_type = cls.get_message_type(data)
 
+        # Codex rollout event line
+        if msg_type == "event_msg":
+            payload = data.get("payload")
+            if not isinstance(payload, dict):
+                return None
+            event_type = payload.get("type", "")
+            if event_type == "user_message":
+                return ParsedMessage(
+                    message_type="user",
+                    text=str(payload.get("message", "")),
+                )
+            if event_type == "agent_message":
+                return ParsedMessage(
+                    message_type="assistant",
+                    text=str(payload.get("message", "")),
+                )
+            if event_type == "agent_reasoning":
+                return ParsedMessage(
+                    message_type="thinking",
+                    text=str(payload.get("text", "")),
+                )
+            return None
+
+        # Codex rollout response item
+        if msg_type == "response_item":
+            payload = data.get("payload")
+            if not isinstance(payload, dict):
+                return None
+            payload_type = payload.get("type", "")
+            if payload_type == "message":
+                role = payload.get("role", "")
+                if role not in ("assistant", "user"):
+                    return None
+                content = payload.get("content", [])
+                text = cls._extract_codex_text_from_content(content)
+                return ParsedMessage(message_type=role, text=text)
+            if payload_type == "reasoning":
+                summary = payload.get("summary", [])
+                text_parts: list[str] = []
+                if isinstance(summary, list):
+                    for item in summary:
+                        if isinstance(item, dict):
+                            t = item.get("text", "")
+                            if t:
+                                text_parts.append(t)
+                return ParsedMessage(
+                    message_type="thinking",
+                    text="\n".join(text_parts).strip(),
+                )
+            return None
+
+        # Claude JSONL line
         if msg_type not in ("user", "assistant"):
             return None
 
@@ -409,6 +512,249 @@ class TranscriptParser:
         return cls._format_expandable_quote(text)
 
     @classmethod
+    def _parse_codex_user_shell_command(cls, text: str) -> str | None:
+        """Parse Codex `<user_shell_command>` payload into local-command text."""
+        match = cls._RE_CODEX_USER_SHELL.search(text)
+        if not match:
+            return None
+
+        cmd = match.group(1).strip()
+        result_block = match.group(2).strip()
+        output_match = cls._RE_CODEX_OUTPUT.search(result_block)
+        output = output_match.group(1).strip() if output_match else ""
+
+        if not output:
+            output = "(no output)"
+
+        if cmd:
+            if "\n" in output:
+                return f"❯ `{cmd}`\n```\n{output}\n```"
+            return f"❯ `{cmd}`\n`{output}`"
+
+        if "\n" in output:
+            return f"```\n{output}\n```"
+        return f"`{output}`"
+
+    @classmethod
+    def _parse_codex_entries(
+        cls,
+        entries: list[dict],
+        pending_tools: dict[str, PendingToolInfo] | None = None,
+    ) -> tuple[list[ParsedEntry], dict[str, PendingToolInfo]]:
+        """Parse Codex rollout JSONL entries into ParsedEntry records."""
+        result: list[ParsedEntry] = []
+
+        def _append_entry(entry: ParsedEntry) -> None:
+            """Append entry with light dedupe for duplicate Codex events."""
+            entry.text = entry.text.strip()
+            if not entry.text:
+                return
+            if result:
+                prev = result[-1]
+                if (
+                    prev.role == entry.role
+                    and prev.content_type == entry.content_type
+                    and prev.text == entry.text
+                    and prev.tool_use_id == entry.tool_use_id
+                ):
+                    return
+            result.append(entry)
+
+        _carry_over = pending_tools is not None
+        if pending_tools is None:
+            pending_tools = {}
+        else:
+            pending_tools = dict(pending_tools)
+
+        for data in entries:
+            entry_timestamp = cls.get_timestamp(data)
+            line_type = data.get("type", "")
+
+            if line_type == "response_item":
+                payload = data.get("payload", {})
+                if not isinstance(payload, dict):
+                    continue
+                payload_type = payload.get("type", "")
+
+                if payload_type == "message":
+                    role = payload.get("role", "")
+                    if role not in ("assistant", "user"):
+                        continue
+                    if role == "user":
+                        # Codex shell command responses are encoded as user messages
+                        # inside a <user_shell_command> wrapper.
+                        user_text = cls._extract_codex_text_from_content(
+                            payload.get("content", [])
+                        ).strip()
+                        local_cmd_text = cls._parse_codex_user_shell_command(user_text)
+                        if local_cmd_text:
+                            _append_entry(
+                                ParsedEntry(
+                                    role="assistant",
+                                    text=local_cmd_text,
+                                    content_type="local_command",
+                                    timestamp=entry_timestamp,
+                                )
+                            )
+                        continue
+                    text = cls._extract_codex_text_from_content(
+                        payload.get("content", [])
+                    ).strip()
+                    if text:
+                        _append_entry(
+                            ParsedEntry(
+                                role="assistant",
+                                text=text,
+                                content_type="text",
+                                timestamp=entry_timestamp,
+                            )
+                        )
+
+                elif payload_type == "reasoning":
+                    summary = payload.get("summary", [])
+                    text_parts: list[str] = []
+                    if isinstance(summary, list):
+                        for item in summary:
+                            if not isinstance(item, dict):
+                                continue
+                            if item.get("type") != "summary_text":
+                                continue
+                            text = item.get("text", "")
+                            if text:
+                                text_parts.append(text)
+                    thinking_text = "\n".join(text_parts).strip()
+                    if thinking_text:
+                        _append_entry(
+                            ParsedEntry(
+                                role="assistant",
+                                text=cls._format_expandable_quote(thinking_text),
+                                content_type="thinking",
+                                timestamp=entry_timestamp,
+                            )
+                        )
+
+                elif payload_type == "function_call":
+                    call_id = payload.get("call_id", "")
+                    name = payload.get("name", "tool")
+                    args_raw = payload.get("arguments", "")
+                    args_data: dict[str, Any] | Any = {}
+                    if isinstance(args_raw, str) and args_raw:
+                        try:
+                            parsed_args = json.loads(args_raw)
+                            args_data = parsed_args
+                        except json.JSONDecodeError:
+                            args_data = {"arguments": args_raw}
+                    elif isinstance(args_raw, dict):
+                        args_data = args_raw
+
+                    summary = cls.format_tool_use_summary(name, args_data)
+                    if call_id:
+                        pending_tools[call_id] = PendingToolInfo(
+                            summary=summary,
+                            tool_name=name,
+                            input_data=args_data
+                            if name in ("Edit", "NotebookEdit")
+                            else None,
+                        )
+                    _append_entry(
+                        ParsedEntry(
+                            role="assistant",
+                            text=summary,
+                            content_type="tool_use",
+                            tool_use_id=call_id or None,
+                            timestamp=entry_timestamp,
+                            tool_name=name,
+                        )
+                    )
+
+                elif payload_type == "function_call_output":
+                    call_id = payload.get("call_id", "")
+                    output = str(payload.get("output", "")).strip()
+                    tool_info = pending_tools.pop(call_id, None)
+
+                    tool_summary = tool_info.summary if tool_info else "**Result**"
+                    tool_name = tool_info.tool_name if tool_info else None
+                    entry_text = tool_summary
+                    if output:
+                        entry_text += "\n" + cls._format_tool_result_text(
+                            output, tool_name
+                        )
+                    _append_entry(
+                        ParsedEntry(
+                            role="assistant",
+                            text=entry_text,
+                            content_type="tool_result",
+                            tool_use_id=call_id or None,
+                            timestamp=entry_timestamp,
+                        )
+                    )
+
+            elif line_type == "event_msg":
+                payload = data.get("payload", {})
+                if not isinstance(payload, dict):
+                    continue
+                event_type = payload.get("type", "")
+                if event_type == "user_message":
+                    text = str(payload.get("message", "")).strip()
+                    if text:
+                        _append_entry(
+                            ParsedEntry(
+                                role="user",
+                                text=text,
+                                content_type="text",
+                                timestamp=entry_timestamp,
+                            )
+                        )
+                elif event_type == "agent_message":
+                    text = str(payload.get("message", "")).strip()
+                    if text:
+                        _append_entry(
+                            ParsedEntry(
+                                role="assistant",
+                                text=text,
+                                content_type="text",
+                                timestamp=entry_timestamp,
+                            )
+                        )
+                elif event_type == "agent_reasoning":
+                    text = str(payload.get("text", "")).strip()
+                    if text:
+                        _append_entry(
+                            ParsedEntry(
+                                role="assistant",
+                                text=cls._format_expandable_quote(text),
+                                content_type="thinking",
+                                timestamp=entry_timestamp,
+                            )
+                        )
+                elif event_type == "task_complete":
+                    # Fallback final text for turns where message payload is not emitted.
+                    text = str(payload.get("last_agent_message", "")).strip()
+                    if text:
+                        _append_entry(
+                            ParsedEntry(
+                                role="assistant",
+                                text=text,
+                                content_type="text",
+                                timestamp=entry_timestamp,
+                            )
+                        )
+
+        remaining_pending = dict(pending_tools)
+        if not _carry_over:
+            for tool_id, tool_info in pending_tools.items():
+                _append_entry(
+                    ParsedEntry(
+                        role="assistant",
+                        text=tool_info.summary,
+                        content_type="tool_use",
+                        tool_use_id=tool_id,
+                    )
+                )
+
+        return result, remaining_pending
+
+    @classmethod
     def parse_entries(
         cls,
         entries: list[dict],
@@ -429,6 +775,9 @@ class TranscriptParser:
         Returns:
             Tuple of (parsed entries, remaining pending_tools state)
         """
+        if any(cls.is_codex_entry(data) for data in entries):
+            return cls._parse_codex_entries(entries, pending_tools)
+
         result: list[ParsedEntry] = []
         last_cmd_name: str | None = None
         # Pending tool_use blocks keyed by id

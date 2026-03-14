@@ -36,6 +36,7 @@ CB_ASK_UP = "aq:up:"  # aq:up:<window>
 CB_ASK_DOWN = "aq:down:"  # aq:down:<window>
 CB_ASK_LEFT = "aq:left:"  # aq:left:<window>
 CB_ASK_RIGHT = "aq:right:"  # aq:right:<window>
+CB_ASK_SELECT = "aq:num:"  # aq:num:<index>:<window>
 CB_ASK_ESC = "aq:esc:"  # aq:esc:<window>
 CB_ASK_ENTER = "aq:enter:"  # aq:enter:<window>
 CB_ASK_SPACE = "aq:spc:"  # aq:spc:<window>

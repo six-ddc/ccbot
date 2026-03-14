@@ -53,6 +53,7 @@ class WindowState:
     session_id: str = ""
     cwd: str = ""
     window_name: str = ""
+    file_path: str = ""
 
     def to_dict(self) -> dict[str, Any]:
         d: dict[str, Any] = {
@@ -61,6 +62,8 @@ class WindowState:
         }
         if self.window_name:
             d["window_name"] = self.window_name
+        if self.file_path:
+            d["file_path"] = self.file_path
         return d
 
     @classmethod
@@ -69,6 +72,7 @@ class WindowState:
             session_id=data.get("session_id", ""),
             cwd=data.get("cwd", ""),
             window_name=data.get("window_name", ""),
+            file_path=data.get("file_path", ""),
         )
 
 
@@ -481,6 +485,10 @@ class SessionManager:
                         content = await f.read()
                     session_map = json.loads(content)
                     info = session_map.get(key, {})
+                    provider = info.get("provider", "claude")
+                    if provider != config.provider:
+                        await asyncio.sleep(interval)
+                        continue
                     if info.get("session_id"):
                         # Found — load into window_states immediately
                         logger.debug(
@@ -521,6 +529,8 @@ class SessionManager:
             # Only process entries for our tmux session
             if not key.startswith(prefix):
                 continue
+            if info.get("provider", "claude") != config.provider:
+                continue
             window_id = key[len(prefix) :]
             if not self._is_window_id(window_id):
                 continue
@@ -528,10 +538,15 @@ class SessionManager:
             new_sid = info.get("session_id", "")
             new_cwd = info.get("cwd", "")
             new_wname = info.get("window_name", "")
+            new_fp = info.get("file_path", "")
             if not new_sid:
                 continue
             state = self.get_window_state(window_id)
-            if state.session_id != new_sid or state.cwd != new_cwd:
+            if (
+                state.session_id != new_sid
+                or state.cwd != new_cwd
+                or state.file_path != new_fp
+            ):
                 logger.info(
                     "Session map: window_id %s updated sid=%s, cwd=%s",
                     window_id,
@@ -540,6 +555,7 @@ class SessionManager:
                 )
                 state.session_id = new_sid
                 state.cwd = new_cwd
+                state.file_path = new_fp
                 changed = True
             # Update display name
             if new_wname:
@@ -575,33 +591,40 @@ class SessionManager:
 
     @staticmethod
     def _encode_cwd(cwd: str) -> str:
-        """Encode a cwd path to match Claude Code's project directory naming.
-
-        Replaces all non-alphanumeric characters (except dash) with dashes.
-        E.g. /home/user_name/Code/project -> -home-user-name-Code-project
-        """
+        """Encode cwd to Claude projects dir naming convention."""
         return re.sub(r"[^a-zA-Z0-9-]", "-", cwd)
 
-    def _build_session_file_path(self, session_id: str, cwd: str) -> Path | None:
+    def _build_session_file_path(
+        self, session_id: str, cwd: str, file_path: str = ""
+    ) -> Path | None:
         """Build the direct file path for a session from session_id and cwd."""
+        if file_path:
+            return Path(file_path)
         if not session_id or not cwd:
+            return None
+        if config.provider == "codex":
             return None
         encoded_cwd = self._encode_cwd(cwd)
         return config.claude_projects_path / encoded_cwd / f"{session_id}.jsonl"
 
     async def _get_session_direct(
-        self, session_id: str, cwd: str
+        self, session_id: str, cwd: str, file_path: str = ""
     ) -> ClaudeSession | None:
         """Get a ClaudeSession directly from session_id and cwd (no scanning)."""
-        file_path = self._build_session_file_path(session_id, cwd)
+        resolved_path = self._build_session_file_path(session_id, cwd, file_path)
 
         # Fallback: glob search if direct path doesn't exist
-        if not file_path or not file_path.exists():
-            pattern = f"*/{session_id}.jsonl"
-            matches = list(config.claude_projects_path.glob(pattern))
+        if not resolved_path or not resolved_path.exists():
+            if config.provider == "codex":
+                matches = list(
+                    config.codex_sessions_path.rglob(f"rollout-*{session_id}.jsonl")
+                )
+            else:
+                pattern = f"*/{session_id}.jsonl"
+                matches = list(config.claude_projects_path.glob(pattern))
             if matches:
-                file_path = matches[0]
-                logger.debug("Found session via glob: %s", file_path)
+                resolved_path = matches[0]
+                logger.debug("Found session via glob: %s", resolved_path)
             else:
                 return None
 
@@ -610,7 +633,7 @@ class SessionManager:
         last_user_msg = ""
         message_count = 0
         try:
-            async with aiofiles.open(file_path, "r", encoding="utf-8") as f:
+            async with aiofiles.open(resolved_path, "r", encoding="utf-8") as f:
                 async for line in f:
                     line = line.strip()
                     if not line:
@@ -640,7 +663,7 @@ class SessionManager:
             session_id=session_id,
             summary=summary,
             message_count=message_count,
-            file_path=str(file_path),
+            file_path=str(resolved_path),
         )
 
     # --- Directory session listing ---
@@ -692,7 +715,11 @@ class SessionManager:
         if not state.session_id or not state.cwd:
             return None
 
-        session = await self._get_session_direct(state.session_id, state.cwd)
+        session = await self._get_session_direct(
+            state.session_id,
+            state.cwd,
+            state.file_path,
+        )
         if session:
             return session
 
@@ -705,6 +732,7 @@ class SessionManager:
         )
         state.session_id = ""
         state.cwd = ""
+        state.file_path = ""
         self._save_state()
         return None
 
@@ -716,6 +744,9 @@ class SessionManager:
         """Update the user's last read offset for a window."""
         if user_id not in self.user_window_offsets:
             self.user_window_offsets[user_id] = {}
+        prev = self.user_window_offsets[user_id].get(window_id)
+        if prev == offset:
+            return
         self.user_window_offsets[user_id][window_id] = offset
         self._save_state()
 
@@ -778,10 +809,11 @@ class SessionManager:
     ) -> str | None:
         """Resolve the tmux window_id for a user's thread.
 
-        Returns None if thread_id is None or the thread is not bound.
+        For private chats (thread_id=None), falls back to the synthetic
+        binding key 0.
         """
         if thread_id is None:
-            return None
+            return self.get_window_for_thread(user_id, 0)
         return self.get_window_for_thread(user_id, thread_id)
 
     def iter_thread_bindings(self) -> Iterator[tuple[int, int, str]]:
@@ -797,16 +829,24 @@ class SessionManager:
     async def find_users_for_session(
         self,
         session_id: str,
-    ) -> list[tuple[int, str, int]]:
+    ) -> list[tuple[int, str, int | None]]:
         """Find all users whose thread-bound window maps to the given session_id.
 
         Returns list of (user_id, window_id, thread_id) tuples.
+        Private bindings use thread_id=None.
         """
-        result: list[tuple[int, str, int]] = []
+        result: list[tuple[int, str, int | None]] = []
         for user_id, thread_id, window_id in self.iter_thread_bindings():
+            state = self.window_states.get(window_id)
+            # Fast path: session_id is already synced from session_map.json.
+            if state and state.session_id == session_id:
+                result.append((user_id, window_id, thread_id or None))
+                continue
+
+            # Fallback path for stale/incomplete state.
             resolved = await self.resolve_session_for_window(window_id)
             if resolved and resolved.session_id == session_id:
-                result.append((user_id, window_id, thread_id))
+                result.append((user_id, window_id, thread_id or None))
         return result
 
     # --- Tmux helpers ---

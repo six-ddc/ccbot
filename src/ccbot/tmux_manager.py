@@ -376,7 +376,7 @@ class TmuxManager:
         Args:
             work_dir: Working directory for the new window
             window_name: Optional window name (defaults to directory name)
-            start_claude: Whether to start claude command
+            start_claude: Whether to start configured agent command
             resume_session_id: If set, append --resume <id> to claude command
 
         Returns:
@@ -414,11 +414,11 @@ class TmuxManager:
                 # Prevent Claude Code from overriding window name
                 window.set_window_option("allow-rename", "off")
 
-                # Start Claude Code if requested
+                # Start agent command if requested
                 if start_claude:
                     pane = window.active_pane
                     if pane:
-                        cmd = config.claude_command
+                        cmd = config.agent_command
                         if resume_session_id:
                             cmd = f"{cmd} --resume {resume_session_id}"
                         pane.send_keys(cmd, enter=True)

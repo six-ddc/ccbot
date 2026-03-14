@@ -41,6 +41,38 @@ class TestConfigValid:
         cfg = Config()
         assert cfg.is_user_allowed(99999) is False
 
+    def test_default_provider_is_claude(self):
+        cfg = Config()
+        assert cfg.provider == "claude"
+        assert cfg.agent_command == "claude"
+        assert cfg.supports_usage_command is True
+        assert cfg.forward_slash_commands is True
+
+    def test_codex_provider_defaults(self, monkeypatch):
+        monkeypatch.setenv("CCBOT_PROVIDER", "codex")
+        cfg = Config()
+        assert cfg.provider == "codex"
+        assert cfg.agent_command == "codex"
+        assert cfg.codex_resume_session_id == ""
+        assert cfg.supports_usage_command is False
+        assert cfg.supports_claude_interactive_ui is True
+        assert cfg.forward_slash_commands is True
+        assert cfg.provider_data_root == cfg.codex_sessions_path
+
+    def test_codex_resume_session_id_from_agent_command(self, monkeypatch):
+        monkeypatch.setenv("CCBOT_PROVIDER", "codex")
+        monkeypatch.setenv(
+            "CCBOT_AGENT_COMMAND",
+            "codex resume 019c9eef-c5f7-7dc2-9e92-de59a1c3cd28",
+        )
+        cfg = Config()
+        assert cfg.codex_resume_session_id == "019c9eef-c5f7-7dc2-9e92-de59a1c3cd28"
+
+    def test_forward_ports(self, monkeypatch):
+        monkeypatch.setenv("CCBOT_FORWARD_PORTS", "3000, 5173")
+        cfg = Config()
+        assert cfg.forward_ports == [3000, 5173]
+
 
 @pytest.mark.usefixtures("_base_env")
 class TestConfigMissingEnv:
@@ -57,6 +89,16 @@ class TestConfigMissingEnv:
     def test_non_numeric_allowed_users(self, monkeypatch):
         monkeypatch.setenv("ALLOWED_USERS", "abc")
         with pytest.raises(ValueError, match="non-numeric"):
+            Config()
+
+    def test_invalid_provider(self, monkeypatch):
+        monkeypatch.setenv("CCBOT_PROVIDER", "bad-provider")
+        with pytest.raises(ValueError, match="CCBOT_PROVIDER"):
+            Config()
+
+    def test_invalid_forward_ports(self, monkeypatch):
+        monkeypatch.setenv("CCBOT_FORWARD_PORTS", "abc")
+        with pytest.raises(ValueError, match="CCBOT_FORWARD_PORTS"):
             Config()
 
 

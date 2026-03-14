@@ -8,6 +8,7 @@ Handles interactive terminal UIs displayed by Claude Code:
 
 Provides:
   - Keyboard navigation (up/down/left/right/enter/esc)
+  - Direct numeric selection for option lists (1..N)
   - Terminal capture and display
   - Interactive mode tracking per user and thread
 
@@ -15,8 +16,11 @@ State dicts are keyed by (user_id, thread_id_or_0) for Telegram topic support.
 """
 
 import logging
+import re
+import time
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest
 
 from ..session import session_manager
 from ..terminal_parser import extract_interactive_content, is_interactive_ui
@@ -28,6 +32,7 @@ from .callback_data import (
     CB_ASK_LEFT,
     CB_ASK_REFRESH,
     CB_ASK_RIGHT,
+    CB_ASK_SELECT,
     CB_ASK_SPACE,
     CB_ASK_TAB,
     CB_ASK_UP,
@@ -44,6 +49,17 @@ _interactive_msgs: dict[tuple[int, int], int] = {}
 
 # Track interactive mode: (user_id, thread_id_or_0) -> window_id
 _interactive_mode: dict[tuple[int, int], str] = {}
+
+# Track parsed option state: (user_id, thread_id_or_0) -> (selected_index, total_options)
+_interactive_choices: dict[tuple[int, int], tuple[int, int]] = {}
+# Track latest rendered interactive payload to suppress duplicate re-sends.
+# Value: (text, monotonic_timestamp)
+_interactive_last_render: dict[tuple[int, int], tuple[str, float]] = {}
+
+_INTERACTIVE_RESEND_COOLDOWN_SECONDS = 30.0
+
+_OPTION_NUMBER_RE = re.compile(r"^(?P<num>\d{1,2})\.\s+(?P<label>.+)$")
+_OPTION_MARK_RE = re.compile(r"^(?P<mark>[☐✔☒●○])\s+(?P<label>.+)$")
 
 
 def get_interactive_window(user_id: int, thread_id: int | None = None) -> str | None:
@@ -69,7 +85,10 @@ def set_interactive_mode(
 def clear_interactive_mode(user_id: int, thread_id: int | None = None) -> None:
     """Clear interactive mode for a user (without deleting message)."""
     logger.debug("Clear interactive mode: user=%d, thread=%s", user_id, thread_id)
-    _interactive_mode.pop((user_id, thread_id or 0), None)
+    ikey = (user_id, thread_id or 0)
+    _interactive_mode.pop(ikey, None)
+    _interactive_choices.pop(ikey, None)
+    _interactive_last_render.pop(ikey, None)
 
 
 def get_interactive_msg_id(user_id: int, thread_id: int | None = None) -> int | None:
@@ -77,9 +96,50 @@ def get_interactive_msg_id(user_id: int, thread_id: int | None = None) -> int | 
     return _interactive_msgs.get((user_id, thread_id or 0))
 
 
+def get_interactive_choice_state(
+    user_id: int,
+    thread_id: int | None = None,
+) -> tuple[int, int] | None:
+    """Get (selected_index, total_options) parsed from latest interactive UI."""
+    return _interactive_choices.get((user_id, thread_id or 0))
+
+
+def _extract_interactive_choices(content: str) -> tuple[int, int] | None:
+    """Extract option count and selected index from interactive pane text."""
+    selected_idx: int | None = None
+    total = 0
+
+    for line in content.splitlines():
+        stripped = line.strip()
+        if not stripped:
+            continue
+
+        has_cursor = stripped.startswith(("❯", "›", ">", "←", "→"))
+        normalized = stripped.lstrip("❯›>←→ ").strip()
+
+        num_match = _OPTION_NUMBER_RE.match(normalized)
+        if num_match:
+            total += 1
+            if has_cursor:
+                selected_idx = total
+            continue
+
+        mark_match = _OPTION_MARK_RE.match(normalized)
+        if mark_match:
+            total += 1
+            marker = mark_match.group("mark")
+            if has_cursor or marker in {"✔", "☒", "●"}:
+                selected_idx = total
+
+    if total < 2:
+        return None
+    return (selected_idx or 1, total)
+
+
 def _build_interactive_keyboard(
     window_id: str,
     ui_name: str = "",
+    option_count: int = 0,
 ) -> InlineKeyboardMarkup:
     """Build keyboard for interactive UI navigation.
 
@@ -123,7 +183,20 @@ def _build_interactive_keyboard(
                 ),
             ]
         )
-    # Row 2: action keys
+    # Optional numeric quick-select rows (1..N, max 9).
+    if option_count > 1:
+        max_buttons = min(option_count, 9)
+        digits = [
+            InlineKeyboardButton(
+                str(i),
+                callback_data=f"{CB_ASK_SELECT}{i}:{window_id}"[:64],
+            )
+            for i in range(1, max_buttons + 1)
+        ]
+        for i in range(0, len(digits), 5):
+            rows.append(digits[i : i + 5])
+
+    # Row 2/3: action keys
     rows.append(
         [
             InlineKeyboardButton(
@@ -178,11 +251,21 @@ async def handle_interactive_ui(
     if not content:
         return False
 
+    text = content.content
+    choice_state = _extract_interactive_choices(text)
+    if choice_state:
+        _interactive_choices[ikey] = choice_state
+    else:
+        _interactive_choices.pop(ikey, None)
+
     # Build message with navigation keyboard
-    keyboard = _build_interactive_keyboard(window_id, ui_name=content.name)
+    keyboard = _build_interactive_keyboard(
+        window_id,
+        ui_name=content.name,
+        option_count=choice_state[1] if choice_state else 0,
+    )
 
     # Send as plain text (no markdown conversion)
-    text = content.content
 
     # Build thread kwargs for send_message
     thread_kwargs: dict[str, int] = {}
@@ -191,6 +274,22 @@ async def handle_interactive_ui(
 
     # Check if we have an existing interactive message to edit
     existing_msg_id = _interactive_msgs.get(ikey)
+    last_render = _interactive_last_render.get(ikey)
+    if last_render and last_render[0] == text:
+        # If payload is unchanged, avoid redundant edits/sends from polling.
+        if existing_msg_id:
+            _interactive_mode[ikey] = window_id
+            _interactive_last_render[ikey] = (text, time.monotonic())
+            return True
+        # Message id may be temporarily absent after an edit race/failure.
+        # Suppress duplicate sends of identical payload for a short cooldown.
+        if (
+            time.monotonic() - last_render[1]
+            < _INTERACTIVE_RESEND_COOLDOWN_SECONDS
+        ):
+            _interactive_mode[ikey] = window_id
+            return True
+
     if existing_msg_id:
         try:
             await bot.edit_message_text(
@@ -201,7 +300,22 @@ async def handle_interactive_ui(
                 link_preview_options=NO_LINK_PREVIEW,
             )
             _interactive_mode[ikey] = window_id
+            _interactive_last_render[ikey] = (text, time.monotonic())
             return True
+        except BadRequest as e:
+            # Polling may re-render identical UI every second; Telegram rejects
+            # no-op edits with "message is not modified". Treat it as success
+            # to avoid posting duplicate interactive messages.
+            if "message is not modified" in str(e).lower():
+                _interactive_mode[ikey] = window_id
+                _interactive_last_render[ikey] = (text, time.monotonic())
+                return True
+            # Edit failed (message deleted, etc.) - clear stale msg_id and send new
+            logger.debug(
+                "Edit failed for interactive msg %s, sending new", existing_msg_id
+            )
+            _interactive_msgs.pop(ikey, None)
+            # Fall through to send new message
         except Exception:
             # Edit failed (message deleted, etc.) - clear stale msg_id and send new
             logger.debug(
@@ -228,6 +342,7 @@ async def handle_interactive_ui(
     if sent:
         _interactive_msgs[ikey] = sent.message_id
         _interactive_mode[ikey] = window_id
+        _interactive_last_render[ikey] = (text, time.monotonic())
         return True
     return False
 
@@ -241,6 +356,8 @@ async def clear_interactive_msg(
     ikey = (user_id, thread_id or 0)
     msg_id = _interactive_msgs.pop(ikey, None)
     _interactive_mode.pop(ikey, None)
+    _interactive_choices.pop(ikey, None)
+    _interactive_last_render.pop(ikey, None)
     logger.debug(
         "Clear interactive msg: user=%d, thread=%s, msg_id=%s",
         user_id,

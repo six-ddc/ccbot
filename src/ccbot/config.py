@@ -10,6 +10,7 @@ Key class: Config (singleton instantiated as `config`).
 
 import logging
 import os
+import re
 from pathlib import Path
 
 from dotenv import load_dotenv
@@ -20,6 +21,17 @@ logger = logging.getLogger(__name__)
 
 # Env vars that must not leak to child processes (e.g. Claude Code via tmux)
 SENSITIVE_ENV_VARS = {"TELEGRAM_BOT_TOKEN", "ALLOWED_USERS", "OPENAI_API_KEY"}
+
+
+def _extract_codex_resume_session_id(command: str) -> str:
+    """Extract session id from a command containing `resume <session_id>`."""
+    if not command:
+        return ""
+
+    match = re.search(r"(?:^|\s)resume\s+([0-9a-fA-F-]{8,})\b", command)
+    if match:
+        return match.group(1)
+    return ""
 
 
 class Config:
@@ -61,8 +73,38 @@ class Config:
         self.tmux_session_name = os.getenv("TMUX_SESSION_NAME", "ccbot")
         self.tmux_main_window_name = "__main__"
 
-        # Claude command to run in new windows
-        self.claude_command = os.getenv("CLAUDE_COMMAND", "claude")
+        provider = os.getenv("CCBOT_PROVIDER", "claude").strip().lower()
+        if provider not in ("claude", "codex"):
+            raise ValueError("CCBOT_PROVIDER must be one of: claude, codex")
+        self.provider = provider
+
+        # Agent command to run in new windows.
+        # Backward compatible:
+        #   - CLAUDE_COMMAND still works for provider=claude
+        #   - CCBOT_AGENT_COMMAND overrides provider defaults
+        default_cmd = "codex" if self.provider == "codex" else "claude"
+        self.agent_command = os.getenv("CCBOT_AGENT_COMMAND") or os.getenv(
+            "CLAUDE_COMMAND", default_cmd
+        )
+        self.codex_resume_session_id = (
+            _extract_codex_resume_session_id(self.agent_command)
+            if self.provider == "codex"
+            else ""
+        )
+        # Keep old attribute name for compatibility in the existing code path.
+        self.claude_command = self.agent_command
+
+        # Provider capabilities and UI labels
+        self.agent_name = "Codex CLI" if self.provider == "codex" else "Claude Code"
+        self.supports_usage_command = self.provider == "claude"
+        # Interactive terminal prompts (approval/select) are used by both providers.
+        self.supports_claude_interactive_ui = self.provider in ("claude", "codex")
+        # Forward unknown slash commands for both providers by default:
+        # e.g. /status, /permissions, /clear, /compact.
+        slash_default = "true"
+        self.forward_slash_commands = (
+            os.getenv("CCBOT_FORWARD_SLASH", slash_default).lower() == "true"
+        )
 
         # All state files live under config_dir
         self.state_file = self.config_dir / "state.json"
@@ -81,6 +123,19 @@ class Config:
             self.claude_projects_path = Path(claude_config_dir) / "projects"
         else:
             self.claude_projects_path = Path.home() / ".claude" / "projects"
+
+        # Codex rollout logs root
+        self.codex_sessions_path = Path(
+            os.getenv(
+                "CCBOT_CODEX_SESSIONS_PATH", str(Path.home() / ".codex" / "sessions")
+            )
+        )
+        self.provider_data_root = (
+            self.codex_sessions_path
+            if self.provider == "codex"
+            else self.claude_projects_path
+        )
+        self.provider_supports_hook = self.provider == "claude"
 
         self.monitor_poll_interval = float(os.getenv("MONITOR_POLL_INTERVAL", "2.0"))
 
@@ -107,6 +162,26 @@ class Config:
             "OPENAI_BASE_URL", "https://api.openai.com/v1"
         )
 
+        # Optional local port forwarding announcement on startup
+        # Format: "3000" or "3000,5173"
+        self.forward_ports: list[int] = []
+        forward_ports_raw = os.getenv("CCBOT_FORWARD_PORTS", "").strip()
+        if forward_ports_raw:
+            for token in forward_ports_raw.split(","):
+                part = token.strip()
+                if not part:
+                    continue
+                try:
+                    port = int(part)
+                except ValueError as e:
+                    raise ValueError(
+                        f"CCBOT_FORWARD_PORTS contains non-numeric port: {part}"
+                    ) from e
+                if port < 1 or port > 65535:
+                    raise ValueError(
+                        f"CCBOT_FORWARD_PORTS contains invalid port: {port}"
+                    )
+                self.forward_ports.append(port)
         # Scrub sensitive vars from os.environ so child processes never inherit them.
         # Values are already captured in Config attributes above.
         for var in SENSITIVE_ENV_VARS:
@@ -114,12 +189,13 @@ class Config:
 
         logger.debug(
             "Config initialized: dir=%s, token=%s..., allowed_users=%d, "
-            "tmux_session=%s, claude_projects_path=%s",
+            "provider=%s, tmux_session=%s, data_root=%s",
             self.config_dir,
             self.telegram_bot_token[:8],
             len(self.allowed_users),
+            self.provider,
             self.tmux_session_name,
-            self.claude_projects_path,
+            self.provider_data_root,
         )
 
     def is_user_allowed(self, user_id: int) -> bool:

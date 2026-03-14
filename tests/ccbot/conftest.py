@@ -128,6 +128,21 @@ def sample_pane_permission():
     return "  Do you want to proceed?\n  Some permission details\n  Esc to cancel\n"
 
 
+@pytest.fixture
+def sample_pane_command_approval():
+    return (
+        "  Would you like to run the following command?\n"
+        "  Reason: Need access to prod env vars\n"
+        "  $ cd /repo && curl https://example.com\n"
+        "\n"
+        " › 1. Yes, proceed (y)\n"
+        "   2. Yes, and don't ask again (p)\n"
+        "   3. No, and tell Codex what to do differently (esc)\n"
+        "\n"
+        "  Press enter to confirm or esc to cancel\n"
+    )
+
+
 _CHROME = (
     "──────────────────────────────────────\n"
     "❯ \n"

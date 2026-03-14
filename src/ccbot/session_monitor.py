@@ -12,8 +12,10 @@ Key classes: SessionMonitor, NewMessage, SessionInfo.
 """
 
 import asyncio
+import hashlib
 import json
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Awaitable
@@ -21,6 +23,7 @@ from typing import Any, Callable, Awaitable
 import aiofiles
 
 from .config import config
+from .codex_mapper import codex_session_mapper
 from .monitor_state import MonitorState, TrackedSession
 from .tmux_manager import tmux_manager
 from .transcript_parser import TranscriptParser
@@ -28,10 +31,25 @@ from .utils import read_cwd_from_jsonl
 
 logger = logging.getLogger(__name__)
 
+# Safety limits for oversized transcript payloads.
+# These values intentionally avoid additional env knobs.
+_MAX_JSONL_LINE_CHARS = 256_000
+_MAX_EMITTED_TEXT_CHARS = 32_000
+_MAX_INITIAL_BACKLOG_BYTES = 256_000
+_MAX_READ_BYTES_PER_CYCLE = 256_000
+_NO_MESSAGES_RECOVERY_SECONDS = 10.0
+_MAX_DUPLICATE_OFFSET_GAP_BYTES = 8_192
+_HEARTBEAT_INTERVAL_SECONDS = 15.0
+_CODEX_MAPPER_SYNC_INTERVAL_SECONDS = 15.0
+_CODEX_MAPPER_SYNC_TIMEOUT_SECONDS = 5.0
+_LOAD_SESSION_MAP_TIMEOUT_SECONDS = 5.0
+_DETECT_CLEANUP_TIMEOUT_SECONDS = 5.0
+_CHECK_UPDATES_TIMEOUT_SECONDS = 8.0
+
 
 @dataclass
 class SessionInfo:
-    """Information about a Claude Code session."""
+    """Information about an agent session transcript file."""
 
     session_id: str
     file_path: Path
@@ -49,10 +67,14 @@ class NewMessage:
     role: str = "assistant"  # "user" or "assistant"
     tool_name: str | None = None  # For tool_use messages, the tool name
     image_data: list[tuple[str, bytes]] | None = None  # From tool_result images
+    source_line_start: int = 0  # JSONL byte offset start in transcript
+    source_line_end: int = 0  # JSONL byte offset end in transcript
+    trace_id: str = ""  # Stable line trace id: <session_id>:<start>-<end>
+    detected_at_monotonic: float = 0.0  # Local monotonic time when line was parsed
 
 
 class SessionMonitor:
-    """Monitors Claude Code sessions for new assistant messages.
+    """Monitors sessions for new assistant messages.
 
     Uses simple async polling with aiofiles for non-blocking I/O.
     Emits both intermediate and complete assistant messages.
@@ -65,7 +87,7 @@ class SessionMonitor:
         state_file: Path | None = None,
     ):
         self.projects_path = (
-            projects_path if projects_path is not None else config.claude_projects_path
+            projects_path if projects_path is not None else config.provider_data_root
         )
         self.poll_interval = (
             poll_interval if poll_interval is not None else config.monitor_poll_interval
@@ -84,6 +106,92 @@ class SessionMonitor:
         self._last_session_map: dict[str, str] = {}  # window_key -> session_id
         # In-memory mtime cache for quick file change detection (not persisted)
         self._file_mtimes: dict[str, float] = {}  # session_id -> last_seen_mtime
+        # Sessions seen by this monitor process. Used to apply startup catch-up
+        # protection only once per session after restart.
+        self._seen_sessions: set[str] = set()
+        # Last emitted message fingerprint per session for duplicate suppression.
+        self._last_emitted_fingerprint: dict[
+            str, tuple[tuple[str, str, str, int, str], int]
+        ] = {}
+        self._last_message_monotonic: float = time.monotonic()
+        self._last_heartbeat_monotonic: float = 0.0
+        self._silence_recovery_done = False
+        self._last_codex_mapper_sync: float = 0.0
+
+    @staticmethod
+    def _truncate_emitted_text(text: str) -> str:
+        """Clamp oversized message text before enqueueing Telegram work."""
+        if len(text) <= _MAX_EMITTED_TEXT_CHARS:
+            return text
+        omitted = len(text) - _MAX_EMITTED_TEXT_CHARS
+        suffix = f"\n\n… (truncated by CCBot, omitted {omitted} chars)"
+        return text[:_MAX_EMITTED_TEXT_CHARS] + suffix
+
+    def _reset_monitor_state(self, reason: str) -> None:
+        """Hard-reset monitor state file and in-memory offsets."""
+        tracked_before = len(self.state.tracked_sessions)
+        self.state.tracked_sessions.clear()
+        self._file_mtimes.clear()
+        self._pending_tools.clear()
+        self._seen_sessions.clear()
+        self._last_emitted_fingerprint.clear()
+        self.state.save()
+        self._silence_recovery_done = True
+        self._last_message_monotonic = time.monotonic()
+        logger.warning(
+            "Monitor state reset: reason=%s removed_sessions=%d",
+            reason,
+            tracked_before,
+        )
+
+    def _should_skip_duplicate_emit(
+        self,
+        *,
+        session_id: str,
+        role: str,
+        content_type: str,
+        tool_use_id: str | None,
+        text: str,
+        line_end: int,
+    ) -> bool:
+        """Drop repeated Codex entries that mirror the same content nearby."""
+        text_hash = hashlib.sha1(text.encode("utf-8", errors="ignore")).hexdigest()
+        fingerprint = (role, content_type, tool_use_id or "", len(text), text_hash)
+        prev = self._last_emitted_fingerprint.get(session_id)
+        self._last_emitted_fingerprint[session_id] = (fingerprint, line_end)
+        if prev is None:
+            return False
+        prev_fp, prev_line_end = prev
+        if fingerprint != prev_fp:
+            return False
+        if line_end < prev_line_end:
+            return False
+        return (line_end - prev_line_end) <= _MAX_DUPLICATE_OFFSET_GAP_BYTES
+
+    def _maybe_log_heartbeat(self, active_session_ids: set[str]) -> None:
+        """Periodically emit monitor liveness/lag diagnostics."""
+        now = time.monotonic()
+        if (
+            self._last_heartbeat_monotonic > 0
+            and now - self._last_heartbeat_monotonic < _HEARTBEAT_INTERVAL_SECONDS
+        ):
+            return
+
+        self._last_heartbeat_monotonic = now
+        silence_seconds = now - self._last_message_monotonic
+        mapper_age = (
+            now - self._last_codex_mapper_sync
+            if self._last_codex_mapper_sync > 0
+            else -1.0
+        )
+        logger.info(
+            "Monitor heartbeat: active_sessions=%d tracked_sessions=%d pending_tools=%d silence=%.1fs mapper_sync_age=%.1fs",
+            len(active_session_ids),
+            len(self.state.tracked_sessions),
+            len(self._pending_tools),
+            silence_seconds,
+            mapper_age,
+        )
 
     def set_message_callback(
         self, callback: Callable[[NewMessage], Awaitable[None]]
@@ -103,6 +211,9 @@ class SessionMonitor:
 
     async def scan_projects(self) -> list[SessionInfo]:
         """Scan projects that have active tmux windows."""
+        if config.provider == "codex":
+            return await self._scan_codex_from_session_map()
+
         active_cwds = await self._get_active_cwds()
         if not active_cwds:
             return []
@@ -193,6 +304,28 @@ class SessionMonitor:
 
         return sessions
 
+    async def _scan_codex_from_session_map(self) -> list[SessionInfo]:
+        """Read codex transcript paths from session_map.json entries."""
+        entries = await self._load_current_session_map_entries()
+        sessions: list[SessionInfo] = []
+        seen: set[str] = set()
+        for info in entries.values():
+            session_id = info.get("session_id", "")
+            if not session_id or session_id in seen:
+                continue
+            file_path_raw = info.get("file_path", "")
+            file_path = Path(file_path_raw) if file_path_raw else None
+            if file_path is None or not file_path.exists():
+                matches = list(
+                    config.codex_sessions_path.rglob(f"rollout-*{session_id}.jsonl")
+                )
+                file_path = matches[0] if matches else None
+            if file_path is None or not file_path.exists():
+                continue
+            seen.add(session_id)
+            sessions.append(SessionInfo(session_id=session_id, file_path=file_path))
+        return sessions
+
     async def _read_new_lines(
         self, session: TrackedSession, file_path: Path
     ) -> list[dict]:
@@ -244,11 +377,31 @@ class SessionMonitor:
                 # successfully. A non-empty line that fails JSON parsing is
                 # likely a partial write; stop and retry next cycle.
                 safe_offset = session.last_byte_offset
-                async for line in f:
+                processed_bytes = 0
+                while True:
+                    line_start = await f.tell()
+                    line = await f.readline()
+                    if not line:
+                        break
+                    line_end = await f.tell()
+                    processed_bytes += line_end - line_start
+                    if len(line) > _MAX_JSONL_LINE_CHARS:
+                        logger.warning(
+                            "Oversized JSONL line skipped for session %s: line=%d-%d chars=%d limit=%d",
+                            session.session_id,
+                            line_start,
+                            line_end,
+                            len(line),
+                            _MAX_JSONL_LINE_CHARS,
+                        )
+                        safe_offset = line_end
+                        continue
                     data = TranscriptParser.parse_line(line)
                     if data:
+                        data["__ccbot_line_start"] = line_start
+                        data["__ccbot_line_end"] = line_end
                         new_entries.append(data)
-                        safe_offset = await f.tell()
+                        safe_offset = line_end
                     elif line.strip():
                         # Partial JSONL line — don't advance offset past it
                         logger.warning(
@@ -258,7 +411,16 @@ class SessionMonitor:
                         break
                     else:
                         # Empty line — safe to skip
-                        safe_offset = await f.tell()
+                        safe_offset = line_end
+
+                    if processed_bytes >= _MAX_READ_BYTES_PER_CYCLE:
+                        logger.warning(
+                            "Read cycle capped for session %s: processed_bytes=%d limit=%d",
+                            session.session_id,
+                            processed_bytes,
+                            _MAX_READ_BYTES_PER_CYCLE,
+                        )
+                        break
 
                 session.last_byte_offset = safe_offset
 
@@ -314,6 +476,25 @@ class SessionMonitor:
                 except OSError:
                     continue
 
+                # Restart protection: if we are far behind on first observation
+                # of an existing tracked session, fast-forward offset to avoid
+                # blocking startup with a huge catch-up burst.
+                if session_info.session_id not in self._seen_sessions:
+                    backlog_bytes = max(0, current_size - tracked.last_byte_offset)
+                    if backlog_bytes > _MAX_INITIAL_BACKLOG_BYTES:
+                        tracked.last_byte_offset = current_size
+                        self.state.update_session(tracked)
+                        self._file_mtimes[session_info.session_id] = current_mtime
+                        self._seen_sessions.add(session_info.session_id)
+                        logger.warning(
+                            "Fast-forwarded session %s backlog on startup: skipped_bytes=%d threshold=%d",
+                            session_info.session_id,
+                            backlog_bytes,
+                            _MAX_INITIAL_BACKLOG_BYTES,
+                        )
+                        continue
+                    self._seen_sessions.add(session_info.session_id)
+
                 last_mtime = self._file_mtimes.get(session_info.session_id, 0.0)
                 if (
                     current_mtime <= last_mtime
@@ -334,35 +515,83 @@ class SessionMonitor:
                         f"session {session_info.session_id}"
                     )
 
-                # Parse new entries using the shared logic, carrying over pending tools
+                # Parse line-by-line to preserve exact source line trace.
                 carry = self._pending_tools.get(session_info.session_id, {})
-                parsed_entries, remaining = TranscriptParser.parse_entries(
-                    new_entries,
-                    pending_tools=carry,
-                )
-                if remaining:
-                    self._pending_tools[session_info.session_id] = remaining
-                else:
-                    self._pending_tools.pop(session_info.session_id, None)
+                for raw in new_entries:
+                    line_start = int(raw.get("__ccbot_line_start", 0))
+                    line_end = int(raw.get("__ccbot_line_end", 0))
+                    trace_id = f"{session_info.session_id}:{line_start}-{line_end}"
 
-                for entry in parsed_entries:
-                    if not entry.text and not entry.image_data:
-                        continue
-                    # Skip user messages unless show_user_messages is enabled
-                    if entry.role == "user" and not config.show_user_messages:
-                        continue
-                    new_messages.append(
-                        NewMessage(
+                    parsed_entries, carry = TranscriptParser.parse_entries(
+                        [raw],
+                        pending_tools=carry,
+                    )
+                    if parsed_entries:
+                        # Activity detected in transcript stream, even if some
+                        # parsed entries are dropped as duplicates.
+                        self._last_message_monotonic = time.monotonic()
+
+                    for entry in parsed_entries:
+                        if not entry.text and not entry.image_data:
+                            continue
+                        # Skip user messages unless show_user_messages is enabled
+                        if entry.role == "user" and not config.show_user_messages:
+                            continue
+                        text = self._truncate_emitted_text(entry.text)
+                        if self._should_skip_duplicate_emit(
                             session_id=session_info.session_id,
-                            text=entry.text,
-                            is_complete=True,
+                            role=entry.role,
                             content_type=entry.content_type,
                             tool_use_id=entry.tool_use_id,
-                            role=entry.role,
-                            tool_name=entry.tool_name,
-                            image_data=entry.image_data,
+                            text=text,
+                            line_end=line_end,
+                        ):
+                            logger.info(
+                                "LineTrace drop: trace=%s reason=duplicate_emit type=%s role=%s text_len=%d",
+                                trace_id,
+                                entry.content_type,
+                                entry.role,
+                                len(text),
+                            )
+                            continue
+                        if text != entry.text:
+                            logger.warning(
+                                "LineTrace clamp: trace=%s type=%s role=%s original_len=%d clamped_len=%d limit=%d",
+                                trace_id,
+                                entry.content_type,
+                                entry.role,
+                                len(entry.text),
+                                len(text),
+                                _MAX_EMITTED_TEXT_CHARS,
+                            )
+                        logger.info(
+                            "LineTrace in: trace=%s type=%s role=%s text_len=%d",
+                            trace_id,
+                            entry.content_type,
+                            entry.role,
+                            len(text),
                         )
-                    )
+                        new_messages.append(
+                            NewMessage(
+                                session_id=session_info.session_id,
+                                text=text,
+                                is_complete=True,
+                                content_type=entry.content_type,
+                                tool_use_id=entry.tool_use_id,
+                                role=entry.role,
+                                tool_name=entry.tool_name,
+                                image_data=entry.image_data,
+                                source_line_start=line_start,
+                                source_line_end=line_end,
+                                trace_id=trace_id,
+                                detected_at_monotonic=time.monotonic(),
+                            )
+                        )
+
+                if carry:
+                    self._pending_tools[session_info.session_id] = carry
+                else:
+                    self._pending_tools.pop(session_info.session_id, None)
 
                 self.state.update_session(tracked)
 
@@ -372,8 +601,8 @@ class SessionMonitor:
         self.state.save_if_dirty()
         return new_messages
 
-    async def _load_current_session_map(self) -> dict[str, str]:
-        """Load current session_map and return window_key -> session_id mapping.
+    async def _load_current_session_map_entries(self) -> dict[str, dict[str, str]]:
+        """Load current session_map and return window_key -> mapping info.
 
         Keys in session_map are formatted as "tmux_session:window_id"
         (e.g. "ccbot:@12"). Old-format keys ("ccbot:window_name") are also
@@ -381,7 +610,7 @@ class SessionMonitor:
         to be monitored until the hook re-fires with new format.
         Only entries matching our tmux_session_name are processed.
         """
-        window_to_session: dict[str, str] = {}
+        window_to_info: dict[str, dict[str, str]] = {}
         if config.session_map_file.exists():
             try:
                 async with aiofiles.open(config.session_map_file, "r") as f:
@@ -389,15 +618,37 @@ class SessionMonitor:
                 session_map = json.loads(content)
                 prefix = f"{config.tmux_session_name}:"
                 for key, info in session_map.items():
+                    if not isinstance(info, dict):
+                        continue
                     # Only process entries for our tmux session
                     if not key.startswith(prefix):
                         continue
+                    entry_provider = info.get("provider", "claude")
+                    if entry_provider != config.provider:
+                        continue
                     window_key = key[len(prefix) :]
                     session_id = info.get("session_id", "")
-                    if session_id:
-                        window_to_session[window_key] = session_id
+                    if not session_id:
+                        continue
+                    window_to_info[window_key] = {
+                        "session_id": session_id,
+                        "cwd": info.get("cwd", ""),
+                        "window_name": info.get("window_name", ""),
+                        "provider": entry_provider,
+                        "file_path": info.get("file_path", ""),
+                    }
             except (json.JSONDecodeError, OSError):
                 pass
+        return window_to_info
+
+    async def _load_current_session_map(self) -> dict[str, str]:
+        """Load current session_map and return window_key -> session_id mapping."""
+        entries = await self._load_current_session_map_entries()
+        window_to_session: dict[str, str] = {}
+        for window_key, info in entries.items():
+            session_id = info.get("session_id", "")
+            if session_id:
+                window_to_session[window_key] = session_id
         return window_to_session
 
     async def _cleanup_all_stale_sessions(self) -> None:
@@ -483,15 +734,83 @@ class SessionMonitor:
 
         while self._running:
             try:
+                if config.provider == "codex":
+                    now = time.monotonic()
+                    if (
+                        now - self._last_codex_mapper_sync
+                        >= _CODEX_MAPPER_SYNC_INTERVAL_SECONDS
+                    ):
+                        try:
+                            await asyncio.wait_for(
+                                codex_session_mapper.sync_session_map(),
+                                timeout=_CODEX_MAPPER_SYNC_TIMEOUT_SECONDS,
+                            )
+                        except asyncio.TimeoutError:
+                            logger.warning(
+                                "Codex mapper sync timeout after %.1fs; continuing",
+                                _CODEX_MAPPER_SYNC_TIMEOUT_SECONDS,
+                            )
+                        except Exception as e:
+                            logger.warning("Codex mapper sync failed: %s", e)
+                        self._last_codex_mapper_sync = now
+
                 # Load hook-based session map updates
-                await session_manager.load_session_map()
+                try:
+                    await asyncio.wait_for(
+                        session_manager.load_session_map(),
+                        timeout=_LOAD_SESSION_MAP_TIMEOUT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "load_session_map timeout after %.1fs; skipping cycle",
+                        _LOAD_SESSION_MAP_TIMEOUT_SECONDS,
+                    )
+                    await asyncio.sleep(self.poll_interval)
+                    continue
 
                 # Detect session_map changes and cleanup replaced/removed sessions
-                current_map = await self._detect_and_cleanup_changes()
+                try:
+                    current_map = await asyncio.wait_for(
+                        self._detect_and_cleanup_changes(),
+                        timeout=_DETECT_CLEANUP_TIMEOUT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "detect_and_cleanup timeout after %.1fs; skipping cycle",
+                        _DETECT_CLEANUP_TIMEOUT_SECONDS,
+                    )
+                    await asyncio.sleep(self.poll_interval)
+                    continue
                 active_session_ids = set(current_map.values())
+                self._maybe_log_heartbeat(active_session_ids)
 
                 # Check for new messages (all I/O is async)
-                new_messages = await self.check_for_updates(active_session_ids)
+                try:
+                    new_messages = await asyncio.wait_for(
+                        self.check_for_updates(active_session_ids),
+                        timeout=_CHECK_UPDATES_TIMEOUT_SECONDS,
+                    )
+                except asyncio.TimeoutError:
+                    logger.warning(
+                        "check_for_updates timeout after %.1fs; continuing",
+                        _CHECK_UPDATES_TIMEOUT_SECONDS,
+                    )
+                    await asyncio.sleep(self.poll_interval)
+                    continue
+
+                if new_messages:
+                    self._last_message_monotonic = time.monotonic()
+                elif (
+                    active_session_ids
+                    and not self._silence_recovery_done
+                    and (
+                        time.monotonic() - self._last_message_monotonic
+                        >= _NO_MESSAGES_RECOVERY_SECONDS
+                    )
+                ):
+                    self._reset_monitor_state(
+                        f"no_messages_for_{int(_NO_MESSAGES_RECOVERY_SECONDS)}s"
+                    )
 
                 for msg in new_messages:
                     status = "complete" if msg.is_complete else "streaming"
@@ -515,12 +834,20 @@ class SessionMonitor:
             logger.warning("Monitor already running")
             return
         self._running = True
+        self._last_message_monotonic = time.monotonic()
+        self._last_heartbeat_monotonic = 0.0
+        self._silence_recovery_done = False
+        self._last_codex_mapper_sync = 0.0
         self._task = asyncio.create_task(self._monitor_loop())
 
-    def stop(self) -> None:
+    async def stop(self) -> None:
         self._running = False
         if self._task:
             self._task.cancel()
+            try:
+                await self._task
+            except asyncio.CancelledError:
+                pass
             self._task = None
         self.state.save()
         logger.info("Session monitor stopped and state saved")
