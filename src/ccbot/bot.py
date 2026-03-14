@@ -201,6 +201,80 @@ def _enqueue_batched_input(user_id: int, thread_id: int, wid: str, text: str) ->
     )
 
 
+# Topics that have been auto-named (skip re-naming on subsequent messages)
+_auto_named_topics: set[tuple[int, int]] = set()
+
+# Patterns that are too short/generic for auto-naming
+_SKIP_AUTONAME_PATTERNS = (
+    "hi",
+    "hello",
+    "hey",
+    "привет",
+    "ку",
+    "хай",
+    "здравствуй",
+    "продолжай",
+    "continue",
+    "go",
+    "ok",
+    "ок",
+    "да",
+    "yes",
+    "давай",
+)
+
+
+async def _auto_name_topic(
+    bot: Bot, user_id: int, thread_id: int, wid: str, text: str
+) -> None:
+    """Rename Telegram topic and tmux window based on first user message.
+
+    Only fires once per topic binding. Skips short/generic messages.
+    Fails silently if bot lacks manage_topics permission.
+    """
+    key = (user_id, thread_id)
+    if key in _auto_named_topics:
+        return
+
+    _auto_named_topics.add(key)
+
+    # Skip short or generic messages
+    clean = text.strip()
+    if len(clean) < 10:
+        return
+    if clean.lower().rstrip(".!?") in _SKIP_AUTONAME_PATTERNS:
+        return
+
+    # Build topic name: first 30 chars, first line only
+    first_line = clean.split("\n")[0]
+    name = first_line[:30].strip()
+    if len(first_line) > 30:
+        name += "…"
+
+    # Rename Telegram topic
+    chat_id = session_manager.resolve_chat_id(user_id, thread_id)
+    try:
+        await bot.edit_forum_topic(
+            chat_id=chat_id,
+            message_thread_id=thread_id,
+            name=name,
+        )
+    except Exception as exc:
+        logger.debug("Auto-name topic failed: %s", exc)
+        return
+
+    # Sync tmux window display name
+    await tmux_manager.rename_window(wid, name)
+    session_manager.update_display_name(wid, name)
+    logger.info(
+        "Auto-named topic '%s' (user=%d, thread=%d, window=%s)",
+        name,
+        user_id,
+        thread_id,
+        wid,
+    )
+
+
 # Claude Code commands shown in bot menu (forwarded via tmux)
 CC_COMMANDS: dict[str, str] = {
     "clear": "↗ Очистить историю диалога",
@@ -1729,6 +1803,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             await safe_reply(update.message, f"❌ {message}")
             return
         record_user_activity(user.id, thread_id)
+        await _auto_name_topic(context.bot, user.id, thread_id, wid, text)
 
     # Start background capture for ! bash command output
     if is_bash:
@@ -1897,6 +1972,14 @@ async def _create_and_bind_window(
                         resolved_chat,
                         f"❌ Failed to send pending message: {send_msg}",
                         message_thread_id=pending_thread_id,
+                    )
+                elif pending_thread_id is not None:
+                    await _auto_name_topic(
+                        context.bot,
+                        user.id,
+                        pending_thread_id,
+                        created_wid,
+                        pending_text,
                     )
             elif context.user_data is not None:
                 context.user_data.pop("_pending_thread_id", None)

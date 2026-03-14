@@ -143,4 +143,14 @@
 - Files changed: src/ccbot/handlers/message_queue.py, src/ccbot/config.py, CHANGELOG.md
 - Lines: +45/-0
 - Security: semgrep 0 findings, in-memory InputFile, hardcoded filename, no user input
+- Commit: f1d3016
+
+## Cycle 15: Auto-name Topics from First Message
+- Date: 2026-03-15
+- Role sequence: Researcher (multi-session navigation pain) > Validator (Sequential Thinking) > Developer > Auditor
+- Idea source: ChatGPT auto-names conversations — proven UX pattern. With 10+ topics, generic names make navigation impossible.
+- Validation: APPROVED — self-documenting topic names, fires once per topic, skip filter for generic messages, fail-safe permissions
+- Files changed: src/ccbot/bot.py, CHANGELOG.md
+- Lines: +60/-0
+- Security: semgrep 0 findings, plain text topic names (no injection), edit_forum_topic requires permission
 - Commit: pending

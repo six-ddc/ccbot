@@ -1,5 +1,17 @@
 # Changelog
 
+## [Fork] 2026-03-15 — Auto-name Topics from First Message
+
+When a user sends their first substantive message in a new topic, the bot automatically renames the Telegram topic to match the message content (first 30 chars). Also syncs the tmux window display name.
+
+- Skips generic/short messages ("hi", "ok", "привет", < 10 chars)
+- Fires once per topic (tracked via `_auto_named_topics` set)
+- Fails silently if bot lacks `can_manage_topics` permission
+- Works in both direct send and pending-text-after-session-creation flows
+- Like ChatGPT's auto-naming — topics become self-documenting
+
+---
+
 ## [Fork] 2026-03-15 — Smart Excerpt for Long Responses
 
 When Claude's response exceeds 6000 characters, instead of splitting into [1/N]...[N/N] message spam, the bot now sends:
