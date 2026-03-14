@@ -35,6 +35,7 @@ Key functions: create_bot(), handle_new_message().
 import asyncio
 import io
 import logging
+import sys
 import time
 from collections import defaultdict
 from pathlib import Path
@@ -147,6 +148,9 @@ session_monitor: SessionMonitor | None = None
 
 # Status polling task
 _status_poll_task: asyncio.Task | None = None
+
+# Bot startup timestamp (set in post_init)
+_bot_start_time: float = 0.0
 
 # Claude Code commands shown in bot menu (forwarded via tmux)
 CC_COMMANDS: dict[str, str] = {
@@ -349,6 +353,66 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         if len(trimmed) > 3000:
             trimmed = trimmed[:3000] + "\n... (truncated)"
         await safe_reply(update.message, f"```\n{trimmed}\n```")
+
+
+async def health_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show bot health diagnostics: uptime, sessions, tmux, memory."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    import resource
+
+    lines: list[str] = []
+
+    # Uptime
+    if _bot_start_time > 0:
+        elapsed = time.monotonic() - _bot_start_time
+        hours, remainder = divmod(int(elapsed), 3600)
+        minutes, seconds = divmod(remainder, 60)
+        lines.append(f"Аптайм: {hours}ч {minutes}м {seconds}с")
+    else:
+        lines.append("Аптайм: н/д")
+
+    # Active sessions
+    session_count = sum(1 for _ in session_manager.iter_thread_bindings())
+    lines.append(f"Активных сессий: {session_count}")
+
+    # tmux server
+    tmux_session = tmux_manager.get_session()
+    if tmux_session:
+        windows = await tmux_manager.list_windows()
+        lines.append(f"tmux: работает ({len(windows)} окон)")
+    else:
+        lines.append("tmux: не доступен")
+
+    # Session monitor
+    if session_monitor:
+        lines.append("Монитор сессий: работает")
+    else:
+        lines.append("Монитор сессий: остановлен")
+
+    # Status polling
+    if _status_poll_task and not _status_poll_task.done():
+        lines.append("Опрос статуса: работает")
+    else:
+        lines.append("Опрос статуса: остановлен")
+
+    # Memory usage (RSS in MB)
+    usage_kb = resource.getrusage(resource.RUSAGE_SELF).ru_maxrss
+    if sys.platform == "darwin":
+        usage_mb = usage_kb / (1024 * 1024)
+    else:
+        usage_mb = usage_kb / 1024
+    lines.append(f"Память (RSS): {usage_mb:.1f} МБ")
+
+    # Python version
+    lines.append(f"Python: {sys.version.split()[0]}")
+
+    text = "\n".join(lines)
+    await safe_reply(update.message, f"```\n{text}\n```")
 
 
 # --- Screenshot keyboard with quick control keys ---
@@ -2021,7 +2085,9 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
 
 
 async def post_init(application: Application) -> None:
-    global session_monitor, _status_poll_task
+    global session_monitor, _status_poll_task, _bot_start_time
+
+    _bot_start_time = time.monotonic()
 
     await application.bot.delete_my_commands()
 
@@ -2033,6 +2099,7 @@ async def post_init(application: Application) -> None:
         BotCommand("kill", "Завершить сессию и удалить топик"),
         BotCommand("unbind", "Отвязать топик (окно останется)"),
         BotCommand("usage", "Остаток лимита Claude Code"),
+        BotCommand("health", "Диагностика бота"),
     ]
     # Add Claude Code slash commands
     for cmd_name, desc in CC_COMMANDS.items():
@@ -2146,6 +2213,7 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("esc", esc_command))
     application.add_handler(CommandHandler("unbind", unbind_command))
     application.add_handler(CommandHandler("usage", usage_command))
+    application.add_handler(CommandHandler("health", health_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Topic closed event — auto-kill associated window
     application.add_handler(

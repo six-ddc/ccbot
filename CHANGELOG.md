@@ -1,5 +1,21 @@
 # Changelog
 
+## [Fork] 2026-03-15 — /health Diagnostic Command
+
+New `/health` command shows bot diagnostics directly in Telegram:
+- Uptime (hours, minutes, seconds)
+- Active sessions count
+- tmux server status and window count
+- Session monitor and status polling state
+- Memory usage (RSS in MB)
+- Python version
+
+| File | Changes |
+|------|---------|
+| `src/ccbot/bot.py` | Added `health_command`, `_bot_start_time` tracking, registered handler |
+
+---
+
 ## [Fork] 2026-03-14 — Graceful Shutdown with User Notifications
 
 When the bot receives SIGTERM/SIGINT (e.g. Railway redeploy, systemd restart), it now:
