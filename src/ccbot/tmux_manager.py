@@ -15,6 +15,8 @@ from __future__ import annotations
 
 import asyncio
 import logging
+import re
+import shlex
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -23,6 +25,10 @@ import libtmux
 from .config import SENSITIVE_ENV_VARS, config
 
 logger = logging.getLogger(__name__)
+
+_UUID_RE = re.compile(
+    r"^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$"
+)
 
 
 @dataclass
@@ -89,8 +95,9 @@ class TmuxManager:
         for var in SENSITIVE_ENV_VARS:
             try:
                 session.unset_environment(var)
-            except Exception:
-                pass  # var not set in session env — nothing to remove
+            except Exception as e:
+                if "unknown variable" not in str(e).lower():
+                    logger.warning("Failed to scrub env var %s: %s", var, e)
 
     async def list_windows(self) -> list[TmuxWindow]:
         """List all windows in the session with their working directories.
@@ -223,6 +230,31 @@ class TmuxManager:
 
         return await asyncio.to_thread(_sync_capture)
 
+    async def is_claude_running(self, window_id: str) -> bool:
+        """Check if Claude Code is running by verifying shell has child processes."""
+        try:
+            proc = await asyncio.create_subprocess_exec(
+                "tmux", "display-message", "-t", window_id,
+                "-p", "#{pane_pid}",
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+            if proc.returncode != 0:
+                return False
+            pane_pid = stdout.decode("utf-8").strip()
+            if not pane_pid:
+                return False
+            child_check = await asyncio.create_subprocess_exec(
+                "pgrep", "-P", pane_pid,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            child_stdout, _ = await child_check.communicate()
+            return child_check.returncode == 0 and bool(child_stdout.strip())
+        except Exception:
+            return False
+
     async def send_keys(
         self, window_id: str, text: str, enter: bool = True, literal: bool = True
     ) -> bool:
@@ -238,6 +270,14 @@ class TmuxManager:
         Returns:
             True if successful, False otherwise
         """
+        logger.info(
+            "send_keys: window=%s, text_len=%d, literal=%s, enter=%s",
+            window_id, len(text), literal, enter,
+        )
+
+        if literal:
+            text = "".join(c for c in text if c == "\n" or (ord(c) >= 32) or (ord(c) > 127))
+
         if literal and enter:
             # Split into text + delay + Enter via libtmux.
             # Claude Code's TUI sometimes interprets a rapid-fire Enter
@@ -382,6 +422,10 @@ class TmuxManager:
         Returns:
             Tuple of (success, message, window_name, window_id)
         """
+        if resume_session_id and not _UUID_RE.match(resume_session_id):
+            logger.warning("Invalid resume_session_id format: %s", resume_session_id)
+            return False, "Invalid session ID format", "", ""
+
         # Validate directory first
         path = Path(work_dir).expanduser().resolve()
         if not path.exists():
@@ -420,7 +464,7 @@ class TmuxManager:
                     if pane:
                         cmd = config.claude_command
                         if resume_session_id:
-                            cmd = f"{cmd} --resume {resume_session_id}"
+                            cmd = f"{cmd} --resume {shlex.quote(resume_session_id)}"
                         pane.send_keys(cmd, enter=True)
 
                 logger.info(

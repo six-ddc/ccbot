@@ -87,9 +87,9 @@ def build_window_picker(
     window_ids = [wid for wid, _, _ in windows]
 
     lines = [
-        "*Bind to Existing Window*\n",
-        "These windows are running but not bound to any topic.",
-        "Pick one to attach it here, or start a new session.\n",
+        "*Привязать к окну*\n",
+        "Эти окна запущены, но не привязаны к топику.",
+        "Выбери окно или создай новую сессию.\n",
     ]
     for _wid, name, cwd in windows:
         display_cwd = cwd.replace(str(Path.home()), "~")
@@ -110,8 +110,8 @@ def build_window_picker(
 
     buttons.append(
         [
-            InlineKeyboardButton("➕ New Session", callback_data=CB_WIN_NEW),
-            InlineKeyboardButton("Cancel", callback_data=CB_WIN_CANCEL),
+            InlineKeyboardButton("Новая сессия", callback_data=CB_WIN_NEW),
+            InlineKeyboardButton("Отмена", callback_data=CB_WIN_CANCEL),
         ]
     )
 
@@ -129,6 +129,11 @@ def build_directory_browser(
     path = Path(current_path).expanduser().resolve()
     if not path.exists() or not path.is_dir():
         path = Path.cwd()
+
+    # Enforce allowed_roots boundary
+    if config.allowed_roots:
+        if not any(path.is_relative_to(root) for root in config.allowed_roots):
+            path = config.allowed_roots[0]
 
     try:
         subdirs = sorted(
@@ -177,18 +182,22 @@ def build_directory_browser(
         buttons.append(nav)
 
     action_row: list[InlineKeyboardButton] = []
-    # Allow going up unless at filesystem root
-    if path != path.parent:
+    # Allow going up unless at filesystem root or at allowed_roots boundary
+    parent = path.parent
+    can_go_up = path != parent
+    if config.allowed_roots and can_go_up:
+        can_go_up = any(parent.is_relative_to(root) for root in config.allowed_roots)
+    if can_go_up:
         action_row.append(InlineKeyboardButton("..", callback_data=CB_DIR_UP))
-    action_row.append(InlineKeyboardButton("Select", callback_data=CB_DIR_CONFIRM))
-    action_row.append(InlineKeyboardButton("Cancel", callback_data=CB_DIR_CANCEL))
+    action_row.append(InlineKeyboardButton("Выбрать", callback_data=CB_DIR_CONFIRM))
+    action_row.append(InlineKeyboardButton("Отмена", callback_data=CB_DIR_CANCEL))
     buttons.append(action_row)
 
     display_path = str(path).replace(str(Path.home()), "~")
     if not subdirs:
-        text = f"*Select Working Directory*\n\nCurrent: `{display_path}`\n\n_(No subdirectories)_"
+        text = f"*Выбор рабочей папки*\n\nТекущая: `{display_path}`\n\n_(Нет подпапок)_"
     else:
-        text = f"*Select Working Directory*\n\nCurrent: `{display_path}`\n\nTap a folder to enter, or select current directory"
+        text = f"*Выбор рабочей папки*\n\nТекущая: `{display_path}`\n\nНажми на папку для входа или выбери текущую"
 
     return text, InlineKeyboardMarkup(buttons), subdirs
 
@@ -223,14 +232,14 @@ def build_session_picker(
     Returns: (text, keyboard).
     """
     lines = [
-        "*Resume Session?*\n",
-        "Existing sessions found in this directory.\n",
+        "*Возобновить сессию?*\n",
+        "Найдены существующие сессии в этой папке.\n",
     ]
     for i, s in enumerate(sessions):
         summary = s.summary[:40] + "…" if len(s.summary) > 40 else s.summary
         rel = _relative_time(s.file_path)
         time_str = f" ({rel})" if rel else ""
-        lines.append(f"{i + 1}. {summary} — {s.message_count} msgs{time_str}")
+        lines.append(f"{i + 1}. {summary} — {s.message_count} сообщ.{time_str}")
 
     buttons: list[list[InlineKeyboardButton]] = []
     for i in range(0, len(sessions), 2):
@@ -247,8 +256,8 @@ def build_session_picker(
 
     buttons.append(
         [
-            InlineKeyboardButton("➕ New Session", callback_data=CB_SESSION_NEW),
-            InlineKeyboardButton("Cancel", callback_data=CB_SESSION_CANCEL),
+            InlineKeyboardButton("Новая сессия", callback_data=CB_SESSION_NEW),
+            InlineKeyboardButton("Отмена", callback_data=CB_SESSION_CANCEL),
         ]
     )
 

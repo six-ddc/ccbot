@@ -25,7 +25,7 @@ from typing import Literal
 
 from telegram import Bot
 from telegram.constants import ChatAction
-from telegram.error import RetryAfter
+from telegram.error import BadRequest, RetryAfter
 
 from ..markdown_v2 import convert_markdown
 from ..session import session_manager
@@ -241,6 +241,19 @@ async def _message_queue_worker(bot: Bot, user_id: int) -> None:
                     await _process_status_update_task(bot, user_id, task)
                 elif task.task_type == "status_clear":
                     await _do_clear_status_message(bot, user_id, task.thread_id or 0)
+            except BadRequest as e:
+                if str(e).lower().strip() in ("message thread not found", "thread not found"):
+                    tid = task.thread_id
+                    if tid is not None:
+                        logger.warning(
+                            "Thread %d not found, unbinding (user=%d)",
+                            tid, user_id,
+                        )
+                        session_manager.unbind_thread(user_id, tid)
+                else:
+                    logger.error(
+                        "BadRequest for user %d: %s", user_id, e
+                    )
             except RetryAfter as e:
                 retry_secs = (
                     e.retry_after
@@ -373,6 +386,10 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
 
         if sent:
             last_msg_id = sent.message_id
+            # Track message → thread for reaction routing
+            if task.thread_id is not None and wid:
+                from ..bot import _track_message_thread
+                _track_message_thread(sent.message_id, task.thread_id, wid)
 
     # 3. Record tool_use message ID for later editing
     if last_msg_id and task.tool_use_id and task.content_type == "tool_use":

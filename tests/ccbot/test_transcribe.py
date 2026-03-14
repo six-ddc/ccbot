@@ -1,4 +1,4 @@
-"""Unit tests for transcribe — voice-to-text via OpenAI API."""
+"""Unit tests for transcribe — voice-to-text via Deepgram API."""
 
 from unittest.mock import AsyncMock, patch
 
@@ -6,6 +6,19 @@ import httpx
 import pytest
 
 from ccbot import transcribe
+
+
+DEEPGRAM_RESPONSE = {
+    "results": {
+        "channels": [
+            {
+                "alternatives": [
+                    {"transcript": "Hello world", "confidence": 0.99}
+                ]
+            }
+        ]
+    }
+}
 
 
 @pytest.fixture(autouse=True)
@@ -20,14 +33,13 @@ def _reset_client():
 def mock_config():
     """Patch config with test values."""
     with patch.object(transcribe, "config") as cfg:
-        cfg.openai_api_key = "sk-test-key"
-        cfg.openai_base_url = "https://api.openai.com/v1"
+        cfg.deepgram_api_key = "test-deepgram-key"
         yield cfg
 
 
 def _mock_response(*, json_data: dict, status_code: int = 200) -> httpx.Response:
     """Build a fake httpx.Response."""
-    request = httpx.Request("POST", "https://api.openai.com/v1/audio/transcriptions")
+    request = httpx.Request("POST", transcribe.DEEPGRAM_API_URL)
     resp = httpx.Response(status_code=status_code, json=json_data, request=request)
     return resp
 
@@ -35,7 +47,7 @@ def _mock_response(*, json_data: dict, status_code: int = 200) -> httpx.Response
 class TestTranscribeVoice:
     @pytest.mark.asyncio
     async def test_success(self, mock_config):
-        resp = _mock_response(json_data={"text": "Hello world"})
+        resp = _mock_response(json_data=DEEPGRAM_RESPONSE)
         with patch.object(
             httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=resp
         ) as mock_post:
@@ -44,11 +56,12 @@ class TestTranscribeVoice:
         assert result == "Hello world"
         mock_post.assert_called_once()
         call_kwargs = mock_post.call_args
-        assert "Bearer sk-test-key" in str(call_kwargs)
+        assert "Token test-deepgram-key" in str(call_kwargs)
 
     @pytest.mark.asyncio
     async def test_empty_transcription_raises(self, mock_config):
-        resp = _mock_response(json_data={"text": ""})
+        data = {"results": {"channels": [{"alternatives": [{"transcript": "", "confidence": 0.0}]}]}}
+        resp = _mock_response(json_data=data)
         with patch.object(
             httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=resp
         ):
@@ -56,21 +69,12 @@ class TestTranscribeVoice:
                 await transcribe.transcribe_voice(b"fake-ogg-data")
 
     @pytest.mark.asyncio
-    async def test_whitespace_only_raises(self, mock_config):
-        resp = _mock_response(json_data={"text": "   "})
+    async def test_unexpected_structure_raises(self, mock_config):
+        resp = _mock_response(json_data={"metadata": {}})
         with patch.object(
             httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=resp
         ):
-            with pytest.raises(ValueError, match="Empty transcription"):
-                await transcribe.transcribe_voice(b"fake-ogg-data")
-
-    @pytest.mark.asyncio
-    async def test_missing_text_field_raises(self, mock_config):
-        resp = _mock_response(json_data={"result": "something"})
-        with patch.object(
-            httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=resp
-        ):
-            with pytest.raises(ValueError, match="Empty transcription"):
+            with pytest.raises(ValueError, match="Unexpected Deepgram response"):
                 await transcribe.transcribe_voice(b"fake-ogg-data")
 
     @pytest.mark.asyncio
@@ -81,31 +85,6 @@ class TestTranscribeVoice:
         ):
             with pytest.raises(httpx.HTTPStatusError):
                 await transcribe.transcribe_voice(b"fake-ogg-data")
-
-    @pytest.mark.asyncio
-    async def test_custom_base_url(self, mock_config):
-        mock_config.openai_base_url = "https://proxy.example.com/v1"
-        resp = _mock_response(json_data={"text": "Transcribed"})
-        with patch.object(
-            httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=resp
-        ) as mock_post:
-            result = await transcribe.transcribe_voice(b"fake-ogg-data")
-
-        assert result == "Transcribed"
-        url_arg = mock_post.call_args[0][0]
-        assert url_arg == "https://proxy.example.com/v1/audio/transcriptions"
-
-    @pytest.mark.asyncio
-    async def test_base_url_trailing_slash_stripped(self, mock_config):
-        mock_config.openai_base_url = "https://proxy.example.com/v1/"
-        resp = _mock_response(json_data={"text": "OK"})
-        with patch.object(
-            httpx.AsyncClient, "post", new_callable=AsyncMock, return_value=resp
-        ) as mock_post:
-            await transcribe.transcribe_voice(b"fake-ogg-data")
-
-        url_arg = mock_post.call_args[0][0]
-        assert url_arg == "https://proxy.example.com/v1/audio/transcriptions"
 
 
 class TestCloseClient:

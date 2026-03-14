@@ -37,10 +37,14 @@ from .message_queue import enqueue_status_update, get_message_queue
 logger = logging.getLogger(__name__)
 
 # Status polling interval
-STATUS_POLL_INTERVAL = 1.0  # seconds - faster response (rate limiting at send layer)
+STATUS_POLL_INTERVAL = 3.0  # seconds
 
 # Topic existence probe interval
 TOPIC_CHECK_INTERVAL = 60.0  # seconds
+
+# Grace period before auto-killing a window whose Claude process exited
+_exit_detected_at: dict[str, float] = {}
+_EXIT_GRACE_PERIOD = 5.0
 
 
 async def update_status_message(
@@ -179,6 +183,40 @@ async def status_poll_loop(bot: Bot) -> None:
                             wid,
                         )
                         continue
+
+                    # Detect dead Claude process — auto-cleanup with grace period
+                    if not await tmux_manager.is_claude_running(wid):
+                        now = time.monotonic()
+                        if wid not in _exit_detected_at:
+                            _exit_detected_at[wid] = now
+                            continue
+                        elif now - _exit_detected_at[wid] < _EXIT_GRACE_PERIOD:
+                            continue
+                        _exit_detected_at.pop(wid, None)
+                        display = session_manager.get_display_name(wid)
+                        await tmux_manager.kill_window(wid)
+                        session_manager.unbind_thread(user_id, thread_id)
+                        await clear_topic_state(user_id, thread_id, bot)
+                        logger.info(
+                            "Claude exited in '%s' (%s), killed (user=%d, thread=%d)",
+                            display, wid, user_id, thread_id,
+                        )
+                        resolved_chat = session_manager.resolve_chat_id(
+                            user_id, thread_id
+                        )
+                        try:
+                            from .message_sender import safe_send
+                            await safe_send(
+                                bot, resolved_chat,
+                                f"Сессия '{display}' завершена.\n"
+                                "Напиши сюда чтобы начать новую или возобновить.",
+                                message_thread_id=thread_id,
+                            )
+                        except Exception:
+                            pass
+                        continue
+                    else:
+                        _exit_detected_at.pop(wid, None)
 
                     # UI detection happens unconditionally in update_status_message.
                     # Status enqueue is skipped inside update_status_message when

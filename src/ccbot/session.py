@@ -813,8 +813,12 @@ class SessionManager:
 
     async def send_to_window(self, window_id: str, text: str) -> tuple[bool, str]:
         """Send text to a tmux window by ID."""
+        MAX_MESSAGE_LENGTH = 4096
+        if len(text) > MAX_MESSAGE_LENGTH:
+            return False, f"Сообщение слишком длинное ({len(text)} символов, макс {MAX_MESSAGE_LENGTH})"
+
         display = self.get_display_name(window_id)
-        logger.debug(
+        logger.info(
             "send_to_window: window_id=%s (%s), text_len=%d",
             window_id,
             display,

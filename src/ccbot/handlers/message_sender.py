@@ -21,7 +21,7 @@ import logging
 from typing import Any
 
 from telegram import Bot, InputMediaPhoto, LinkPreviewOptions, Message
-from telegram.error import RetryAfter
+from telegram.error import BadRequest, RetryAfter
 
 from ..markdown_v2 import convert_markdown
 from ..transcript_parser import TranscriptParser
@@ -72,6 +72,19 @@ async def send_with_fallback(
         )
     except RetryAfter:
         raise
+    except BadRequest as e:
+        if "thread not found" in str(e).lower():
+            logger.warning("Thread not found for chat %s, skipping", chat_id)
+            raise
+        try:
+            return await bot.send_message(
+                chat_id=chat_id, text=strip_sentinels(text), **kwargs
+            )
+        except RetryAfter:
+            raise
+        except Exception as e2:
+            logger.error(f"Failed to send message to {chat_id}: {e2}")
+            return None
     except Exception:
         try:
             return await bot.send_message(

@@ -36,6 +36,7 @@ import asyncio
 import io
 import logging
 import time
+from collections import defaultdict
 from pathlib import Path
 
 from telegram import (
@@ -54,6 +55,7 @@ from telegram.ext import (
     CommandHandler,
     ContextTypes,
     MessageHandler,
+    MessageReactionHandler,
     filters,
 )
 
@@ -148,12 +150,12 @@ _status_poll_task: asyncio.Task | None = None
 
 # Claude Code commands shown in bot menu (forwarded via tmux)
 CC_COMMANDS: dict[str, str] = {
-    "clear": "↗ Clear conversation history",
-    "compact": "↗ Compact conversation context",
-    "cost": "↗ Show token/cost usage",
-    "help": "↗ Show Claude Code help",
-    "memory": "↗ Edit CLAUDE.md",
-    "model": "↗ Switch AI model",
+    "clear": "↗ Очистить историю диалога",
+    "compact": "↗ Сжать контекст разговора",
+    "cost": "↗ Показать расход токенов",
+    "help": "↗ Справка Claude Code",
+    "memory": "↗ Редактировать CLAUDE.md",
+    "model": "↗ Сменить модель ИИ",
 }
 
 
@@ -181,7 +183,7 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         if update.message:
-            await safe_reply(update.message, "You are not authorized to use this bot.")
+            await safe_reply(update.message, "Нет доступа.")
         return
 
     clear_browse_state(context.user_data)
@@ -189,8 +191,8 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if update.message:
         await safe_reply(
             update.message,
-            "🤖 *Claude Code Monitor*\n\n"
-            "Each topic is a session. Create a new topic to start.",
+            "Claude Code Monitor\n\n"
+            "Каждый топик = отдельная сессия. Создай новый топик чтобы начать.",
         )
 
 
@@ -205,7 +207,7 @@ async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     thread_id = _get_thread_id(update)
     wid = session_manager.resolve_window_for_thread(user.id, thread_id)
     if not wid:
-        await safe_reply(update.message, "❌ No session bound to this topic.")
+        await safe_reply(update.message, "Нет привязанной сессии в этом топике.")
         return
 
     await send_history(update.message, wid)
@@ -224,18 +226,18 @@ async def screenshot_command(
     thread_id = _get_thread_id(update)
     wid = session_manager.resolve_window_for_thread(user.id, thread_id)
     if not wid:
-        await safe_reply(update.message, "❌ No session bound to this topic.")
+        await safe_reply(update.message, "Нет привязанной сессии в этом топике.")
         return
 
     w = await tmux_manager.find_window_by_id(wid)
     if not w:
         display = session_manager.get_display_name(wid)
-        await safe_reply(update.message, f"❌ Window '{display}' no longer exists.")
+        await safe_reply(update.message, f"Окно '{display}' больше не существует.")
         return
 
     text = await tmux_manager.capture_pane(w.window_id, with_ansi=True)
     if not text:
-        await safe_reply(update.message, "❌ Failed to capture pane content.")
+        await safe_reply(update.message, "Не удалось получить содержимое терминала.")
         return
 
     png_bytes = await text_to_image(text, with_ansi=True)
@@ -257,12 +259,12 @@ async def unbind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
 
     thread_id = _get_thread_id(update)
     if thread_id is None:
-        await safe_reply(update.message, "❌ This command only works in a topic.")
+        await safe_reply(update.message, "Эта команда работает только в топике.")
         return
 
     wid = session_manager.get_window_for_thread(user.id, thread_id)
     if not wid:
-        await safe_reply(update.message, "❌ No session bound to this topic.")
+        await safe_reply(update.message, "Нет привязанной сессии в этом топике.")
         return
 
     display = session_manager.get_display_name(wid)
@@ -273,7 +275,7 @@ async def unbind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         update.message,
         f"✅ Topic unbound from window '{display}'.\n"
         "The Claude session is still running in tmux.\n"
-        "Send a message to bind to a new session.",
+        "Отправь сообщение для привязки к новой сессии.",
     )
 
 
@@ -288,13 +290,13 @@ async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     thread_id = _get_thread_id(update)
     wid = session_manager.resolve_window_for_thread(user.id, thread_id)
     if not wid:
-        await safe_reply(update.message, "❌ No session bound to this topic.")
+        await safe_reply(update.message, "Нет привязанной сессии в этом топике.")
         return
 
     w = await tmux_manager.find_window_by_id(wid)
     if not w:
         display = session_manager.get_display_name(wid)
-        await safe_reply(update.message, f"❌ Window '{display}' no longer exists.")
+        await safe_reply(update.message, f"Окно '{display}' больше не существует.")
         return
 
     # Send Escape control character (no enter)
@@ -313,12 +315,12 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     thread_id = _get_thread_id(update)
     wid = session_manager.resolve_window_for_thread(user.id, thread_id)
     if not wid:
-        await safe_reply(update.message, "No session bound to this topic.")
+        await safe_reply(update.message, "Нет привязанной сессии в этом топике.")
         return
 
     w = await tmux_manager.find_window_by_id(wid)
     if not w:
-        await safe_reply(update.message, f"Window '{wid}' no longer exists.")
+        await safe_reply(update.message, f"Окно '{wid}' больше не существует.")
         return
 
     # Send /usage command to Claude Code TUI
@@ -331,7 +333,7 @@ async def usage_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     await tmux_manager.send_keys(w.window_id, "Escape", enter=False, literal=False)
 
     if not pane_text:
-        await safe_reply(update.message, "Failed to capture usage info.")
+        await safe_reply(update.message, "Не удалось получить информацию о расходе.")
         return
 
     # Try to parse structured usage info
@@ -492,6 +494,9 @@ async def forward_command_handler(
         return
     if not update.message:
         return
+    if not _check_rate_limit(user.id):
+        await safe_reply(update.message, "Слишком много сообщений. Подожди минуту.")
+        return
 
     thread_id = _get_thread_id(update)
 
@@ -507,13 +512,13 @@ async def forward_command_handler(
     cc_slash = cmd_text.split("@")[0]  # strip bot mention
     wid = session_manager.resolve_window_for_thread(user.id, thread_id)
     if not wid:
-        await safe_reply(update.message, "❌ No session bound to this topic.")
+        await safe_reply(update.message, "Нет привязанной сессии в этом топике.")
         return
 
     w = await tmux_manager.find_window_by_id(wid)
     if not w:
         display = session_manager.get_display_name(wid)
-        await safe_reply(update.message, f"❌ Window '{display}' no longer exists.")
+        await safe_reply(update.message, f"Окно '{display}' больше не существует.")
         return
 
     display = session_manager.get_display_name(wid)
@@ -551,13 +556,141 @@ async def unsupported_content_handler(
     logger.debug("Unsupported content from user %d", user.id)
     await safe_reply(
         update.message,
-        "⚠ Only text, photo, and voice messages are supported. Stickers, video, and other media cannot be forwarded to Claude Code.",
+        "Поддерживаются только текст, фото и голосовые. Стикеры, видео и прочие медиа не пересылаются в Claude Code.",
     )
 
 
 # --- Image directory for incoming photos ---
 _IMAGES_DIR = ccbot_dir() / "images"
+
+# Rate limiting for user input to tmux (defense against compromised accounts)
+_user_rate: dict[int, list[float]] = defaultdict(list)
+_RATE_LIMIT_MESSAGES = 30
+_RATE_LIMIT_WINDOW = 60.0  # seconds
+_rate_cleanup_counter = 0
+
+
+def _check_rate_limit(user_id: int) -> bool:
+    """Return True if user is within rate limit, False if exceeded."""
+    global _rate_cleanup_counter
+    now = time.monotonic()
+    cutoff = now - _RATE_LIMIT_WINDOW
+    timestamps = _user_rate[user_id]
+    _user_rate[user_id] = [t for t in timestamps if t > cutoff]
+    if len(_user_rate[user_id]) >= _RATE_LIMIT_MESSAGES:
+        return False
+    _user_rate[user_id].append(now)
+    _rate_cleanup_counter += 1
+    if _rate_cleanup_counter >= 50:
+        _rate_cleanup_counter = 0
+        stale = [uid for uid, ts in _user_rate.items()
+                 if not ts or now - max(ts) > 2 * _RATE_LIMIT_WINDOW]
+        for uid in stale:
+            del _user_rate[uid]
+    return True
 _IMAGES_DIR.mkdir(parents=True, exist_ok=True)
+
+
+# Message ID → (thread_id, window_id, timestamp) tracking for reaction routing
+_msg_thread_map: dict[int, tuple[int, str, float]] = {}
+_MSG_THREAD_MAP_MAX_AGE = 14 * 24 * 3600  # 14 days
+
+
+def _track_message_thread(message_id: int, thread_id: int, window_id: str) -> None:
+    """Track which thread a sent message belongs to."""
+    _msg_thread_map[message_id] = (thread_id, window_id, time.monotonic())
+    if len(_msg_thread_map) > 10000:
+        cutoff = time.monotonic() - _MSG_THREAD_MAP_MAX_AGE
+        stale = [mid for mid, (_, _, ts) in _msg_thread_map.items() if ts < cutoff]
+        for mid in stale:
+            del _msg_thread_map[mid]
+        if len(_msg_thread_map) > 10000:
+            oldest = sorted(_msg_thread_map, key=lambda k: _msg_thread_map[k][2])
+            for mid in oldest[:len(_msg_thread_map) - 5000]:
+                del _msg_thread_map[mid]
+
+
+# Reaction emoji → short message mapping
+_REACTION_MESSAGES: dict[str, str] = {
+    "❤": "Спасибо, отлично!",
+    "❤️": "Спасибо, отлично!",
+    "🔥": "Огонь, продолжай!",
+    "👍": "Хорошо, принято.",
+    "👎": "Не то, переделай.",
+    "😢": "Грустно, давай по-другому.",
+    "🎉": "Круто, празднуем!",
+    "🤔": "Хм, подумай ещё раз.",
+    "💯": "Идеально, 100 баллов!",
+    "👏": "Браво, так держать!",
+    "🤩": "Вау, впечатляет!",
+    "😁": "Весело, мне нравится!",
+    "🙏": "Спасибо большое!",
+    "👌": "Ок, всё понятно.",
+    "🆒": "Круто!",
+    "💔": "Нет, это плохо. Переделай.",
+    "🤣": "Смешно получилось!",
+    "😱": "Ого, неожиданно!",
+    "🤮": "Фу, ужасно. Убери это.",
+    "💩": "Дерьмо, переделывай полностью.",
+}
+
+
+async def reaction_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Handle emoji reactions on messages — forward as short text to Claude Code."""
+    reaction = update.message_reaction
+    if not reaction or not reaction.user:
+        return
+
+    user_id = reaction.user.id
+    if not is_user_allowed(user_id):
+        return
+
+    if not _check_rate_limit(user_id):
+        return
+
+    # Get new reactions (ignore removals)
+    new_reactions = reaction.new_reaction
+    if not new_reactions:
+        return
+
+    # Get the emoji from the first new reaction
+    first = new_reactions[0]
+    emoji = getattr(first, "emoji", None)
+    if not emoji:
+        return
+
+    message_text = _REACTION_MESSAGES.get(emoji)
+    if not message_text:
+        return
+
+    # Try to find the exact thread via message_id tracking
+    msg_id = reaction.message_id
+    tracked = _msg_thread_map.get(msg_id)
+    if tracked:
+        thread_id, wid, _ = tracked
+        w = await tmux_manager.find_window_by_id(wid)
+        if w:
+            success, _ = await session_manager.send_to_window(wid, message_text)
+            if success:
+                logger.info(
+                    "Reaction %s -> '%s' sent to window %s (thread=%d, exact match)",
+                    emoji, message_text, wid, thread_id,
+                )
+            return
+
+    # Fallback: send to first bound window
+    for uid, thread_id, wid in session_manager.iter_thread_bindings():
+        if uid != user_id:
+            continue
+        w = await tmux_manager.find_window_by_id(wid)
+        if w:
+            success, _ = await session_manager.send_to_window(wid, message_text)
+            if success:
+                logger.info(
+                    "Reaction %s -> '%s' sent to window %s (thread=%d, fallback)",
+                    emoji, message_text, wid, thread_id,
+                )
+            break
 
 
 async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -565,7 +698,11 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         if update.message:
-            await safe_reply(update.message, "You are not authorized to use this bot.")
+            await safe_reply(update.message, "Нет доступа.")
+        return
+    if not _check_rate_limit(user.id):
+        if update.message:
+            await safe_reply(update.message, "Слишком много сообщений. Подожди минуту.")
         return
 
     if not update.message or not update.message.photo:
@@ -580,7 +717,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if thread_id is None:
         await safe_reply(
             update.message,
-            "❌ Please use a named topic. Create a new topic to start a session.",
+            "Используй именованный топик. Создай новый топик для старта сессии.",
         )
         return
 
@@ -588,7 +725,7 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if wid is None:
         await safe_reply(
             update.message,
-            "❌ No session bound to this topic. Send a text message first to create one.",
+            "Нет привязанной сессии. Сначала отправь текстовое сообщение.",
         )
         return
 
@@ -598,8 +735,8 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         session_manager.unbind_thread(user.id, thread_id)
         await safe_reply(
             update.message,
-            f"❌ Window '{display}' no longer exists. Binding removed.\n"
-            "Send a message to start a new session.",
+            f"Окно '{display}' больше не существует. Привязка удалена.\n"
+            "Отправь сообщение чтобы начать новую сессию.",
         )
         return
 
@@ -628,25 +765,29 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         return
 
     # Confirm to user
-    await safe_reply(update.message, "📷 Image sent to Claude Code.")
+    await safe_reply(update.message, "Фото отправлено в Claude Code.")
 
 
 async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Handle voice messages: transcribe via OpenAI and forward text to Claude Code."""
+    """Handle voice messages: transcribe via Deepgram and forward text to Claude Code."""
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         if update.message:
-            await safe_reply(update.message, "You are not authorized to use this bot.")
+            await safe_reply(update.message, "Нет доступа.")
+        return
+    if not _check_rate_limit(user.id):
+        if update.message:
+            await safe_reply(update.message, "Слишком много сообщений. Подожди минуту.")
         return
 
     if not update.message or not update.message.voice:
         return
 
-    if not config.openai_api_key:
+    if not config.deepgram_api_key:
         await safe_reply(
             update.message,
-            "⚠ Voice transcription requires an OpenAI API key.\n"
-            "Set `OPENAI_API_KEY` in your `.env` file and restart the bot.",
+            "Для транскрипции голоса нужен Deepgram API key.\n"
+            "Добавь `DEEPGRAM_API_KEY` в `.env` и перезапусти бота.",
         )
         return
 
@@ -658,7 +799,7 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if thread_id is None:
         await safe_reply(
             update.message,
-            "❌ Please use a named topic. Create a new topic to start a session.",
+            "Используй именованный топик. Создай новый топик для старта сессии.",
         )
         return
 
@@ -666,7 +807,7 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if wid is None:
         await safe_reply(
             update.message,
-            "❌ No session bound to this topic. Send a text message first to create one.",
+            "Нет привязанной сессии. Сначала отправь текстовое сообщение.",
         )
         return
 
@@ -676,8 +817,8 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         session_manager.unbind_thread(user.id, thread_id)
         await safe_reply(
             update.message,
-            f"❌ Window '{display}' no longer exists. Binding removed.\n"
-            "Send a message to start a new session.",
+            f"Окно '{display}' больше не существует. Привязка удалена.\n"
+            "Отправь сообщение чтобы начать новую сессию.",
         )
         return
 
@@ -689,11 +830,11 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     try:
         text = await transcribe_voice(ogg_data)
     except ValueError as e:
-        await safe_reply(update.message, f"⚠ {e}")
+        await safe_reply(update.message, f"Ошибка транскрипции: {e}")
         return
     except Exception as e:
         logger.error("Voice transcription failed: %s", e)
-        await safe_reply(update.message, f"⚠ Transcription failed: {e}")
+        await safe_reply(update.message, f"Ошибка транскрипции: {e}")
         return
 
     await update.message.chat.send_action(ChatAction.TYPING)
@@ -701,11 +842,10 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     success, message = await session_manager.send_to_window(wid, text)
     if not success:
-        await safe_reply(update.message, f"❌ {message}")
+        await safe_reply(update.message, f"Ошибка: {message}")
         return
 
-    await safe_reply(update.message, f'🎤 "{text}"')
-
+    await safe_reply(update.message, f'"{text}"')
 
 # Active bash capture tasks: (user_id, thread_id) → asyncio.Task
 _bash_capture_tasks: dict[tuple[int, int], asyncio.Task[None]] = {}
@@ -803,10 +943,14 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     user = update.effective_user
     if not user or not is_user_allowed(user.id):
         if update.message:
-            await safe_reply(update.message, "You are not authorized to use this bot.")
+            await safe_reply(update.message, "Нет доступа.")
         return
 
     if not update.message or not update.message.text:
+        return
+
+    if not _check_rate_limit(user.id):
+        await safe_reply(update.message, "Слишком много сообщений. Подожди минуту.")
         return
 
     thread_id = _get_thread_id(update)
@@ -820,13 +964,28 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
 
     text = update.message.text
 
+    # Smart TG file request detection: append hint for Claude
+    _TG_SEND_PATTERNS = (
+        "пришли в тг", "пришли файл в тг", "отправь в тг",
+        "скинь в тг", "кинь в тг", "кинь файл в тг",
+        "скинь файл в тг", "отправь файл в тг",
+        "пришли в телеграм", "отправь в телеграм",
+        "скинь в телеграм",
+    )
+    text_lower = text.lower()
+    if any(p in text_lower for p in _TG_SEND_PATTERNS):
+        text += (
+            "\n\n(Система: результат нужно сохранить в файл через Write tool. "
+            "Файл автоматически отправится пользователю в Telegram.)"
+        )
+
     # Ignore text in window picker mode (only for the same thread)
     if context.user_data and context.user_data.get(STATE_KEY) == STATE_SELECTING_WINDOW:
         pending_tid = context.user_data.get("_pending_thread_id")
         if pending_tid == thread_id:
             await safe_reply(
                 update.message,
-                "Please use the window picker above, or tap Cancel.",
+                "Выбери окно выше или нажми Отмена.",
             )
             return
         # Stale picker state from a different thread — clear it
@@ -843,7 +1002,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if pending_tid == thread_id:
             await safe_reply(
                 update.message,
-                "Please use the directory browser above, or tap Cancel.",
+                "Выбери папку выше или нажми Отмена.",
             )
             return
         # Stale browsing state from a different thread — clear it
@@ -860,7 +1019,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         if pending_tid == thread_id:
             await safe_reply(
                 update.message,
-                "Please use the session picker above, or tap Cancel.",
+                "Выбери сессию выше или нажми Отмена.",
             )
             return
         # Stale picker state from a different thread — clear it
@@ -873,7 +1032,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     if thread_id is None:
         await safe_reply(
             update.message,
-            "❌ Please use a named topic. Create a new topic to start a session.",
+            "Используй именованный топик. Создай новый топик для старта сессии.",
         )
         return
 
@@ -917,7 +1076,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
             user.id,
             thread_id,
         )
-        start_path = str(Path.cwd())
+        start_path = str(Path.home() / "Documents")
         msg_text, keyboard, subdirs = build_directory_browser(start_path)
         if context.user_data is not None:
             context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
@@ -942,8 +1101,8 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         session_manager.unbind_thread(user.id, thread_id)
         await safe_reply(
             update.message,
-            f"❌ Window '{display}' no longer exists. Binding removed.\n"
-            "Send a message to start a new session.",
+            f"Окно '{display}' больше не существует. Привязка удалена.\n"
+            "Отправь сообщение чтобы начать новую сессию.",
         )
         return
 
@@ -1063,21 +1222,11 @@ async def _create_and_bind_window(
                 user.id, pending_thread_id, created_wid, window_name=created_wname
             )
 
-            # Rename the topic to match the window name
             resolved_chat = session_manager.resolve_chat_id(user.id, pending_thread_id)
-            try:
-                await context.bot.edit_forum_topic(
-                    chat_id=resolved_chat,
-                    message_thread_id=pending_thread_id,
-                    name=created_wname,
-                )
-            except Exception as e:
-                logger.debug(f"Failed to rename topic: {e}")
-
-            status = "Resumed" if resume_session_id else "Created"
+            status = "Возобновлено" if resume_session_id else "Создано"
             await safe_edit(
                 query,
-                f"✅ {message}\n\n{status}. Send messages here.",
+                f"✅ {message}\n\n{status}. Пиши сюда.",
             )
 
             # Send pending text if any
@@ -1117,7 +1266,7 @@ async def _create_and_bind_window(
         if pending_thread_id is not None and context.user_data is not None:
             context.user_data.pop("_pending_thread_id", None)
             context.user_data.pop("_pending_thread_text", None)
-    await query.answer("Created" if success else "Failed")
+    await query.answer("Создано" if success else "Ошибка")
 
 
 # --- Callback query handler ---
@@ -1178,7 +1327,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
                 # This prevents offset from going backwards if new messages arrive while paging
             )
         else:
-            await safe_edit(query, "Window no longer exists.")
+            await safe_edit(query, "Окно больше не существует.")
         await query.answer("Page updated")
 
     # Directory browser handlers
@@ -1310,6 +1459,13 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
 
         clear_browse_state(context.user_data)
 
+        # Validate path against allowed_roots
+        selected = Path(selected_path).expanduser().resolve()
+        if config.allowed_roots:
+            if not any(selected.is_relative_to(root) for root in config.allowed_roots):
+                await query.answer("Путь за пределами разрешённых директорий", show_alert=True)
+                return
+
         # Check for existing sessions in this directory
         sessions = await session_manager.list_sessions_for_directory(selected_path)
         if sessions:
@@ -1364,7 +1520,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data.get(SESSIONS_KEY, []) if context.user_data else []
         )
         if idx < 0 or idx >= len(cached_sessions):
-            await query.answer("Session not found")
+            await query.answer("Сессия не найдена")
             return
 
         session = cached_sessions[idx]
@@ -1439,7 +1595,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data.get(UNBOUND_WINDOWS_KEY, []) if context.user_data else []
         )
         if idx < 0 or idx >= len(cached_windows):
-            await query.answer("Window list changed, please retry", show_alert=True)
+            await query.answer("Список окон изменился, попробуй ещё раз", show_alert=True)
             return
         selected_wid = cached_windows[idx]
 
@@ -1447,7 +1603,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         w = await tmux_manager.find_window_by_id(selected_wid)
         if not w:
             display = session_manager.get_display_name(selected_wid)
-            await query.answer(f"Window '{display}' no longer exists", show_alert=True)
+            await query.answer(f"Окно '{display}' больше не существует", show_alert=True)
             return
 
         thread_id = _get_thread_id(update)
@@ -1460,17 +1616,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         session_manager.bind_thread(
             user.id, thread_id, selected_wid, window_name=display
         )
-
-        # Rename the topic to match the window name
         resolved_chat = session_manager.resolve_chat_id(user.id, thread_id)
-        try:
-            await context.bot.edit_forum_topic(
-                chat_id=resolved_chat,
-                message_thread_id=thread_id,
-                name=display,
-            )
-        except Exception as e:
-            logger.debug(f"Failed to rename topic: {e}")
 
         await safe_edit(
             query,
@@ -1508,7 +1654,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             return
         # Preserve pending thread info, clear only picker state
         clear_window_picker_state(context.user_data)
-        start_path = str(Path.cwd())
+        start_path = str(Path.home() / "Documents")
         msg_text, keyboard, subdirs = build_directory_browser(start_path)
         if context.user_data is not None:
             context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
@@ -1538,12 +1684,12 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         window_id = data[len(CB_SCREENSHOT_REFRESH) :]
         w = await tmux_manager.find_window_by_id(window_id)
         if not w:
-            await query.answer("Window no longer exists", show_alert=True)
+            await query.answer("Окно больше не существует", show_alert=True)
             return
 
         text = await tmux_manager.capture_pane(w.window_id, with_ansi=True)
         if not text:
-            await query.answer("Failed to capture pane", show_alert=True)
+            await query.answer("Не удалось захватить терминал", show_alert=True)
             return
 
         png_bytes = await text_to_image(text, with_ansi=True)
@@ -1558,7 +1704,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             await query.answer("Refreshed")
         except Exception as e:
             logger.error(f"Failed to refresh screenshot: {e}")
-            await query.answer("Failed to refresh", show_alert=True)
+            await query.answer("Не удалось обновить", show_alert=True)
 
     elif data == "noop":
         await query.answer()
@@ -1687,7 +1833,7 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         tmux_key, enter, literal = key_info
         w = await tmux_manager.find_window_by_id(window_id)
         if not w:
-            await query.answer("Window not found", show_alert=True)
+            await query.answer("Окно не найдено", show_alert=True)
             return
 
         await tmux_manager.send_keys(
@@ -1767,8 +1913,48 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
         if get_interactive_msg_id(user_id, thread_id):
             await clear_interactive_msg(user_id, bot, thread_id)
 
-        # Skip tool call notifications when CCBOT_SHOW_TOOL_CALLS=false
-        if not config.show_tool_calls and msg.content_type in ("tool_use", "tool_result"):
+        # "Working" status: send as updatable status message, not content
+        if msg.content_type == "status":
+            await enqueue_status_update(
+                bot=bot,
+                user_id=user_id,
+                window_id=wid,
+                status_text=msg.text,
+                thread_id=thread_id,
+            )
+            continue
+
+        # File sending: send document to Telegram topic
+        if msg.content_type == "file" and msg.file_path:
+            fpath = Path(msg.file_path).resolve()
+            file_ok = fpath.exists() and fpath.is_file()
+            if file_ok:
+                fsize = fpath.stat().st_size
+                file_ok = 0 < fsize < 50 * 1024 * 1024
+            if file_ok and config.allowed_roots:
+                if not any(fpath.is_relative_to(root) for root in config.allowed_roots):
+                    logger.warning("Blocked file outside allowed_roots: %s", fpath)
+                    file_ok = False
+            if not file_ok and msg.file_path:
+                logger.warning("Skipped file send (invalid/blocked): %s", msg.file_path)
+            if file_ok:
+                resolved_chat = session_manager.resolve_chat_id(user_id, thread_id)
+                try:
+                    with open(fpath, "rb") as f:
+                        send_kwargs: dict = {
+                            "chat_id": resolved_chat,
+                            "document": f,
+                            "filename": fpath.name,
+                        }
+                        if thread_id is not None:
+                            send_kwargs["message_thread_id"] = thread_id
+                        await bot.send_document(**send_kwargs)
+                    logger.info(
+                        "Sent file %s to chat %d thread %s",
+                        fpath.name, resolved_chat, thread_id,
+                    )
+                except Exception as e:
+                    logger.error("Failed to send file %s: %s", fpath, e)
             continue
 
         parts = build_response_parts(
@@ -1814,13 +2000,13 @@ async def post_init(application: Application) -> None:
     await application.bot.delete_my_commands()
 
     bot_commands = [
-        BotCommand("start", "Show welcome message"),
-        BotCommand("history", "Message history for this topic"),
-        BotCommand("screenshot", "Terminal screenshot with control keys"),
-        BotCommand("esc", "Send Escape to interrupt Claude"),
-        BotCommand("kill", "Kill session and delete topic"),
-        BotCommand("unbind", "Unbind topic from session (keeps window running)"),
-        BotCommand("usage", "Show Claude Code usage remaining"),
+        BotCommand("start", "Приветствие и справка"),
+        BotCommand("history", "История сообщений сессии"),
+        BotCommand("screenshot", "Скриншот терминала"),
+        BotCommand("esc", "Прервать Claude (Escape)"),
+        BotCommand("kill", "Завершить сессию и удалить топик"),
+        BotCommand("unbind", "Отвязать топик (окно останется)"),
+        BotCommand("usage", "Остаток лимита Claude Code"),
     ]
     # Add Claude Code slash commands
     for cmd_name, desc in CC_COMMANDS.items():
@@ -1927,5 +2113,7 @@ def create_bot() -> Application:
             unsupported_content_handler,
         )
     )
+    # Reactions: forward as short messages to Claude Code
+    application.add_handler(MessageReactionHandler(reaction_handler))
 
     return application

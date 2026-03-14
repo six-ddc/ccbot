@@ -58,3 +58,11 @@ exclude_lines = [
     "if __name__ == .__main__.",
     "logger\\.",
 ]
+
+[dependency-groups]
+dev = [
+    "pip-audit>=2.10.0",
+    "pytest>=9.0.2",
+    "pytest-asyncio>=1.3.0",
+    "ruff>=0.15.6",
+]

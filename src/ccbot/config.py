@@ -19,7 +19,14 @@ from .utils import ccbot_dir
 logger = logging.getLogger(__name__)
 
 # Env vars that must not leak to child processes (e.g. Claude Code via tmux)
-SENSITIVE_ENV_VARS = {"TELEGRAM_BOT_TOKEN", "ALLOWED_USERS", "OPENAI_API_KEY"}
+SENSITIVE_ENV_VARS = {"TELEGRAM_BOT_TOKEN", "ALLOWED_USERS", "OPENAI_API_KEY", "OPENAI_BASE_URL", "DEEPGRAM_API_KEY"}
+
+
+def _getbool(key: str, default: bool) -> bool:
+    val = os.getenv(key, "")
+    if not val:
+        return default
+    return val.lower() in ("1", "true", "yes", "on")
 
 
 class Config:
@@ -82,30 +89,36 @@ class Config:
         else:
             self.claude_projects_path = Path.home() / ".claude" / "projects"
 
-        self.monitor_poll_interval = float(os.getenv("MONITOR_POLL_INTERVAL", "2.0"))
+        self.monitor_poll_interval = max(0.5, float(os.getenv("MONITOR_POLL_INTERVAL", "2.0")))
 
-        # Display user messages in history and real-time notifications
-        # When True, user messages are shown with a 👤 prefix
-        self.show_user_messages = (
-            os.getenv("CCBOT_SHOW_USER_MESSAGES", "true").lower() != "false"
-        )
+        self.show_user_messages = _getbool("CCBOT_SHOW_USER_MESSAGES", False)
+        self.clean_output = _getbool("CCBOT_CLEAN_OUTPUT", True)
+        self.show_hidden_dirs = _getbool("CCBOT_SHOW_HIDDEN_DIRS", False)
 
-        # Show tool call notifications (tool_use/tool_result) in Telegram
-        # When False, only text responses, thinking, and interactive prompts are sent
-        self.show_tool_calls = (
-            os.getenv("CCBOT_SHOW_TOOL_CALLS", "true").lower() != "false"
-        )
+        # Directory browser navigation boundaries
+        # Comma-separated list of allowed root directories; defaults to home dir
+        allowed_roots_str = os.getenv("CCBOT_ALLOWED_ROOTS", "")
+        if allowed_roots_str:
+            self.allowed_roots: list[Path] = [
+                Path(p.strip()).expanduser().resolve()
+                for p in allowed_roots_str.split(",")
+                if p.strip()
+            ]
+        else:
+            self.allowed_roots = [Path.home()]
 
-        # Show hidden (dot) directories in directory browser
-        self.show_hidden_dirs = (
-            os.getenv("CCBOT_SHOW_HIDDEN_DIRS", "").lower() == "true"
-        )
+        for root in self.allowed_roots:
+            if not root.exists():
+                logger.warning("CCBOT_ALLOWED_ROOTS path does not exist: %s", root)
 
-        # OpenAI API for voice message transcription (optional)
+        # OpenAI API (legacy, kept for SENSITIVE_ENV_VARS scrubbing)
         self.openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
         self.openai_base_url: str = os.getenv(
             "OPENAI_BASE_URL", "https://api.openai.com/v1"
         )
+
+        # Deepgram API for voice message transcription (optional)
+        self.deepgram_api_key: str = os.getenv("DEEPGRAM_API_KEY", "")
 
         # Scrub sensitive vars from os.environ so child processes never inherit them.
         # Values are already captured in Config attributes above.
@@ -114,12 +127,13 @@ class Config:
 
         logger.debug(
             "Config initialized: dir=%s, token=%s..., allowed_users=%d, "
-            "tmux_session=%s, claude_projects_path=%s",
+            "tmux_session=%s, claude_projects_path=%s, allowed_roots=%s",
             self.config_dir,
-            self.telegram_bot_token[:8],
+            "<redacted>",
             len(self.allowed_users),
             self.tmux_session_name,
             self.claude_projects_path,
+            [str(r) for r in self.allowed_roots],
         )
 
     def is_user_allowed(self, user_id: int) -> bool:

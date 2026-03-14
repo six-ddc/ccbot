@@ -68,4 +68,6 @@ venv.bak/
 
 # Project specific
 .uv/
-uv.lock
+docs/chat_*
+docs/superpowers/
+static_analysis_semgrep_*/

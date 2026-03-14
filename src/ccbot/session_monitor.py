@@ -14,6 +14,7 @@ Key classes: SessionMonitor, NewMessage, SessionInfo.
 import asyncio
 import json
 import logging
+import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Awaitable
@@ -27,6 +28,10 @@ from .transcript_parser import TranscriptParser
 from .utils import read_cwd_from_jsonl
 
 logger = logging.getLogger(__name__)
+
+_WRITE_TOOL_RE = re.compile(r"\*\*Write\*\*\(([^)]+)\)")
+_SENDABLE_EXTS = {".md", ".txt", ".pdf", ".docx", ".doc", ".xlsx", ".xls", ".csv", ".html", ".htm", ".rtf", ".epub"}
+_SENSITIVE_NAMES = {".env", "credentials", "id_rsa", "id_ed25519", "id_dsa", ".netrc", ".pgpass", "session_map.json", "state.json", "monitor_state.json"}
 
 
 @dataclass
@@ -49,6 +54,7 @@ class NewMessage:
     role: str = "assistant"  # "user" or "assistant"
     tool_name: str | None = None  # For tool_use messages, the tool name
     image_data: list[tuple[str, bytes]] | None = None  # From tool_result images
+    file_path: str | None = None  # File to send to Telegram (from Write tool)
 
 
 class SessionMonitor:
@@ -84,6 +90,8 @@ class SessionMonitor:
         self._last_session_map: dict[str, str] = {}  # window_key -> session_id
         # In-memory mtime cache for quick file change detection (not persisted)
         self._file_mtimes: dict[str, float] = {}  # session_id -> last_seen_mtime
+        # Track sessions with active "working" status to avoid re-emitting
+        self._working_status_active: set[str] = set()  # session_ids
 
     def set_message_callback(
         self, callback: Callable[[NewMessage], Awaitable[None]]
@@ -345,12 +353,91 @@ class SessionMonitor:
                 else:
                     self._pending_tools.pop(session_info.session_id, None)
 
+                # Filter entries based on clean_output mode
+                has_working_entries = False
                 for entry in parsed_entries:
                     if not entry.text and not entry.image_data:
                         continue
                     # Skip user messages unless show_user_messages is enabled
                     if entry.role == "user" and not config.show_user_messages:
                         continue
+
+                    if config.clean_output:
+                        # In clean mode: skip tool spam, thinking, local commands
+                        if entry.content_type in (
+                            "tool_use", "tool_result", "thinking", "local_command",
+                        ):
+                            has_working_entries = True
+                            # Still pass through interactive tools (permissions, questions)
+                            if entry.tool_name in (
+                                "AskUserQuestion", "ExitPlanMode",
+                            ):
+                                new_messages.append(
+                                    NewMessage(
+                                        session_id=session_info.session_id,
+                                        text=entry.text,
+                                        is_complete=True,
+                                        content_type=entry.content_type,
+                                        tool_use_id=entry.tool_use_id,
+                                        role=entry.role,
+                                        tool_name=entry.tool_name,
+                                        image_data=entry.image_data,
+                                    )
+                                )
+                            # Pass through tool_result images (screenshots, etc.)
+                            elif entry.image_data:
+                                new_messages.append(
+                                    NewMessage(
+                                        session_id=session_info.session_id,
+                                        text="",
+                                        is_complete=True,
+                                        content_type=entry.content_type,
+                                        tool_use_id=entry.tool_use_id,
+                                        role=entry.role,
+                                        tool_name=entry.tool_name,
+                                        image_data=entry.image_data,
+                                    )
+                                )
+                            # Detect Write tool — send document-like files to TG
+                            # Deduplicate: only send each file path once per poll cycle
+                            elif entry.text and "**Write**(" in entry.text:
+                                m = _WRITE_TOOL_RE.search(entry.text)
+                                if m:
+                                    fpath = m.group(1)
+                                    try:
+                                        resolved = Path(fpath.strip()).expanduser().resolve()
+                                    except (OSError, ValueError):
+                                        continue
+                                    if config.allowed_roots:
+                                        if not any(
+                                            resolved.is_relative_to(root)
+                                            for root in config.allowed_roots
+                                        ):
+                                            continue
+                                    if resolved.name in _SENSITIVE_NAMES:
+                                        continue
+                                    if resolved.is_relative_to(config.config_dir):
+                                        continue
+                                    ext = resolved.suffix.lower()
+                                    already_queued = any(
+                                        msg.file_path
+                                        and Path(msg.file_path).resolve() == resolved
+                                        for msg in new_messages
+                                        if msg.content_type == "file"
+                                    )
+                                    if ext in _SENDABLE_EXTS and not already_queued:
+                                        new_messages.append(
+                                            NewMessage(
+                                                session_id=session_info.session_id,
+                                                text="",
+                                                is_complete=True,
+                                                content_type="file",
+                                                role="assistant",
+                                                file_path=str(resolved),
+                                            )
+                                        )
+                            continue
+
                     new_messages.append(
                         NewMessage(
                             session_id=session_info.session_id,
@@ -364,10 +451,34 @@ class SessionMonitor:
                         )
                     )
 
+                # In clean mode: if only tool work happened (no text),
+                # emit a single "working" status (deduplicated)
+                if config.clean_output:
+                    sid = session_info.session_id
+                    has_text_for_session = any(
+                        m.session_id == sid and m.content_type == "text"
+                        for m in new_messages
+                    )
+                    if has_text_for_session:
+                        # Claude responded with text — clear working flag
+                        self._working_status_active.discard(sid)
+                    elif has_working_entries and sid not in self._working_status_active:
+                        # First batch of tool work — emit status once
+                        self._working_status_active.add(sid)
+                        new_messages.append(
+                            NewMessage(
+                                session_id=sid,
+                                text="⏳ Работаю…",
+                                is_complete=True,
+                                content_type="status",
+                                role="assistant",
+                            )
+                        )
+
                 self.state.update_session(tracked)
 
-            except OSError as e:
-                logger.debug(f"Error processing session {session_info.session_id}: {e}")
+            except Exception as e:
+                logger.error("Error processing session %s: %s", session_info.session_id, e)
 
         self.state.save_if_dirty()
         return new_messages

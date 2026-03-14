@@ -40,6 +40,22 @@ def main() -> None:
         print("Get your user ID from @userinfobot on Telegram.")
         sys.exit(1)
 
+    # Set up file logging with rotation (max 1MB, keep 3 backups)
+    from logging.handlers import RotatingFileHandler
+
+    log_file = config.config_dir / "ccbot.log"
+    file_handler = RotatingFileHandler(
+        log_file, maxBytes=1_000_000, backupCount=3, encoding="utf-8",
+    )
+    import os as _os
+    if log_file.exists():
+        _os.chmod(log_file, 0o600)
+    file_handler.setFormatter(
+        logging.Formatter("%(asctime)s - %(name)s - %(levelname)s - %(message)s")
+    )
+    file_handler.setLevel(logging.DEBUG)
+    logging.getLogger("ccbot").addHandler(file_handler)
+
     logging.getLogger("ccbot").setLevel(logging.DEBUG)
     # AIORateLimiter (max_retries=5) handles retries itself; keep INFO for visibility
     logging.getLogger("telegram.ext.AIORateLimiter").setLevel(logging.INFO)
@@ -58,7 +74,7 @@ def main() -> None:
     from .bot import create_bot
 
     application = create_bot()
-    application.run_polling(allowed_updates=["message", "callback_query"])
+    application.run_polling(allowed_updates=["message", "callback_query", "message_reaction"])
 
 
 if __name__ == "__main__":
