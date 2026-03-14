@@ -133,4 +133,14 @@
 - Files changed: src/ccbot/bot.py, CHANGELOG.md
 - Lines: +60/-0
 - Security: semgrep 0 findings, test file in config_dir only, messages to allowed_users only
+- Commit: 4eeaf00
+
+## Cycle 14: Smart Excerpt for Long Responses
+- Date: 2026-03-15
+- Role sequence: Researcher (output pipeline analysis) > Validator (Sequential Thinking) > Developer > Auditor
+- Idea source: Long Claude responses split into [1/5]...[5/5] create chat spam. Email-client pattern: preview + full content on click.
+- Validation: APPROVED — transforms long-response UX from spam to clean preview+file, configurable threshold, in-memory file (no disk I/O)
+- Files changed: src/ccbot/handlers/message_queue.py, src/ccbot/config.py, CHANGELOG.md
+- Lines: +45/-0
+- Security: semgrep 0 findings, in-memory InputFile, hardcoded filename, no user input
 - Commit: pending

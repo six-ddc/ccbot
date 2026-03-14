@@ -18,14 +18,17 @@ Key components:
 """
 
 import asyncio
+import io
 import logging
 import time
 from dataclasses import dataclass, field
 from typing import Literal
 
-from telegram import Bot
+from telegram import Bot, InputFile
 from telegram.constants import ChatAction
 from telegram.error import BadRequest, RetryAfter
+
+from ..config import config
 
 from ..markdown_v2 import convert_markdown
 from ..session import session_manager
@@ -242,18 +245,20 @@ async def _message_queue_worker(bot: Bot, user_id: int) -> None:
                 elif task.task_type == "status_clear":
                     await _do_clear_status_message(bot, user_id, task.thread_id or 0)
             except BadRequest as e:
-                if str(e).lower().strip() in ("message thread not found", "thread not found"):
+                if str(e).lower().strip() in (
+                    "message thread not found",
+                    "thread not found",
+                ):
                     tid = task.thread_id
                     if tid is not None:
                         logger.warning(
                             "Thread %d not found, unbinding (user=%d)",
-                            tid, user_id,
+                            tid,
+                            user_id,
                         )
                         session_manager.unbind_thread(user_id, tid)
                 else:
-                    logger.error(
-                        "BadRequest for user %d: %s", user_id, e
-                    )
+                    logger.error("BadRequest for user %d: %s", user_id, e)
             except RetryAfter as e:
                 retry_secs = (
                     e.retry_after
@@ -357,6 +362,49 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
                     logger.debug(f"Failed to edit tool msg {edit_msg_id}, sending new")
                     # Fall through to send as new message
 
+    # 1b. Long response: send preview + .md file instead of [1/N] message splits
+    raw_text = task.text or ""
+    threshold = config.long_response_threshold
+    if (
+        threshold > 0
+        and len(raw_text) > threshold
+        and task.content_type == "text"
+        and len(task.parts) > 1
+    ):
+        # Clear status message first
+        await _do_clear_status_message(bot, user_id, tid)
+        # Build preview: first 500 chars + ellipsis
+        preview = raw_text[:500].rstrip()
+        if not preview.endswith("…"):
+            preview += "\n\n…"
+        preview += f"\n\n_Полный ответ ({len(raw_text)} символов) в файле ↓_"
+        # Send preview text
+        preview_sent = await send_with_fallback(
+            bot,
+            chat_id,
+            preview,
+            **_send_kwargs(task.thread_id),  # type: ignore[arg-type]
+        )
+        if preview_sent and task.thread_id is not None and wid:
+            from ..bot import _track_message_thread
+
+            _track_message_thread(preview_sent.message_id, task.thread_id, wid)
+        # Send full response as .md file
+        file_bytes = raw_text.encode("utf-8")
+        doc_kwargs: dict = {
+            "chat_id": chat_id,
+            "document": InputFile(io.BytesIO(file_bytes), filename="response.md"),
+        }
+        if task.thread_id is not None:
+            doc_kwargs["message_thread_id"] = task.thread_id
+        try:
+            await bot.send_document(**doc_kwargs)
+        except Exception as exc:
+            logger.warning("Failed to send long response as file: %s", exc)
+        await _send_task_images(bot, chat_id, task)
+        await _check_and_send_status(bot, user_id, wid, task.thread_id)
+        return
+
     # 2. Send content messages, converting status message to first content part
     first_part = True
     last_msg_id: int | None = None
@@ -389,6 +437,7 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
             # Track message → thread for reaction routing
             if task.thread_id is not None and wid:
                 from ..bot import _track_message_thread
+
                 _track_message_thread(sent.message_id, task.thread_id, wid)
 
     # 3. Record tool_use message ID for later editing

@@ -112,6 +112,13 @@ class Config:
         # Auto-restart Claude on crash with --resume (max 2 attempts per session)
         self.auto_restart = _getbool("CCBOT_AUTO_RESTART", True)
 
+        # Long response threshold: responses above this char count are sent as
+        # preview text + .md file attachment instead of [1/N] message splits.
+        # 0 = disabled (always use message splitting).
+        self.long_response_threshold = max(
+            0, int(os.getenv("CCBOT_LONG_RESPONSE_THRESHOLD", "6000"))
+        )
+
         # Input batching: collect rapid-fire messages for N seconds before
         # sending as one combined prompt. 0 = disabled (send immediately).
         self.input_batch_seconds = max(

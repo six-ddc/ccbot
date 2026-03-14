@@ -1,5 +1,19 @@
 # Changelog
 
+## [Fork] 2026-03-15 — Smart Excerpt for Long Responses
+
+When Claude's response exceeds 6000 characters, instead of splitting into [1/N]...[N/N] message spam, the bot now sends:
+1. A **preview** (first 500 chars) as a regular text message
+2. The **full response** as a `.md` file attachment
+
+Dramatically improves readability for long responses (code reviews, architecture docs, error analysis) — especially on mobile.
+
+- Configurable: `CCBOT_LONG_RESPONSE_THRESHOLD` (default 6000, 0 = disabled)
+- Only applies to text responses with multiple parts (tool_use/tool_result unaffected)
+- File sent via in-memory `InputFile` — no disk I/O
+
+---
+
 ## [Fork] 2026-03-15 — Startup Self-diagnostics
 
 Bot now runs infrastructure checks at startup and reports issues:
