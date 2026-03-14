@@ -1,5 +1,16 @@
 # Changelog
 
+## [Fork] 2026-03-15 — Multi-message Input Batching
+
+When a user sends multiple messages rapidly (within 1.5 seconds), they are now combined into a single prompt before being sent to Claude Code. This prevents Claude from processing each message as a separate prompt, which caused fragmented responses and wasted context.
+
+- Debounce timer per (user, thread): first message starts 1.5s timer, subsequent messages reset it
+- Messages joined with `\n` and sent as one `send_to_window` call
+- Bypass: `!` bash commands and interactive UI responses always send immediately
+- Configurable: `CCBOT_INPUT_BATCH_SECONDS` (default 1.5, 0 = disabled)
+
+---
+
 ## [Fork] 2026-03-15 — Idle Detection + Smart Re-notification
 
 When Claude finishes responding and the user doesn't reply within 2 minutes, the bot sends a reminder: "Claude ожидает ваш ответ." This solves the problem of missed Claude responses when the user is away.

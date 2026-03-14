@@ -109,6 +109,12 @@ class Config:
             0, int(os.getenv("CCBOT_IDLE_REMINDER_SECONDS", "120"))
         )
 
+        # Input batching: collect rapid-fire messages for N seconds before
+        # sending as one combined prompt. 0 = disabled (send immediately).
+        self.input_batch_seconds = max(
+            0.0, float(os.getenv("CCBOT_INPUT_BATCH_SECONDS", "1.5"))
+        )
+
         # Directory browser navigation boundaries
         # Comma-separated list of allowed root directories; defaults to home dir
         allowed_roots_str = os.getenv("CCBOT_ALLOWED_ROOTS", "")

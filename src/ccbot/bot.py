@@ -156,6 +156,51 @@ _status_poll_task: asyncio.Task | None = None
 # Bot startup timestamp (set in post_init)
 _bot_start_time: float = 0.0
 
+# Input batching: buffer rapid-fire messages per (user_id, thread_id)
+_input_buffer: dict[tuple[int, int], list[str]] = {}
+_input_timer: dict[tuple[int, int], asyncio.Task[None]] = {}
+
+
+async def _flush_input_buffer(user_id: int, thread_id: int, wid: str) -> None:
+    """Send batched messages as one combined prompt after the debounce delay."""
+    await asyncio.sleep(config.input_batch_seconds)
+    key = (user_id, thread_id)
+    messages = _input_buffer.pop(key, [])
+    _input_timer.pop(key, None)
+    if not messages:
+        return
+    combined = "\n".join(messages)
+    success, err = await session_manager.send_to_window(wid, combined)
+    if success:
+        record_user_activity(user_id, thread_id)
+        logger.info(
+            "Batched %d messages (%d chars) to window %s (user=%d, thread=%d)",
+            len(messages),
+            len(combined),
+            wid,
+            user_id,
+            thread_id,
+        )
+    else:
+        logger.warning("Batched send failed for window %s: %s", wid, err)
+
+
+def _enqueue_batched_input(user_id: int, thread_id: int, wid: str, text: str) -> None:
+    """Add text to the input buffer and start/reset the debounce timer."""
+    key = (user_id, thread_id)
+    if key not in _input_buffer:
+        _input_buffer[key] = []
+    _input_buffer[key].append(text)
+
+    old_timer = _input_timer.pop(key, None)
+    if old_timer and not old_timer.done():
+        old_timer.cancel()
+
+    _input_timer[key] = asyncio.create_task(
+        _flush_input_buffer(user_id, thread_id, wid)
+    )
+
+
 # Claude Code commands shown in bot menu (forwarded via tmux)
 CC_COMMANDS: dict[str, str] = {
     "clear": "↗ Очистить историю диалога",
@@ -1387,15 +1432,25 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         # Small delay to let UI render in Telegram before text arrives
         await asyncio.sleep(0.3)
 
-    success, message = await session_manager.send_to_window(wid, text)
-    if not success:
-        await safe_reply(update.message, f"❌ {message}")
-        return
+    # Bash commands and interactive responses bypass batching
+    is_bash = text.startswith("!") and len(text) > 1
+    use_batching = (
+        config.input_batch_seconds > 0
+        and not is_bash
+        and not get_interactive_window(user.id, thread_id)
+    )
 
-    record_user_activity(user.id, thread_id)
+    if use_batching:
+        _enqueue_batched_input(user.id, thread_id, wid, text)
+    else:
+        success, message = await session_manager.send_to_window(wid, text)
+        if not success:
+            await safe_reply(update.message, f"❌ {message}")
+            return
+        record_user_activity(user.id, thread_id)
 
     # Start background capture for ! bash command output
-    if text.startswith("!") and len(text) > 1:
+    if is_bash:
         bash_cmd = text[1:]  # strip leading "!"
         task = asyncio.create_task(
             _capture_bash_output(context.bot, user.id, thread_id, wid, bash_cmd)
