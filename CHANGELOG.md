@@ -1,5 +1,15 @@
 # Changelog
 
+## [Fork] 2026-03-15 — Enhanced Onboarding: /start + native /help
+
+**`/start`**: Now shows concise capabilities overview: input types (text, photo, voice, documents), key features (edit forwarding, reactions, auto-naming), and pointer to `/help`.
+
+**`/help`**: Native bot command (was forwarded to Claude Code doing nothing useful). Shows full command reference, input capabilities, and all 20 features organized by category.
+
+Removed `/help` from CC_COMMANDS → now intercepted by native handler before `forward_command_handler`.
+
+---
+
 ## [Fork] 2026-03-15 — Global Error Handler with Developer Alerts
 
 Unhandled exceptions in any handler are now caught, logged, and reported:

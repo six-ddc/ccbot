@@ -312,7 +312,6 @@ CC_COMMANDS: dict[str, str] = {
     "clear": "↗ Очистить историю диалога",
     "compact": "↗ Сжать контекст разговора",
     "cost": "↗ Показать расход токенов",
-    "help": "↗ Справка Claude Code",
     "memory": "↗ Редактировать CLAUDE.md",
     "model": "↗ Сменить модель ИИ",
 }
@@ -410,9 +409,55 @@ async def start_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if update.message:
         await safe_reply(
             update.message,
-            "Claude Code Monitor\n\n"
-            "Каждый топик = отдельная сессия. Создай новый топик чтобы начать.",
+            "CCBot — Telegram-мост к Claude Code\n\n"
+            "Каждый топик = отдельная сессия.\n"
+            "Создай новый топик чтобы начать.\n\n"
+            "Отправляй: текст, фото, голос, документы\n"
+            "Правки сообщений пересылаются автоматически\n"
+            "Реакции на ответы отправляют фидбек Claude\n\n"
+            "Команды: /help — полный список",
         )
+
+
+async def help_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show full bot capabilities and command reference."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    text = (
+        "Команды сессии:\n"
+        "  /screenshot — скриншот терминала\n"
+        "  /history — история сообщений\n"
+        "  /summary — обзор сессии (файлы, команды)\n"
+        "  /esc — прервать Claude (Escape)\n"
+        "  /restart — перезапустить сессию\n"
+        "  /kill — завершить и удалить топик\n"
+        "  /unbind — отвязать топик\n\n"
+        "Мониторинг:\n"
+        "  /health — диагностика бота\n"
+        "  /sessions — все активные сессии\n"
+        "  /usage — расход токенов\n\n"
+        "Claude Code (пересылаются в tmux):\n"
+        "  /clear /compact /cost /model /memory\n\n"
+        "Ввод:\n"
+        "  Текст, фото, голос, документы\n"
+        "  Правки сообщений → исправления\n"
+        "  Цитата-ответ → контекст для Claude\n"
+        "  Пересланные → с указанием автора\n"
+        "  Реакции → фидбек Claude\n\n"
+        "Возможности:\n"
+        "  Группировка быстрых сообщений (1.5с)\n"
+        "  Прогресс: что делает Claude в реальном времени\n"
+        "  Длинные ответы → превью + .md файл\n"
+        "  Авто-перезапуск при крашах Claude\n"
+        "  Авто-именование топиков\n"
+        "  Уведомление при бездействии (2 мин)\n"
+        "  Очистка старых файлов (7 дней)"
+    )
+    await safe_reply(update.message, f"```\n{text}\n```")
 
 
 async def history_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -2887,6 +2932,7 @@ async def post_init(application: Application) -> None:
         BotCommand("summary", "Обзор текущей сессии"),
         BotCommand("restart", "Перезапустить сессию (свежий Claude)"),
         BotCommand("sessions", "Список всех активных сессий"),
+        BotCommand("help", "Справка по командам бота"),
     ]
     # Add Claude Code slash commands
     for cmd_name, desc in CC_COMMANDS.items():
@@ -3062,6 +3108,7 @@ def create_bot() -> Application:
     )
 
     application.add_handler(CommandHandler("start", start_command))
+    application.add_handler(CommandHandler("help", help_command))
     application.add_handler(CommandHandler("history", history_command))
     application.add_handler(CommandHandler("screenshot", screenshot_command))
     application.add_handler(CommandHandler("esc", esc_command))
