@@ -123,4 +123,14 @@
 - Files changed: src/ccbot/bot.py, CHANGELOG.md
 - Lines: +40/-5
 - Security: semgrep 0 findings, forward_origin is trusted Telegram API data
+- Commit: b284e46
+
+## Cycle 13: Startup Self-diagnostics
+- Date: 2026-03-15
+- Role sequence: Researcher (operational pain analysis) > Validator (Sequential Thinking) > Developer > Auditor
+- Idea source: When tmux is dead, bot starts but session creation fails silently. Infrastructure problems surface as cryptic runtime errors instead of clear startup warnings.
+- Validation: APPROVED — prevents hours of debugging misconfigured infrastructure, zero runtime cost (one-time at startup)
+- Files changed: src/ccbot/bot.py, CHANGELOG.md
+- Lines: +60/-0
+- Security: semgrep 0 findings, test file in config_dir only, messages to allowed_users only
 - Commit: pending

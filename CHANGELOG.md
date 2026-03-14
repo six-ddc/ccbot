@@ -1,5 +1,17 @@
 # Changelog
 
+## [Fork] 2026-03-15 — Startup Self-diagnostics
+
+Bot now runs infrastructure checks at startup and reports issues:
+- tmux session availability and window count
+- State files readability (state.json, session_map.json, monitor_state.json)
+- Config directory write permissions
+- DEEPGRAM_API_KEY presence (optional warning)
+
+Issues are logged at WARNING level and sent as a one-time message to all allowed users. Previously, infrastructure problems surfaced only as cryptic runtime errors.
+
+---
+
 ## [Fork] 2026-03-15 — Forwarded Message Context Enrichment
 
 Forwarded messages are now enriched with sender context before reaching Claude:

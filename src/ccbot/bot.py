@@ -2647,6 +2647,71 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
 # --- App lifecycle ---
 
 
+async def _run_startup_diagnostics(bot: Bot) -> None:
+    """Run startup self-diagnostics and notify users of any issues.
+
+    Checks: tmux session, state files, config directory, optional services.
+    Sends a one-time diagnostic report to all allowed users if issues found.
+    """
+    issues: list[str] = []
+    checks_ok = 0
+
+    # 1. tmux session
+    tmux_session = tmux_manager.get_session()
+    if tmux_session:
+        windows = await tmux_manager.list_windows()
+        checks_ok += 1
+        logger.info("Diagnostic: tmux OK (%d windows)", len(windows))
+    else:
+        issues.append("tmux сессия не найдена — создание сессий невозможно")
+        logger.warning("Diagnostic: tmux session NOT found")
+
+    # 2. State files readable
+    for name, path in [
+        ("state.json", config.state_file),
+        ("session_map.json", config.session_map_file),
+        ("monitor_state.json", config.monitor_state_file),
+    ]:
+        if path.exists():
+            try:
+                path.read_text(encoding="utf-8")
+                checks_ok += 1
+            except OSError as exc:
+                issues.append(f"{name} не читается: {exc}")
+        else:
+            checks_ok += 1  # Not existing is OK (will be created)
+
+    # 3. Config directory writable
+    test_file = config.config_dir / ".diag_test"
+    try:
+        test_file.write_text("ok", encoding="utf-8")
+        test_file.unlink()
+        checks_ok += 1
+    except OSError as exc:
+        issues.append(f"Директория {config.config_dir} не доступна для записи: {exc}")
+
+    # 4. Deepgram API key (optional, warn only)
+    if not config.deepgram_api_key:
+        issues.append("DEEPGRAM_API_KEY не задан — голосовые сообщения не работают")
+
+    if issues:
+        report = "Диагностика при запуске:\n"
+        report += f"Проверок пройдено: {checks_ok}\n"
+        report += "Проблемы:\n"
+        for issue in issues:
+            report += f"  - {issue}\n"
+        logger.warning("Startup diagnostics found %d issue(s)", len(issues))
+
+        # Notify all allowed users (best-effort, from General topic)
+        for uid in config.allowed_users:
+            try:
+                await bot.send_message(chat_id=uid, text=f"```\n{report}```")
+            except Exception:
+                pass
+    else:
+        logger.info("Startup diagnostics: all %d checks passed", checks_ok)
+
+
 async def post_init(application: Application) -> None:
     global session_monitor, _status_poll_task, _bot_start_time
 
@@ -2719,6 +2784,9 @@ async def post_init(application: Application) -> None:
                 logger.debug(f"Startup notify failed for thread {thread_id}: {exc}")
         if notified:
             logger.info(f"Notified {notified} topic(s) about restart")
+
+    # Run startup self-diagnostics
+    await _run_startup_diagnostics(application.bot)
 
 
 async def post_shutdown(application: Application) -> None:
