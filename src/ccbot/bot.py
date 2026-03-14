@@ -659,6 +659,50 @@ async def summary_command(update: Update, context: ContextTypes.DEFAULT_TYPE) ->
     await safe_reply(update.message, f"```\n{summary_text}\n```")
 
 
+async def sessions_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Show all active sessions with their status (running/idle/exited)."""
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    bindings = list(session_manager.iter_thread_bindings())
+    if not bindings:
+        await safe_reply(update.message, "Нет активных сессий.")
+        return
+
+    lines: list[str] = []
+    lines.append(f"Активных сессий: {len(bindings)}")
+    lines.append("")
+
+    for i, (uid, thread_id, wid) in enumerate(bindings, 1):
+        if uid != user.id:
+            continue
+        display = session_manager.get_display_name(wid)
+        w = await tmux_manager.find_window_by_id(wid)
+        if w:
+            running = await tmux_manager.is_claude_running(wid)
+            if running:
+                status = "🟢"
+            else:
+                status = "🔴"
+            cwd_short = w.cwd
+            if len(cwd_short) > 40:
+                cwd_short = "…" + cwd_short[-39:]
+            lines.append(f"{status} {i}. {display}")
+            lines.append(f"   {cwd_short}")
+        else:
+            lines.append(f"⚪ {i}. {display} (окно не найдено)")
+
+    if len(lines) == 2:
+        await safe_reply(update.message, "У вас нет активных сессий.")
+        return
+
+    text = "\n".join(lines)
+    await safe_reply(update.message, f"```\n{text}\n```")
+
+
 # --- Screenshot keyboard with quick control keys ---
 
 # key_id → (tmux_key, enter, literal)
@@ -2579,6 +2623,7 @@ async def post_init(application: Application) -> None:
         BotCommand("health", "Диагностика бота"),
         BotCommand("summary", "Обзор текущей сессии"),
         BotCommand("restart", "Перезапустить сессию (свежий Claude)"),
+        BotCommand("sessions", "Список всех активных сессий"),
     ]
     # Add Claude Code slash commands
     for cmd_name, desc in CC_COMMANDS.items():
@@ -2696,6 +2741,7 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("usage", usage_command))
     application.add_handler(CommandHandler("health", health_command))
     application.add_handler(CommandHandler("summary", summary_command))
+    application.add_handler(CommandHandler("sessions", sessions_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Topic closed event — auto-kill associated window
     application.add_handler(

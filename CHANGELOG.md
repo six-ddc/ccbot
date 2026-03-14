@@ -1,5 +1,16 @@
 # Changelog
 
+## [Fork] 2026-03-15 — /sessions Global Session Dashboard
+
+New `/sessions` command shows all active sessions at a glance:
+- 🟢 Running / 🔴 Exited status per session
+- Window display name and working directory
+- Works from any topic (global view across all sessions)
+
+Essential for multi-session workflows where user has 5+ topics open.
+
+---
+
 ## [Fork] 2026-03-15 — Native /kill and /restart Commands
 
 **`/kill`** — properly kills tmux window, unbinds thread, and deletes the forum topic. Previously, /kill fell through to forward_command_handler and did nothing useful.
