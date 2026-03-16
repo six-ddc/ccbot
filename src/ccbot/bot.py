@@ -1029,8 +1029,9 @@ async def _create_and_bind_window(
         )
 
         # --resume creates a new session_id in the hook, but messages continue
-        # writing to the resumed session's JSONL file. Override window_state to
-        # track the original session_id so the monitor can route messages back.
+        # writing to the resumed session's JSONL file. Override BOTH window_state
+        # AND session_map.json to track the original session_id, so that
+        # load_session_map() won't overwrite the override on the next poll cycle.
         if resume_session_id:
             ws = session_manager.get_window_state(created_wid)
             if not hook_ok:
@@ -1056,6 +1057,11 @@ async def _create_and_bind_window(
                 )
                 ws.session_id = resume_session_id
                 session_manager._save_state()
+            # Also override session_map.json so load_session_map() stays
+            # consistent and doesn't revert the override on the next cycle.
+            await session_manager.override_session_map_entry(
+                created_wid, resume_session_id
+            )
 
         if pending_thread_id is not None:
             # Thread bind flow: bind thread to newly created window
@@ -1768,7 +1774,10 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             await clear_interactive_msg(user_id, bot, thread_id)
 
         # Skip tool call notifications when CCBOT_SHOW_TOOL_CALLS=false
-        if not config.show_tool_calls and msg.content_type in ("tool_use", "tool_result"):
+        if not config.show_tool_calls and msg.content_type in (
+            "tool_use",
+            "tool_result",
+        ):
             continue
 
         parts = build_response_parts(

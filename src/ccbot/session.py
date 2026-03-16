@@ -25,6 +25,7 @@ import asyncio
 import json
 import logging
 import re
+import time
 from dataclasses import dataclass, field
 from pathlib import Path
 from collections.abc import Iterator
@@ -460,6 +461,39 @@ class SessionManager:
                 return group_id
         return user_id
 
+    async def override_session_map_entry(self, window_id: str, session_id: str) -> None:
+        """Override session_map.json entry for a window with a different session_id.
+
+        Used after --resume: the hook reports a new session_id, but messages
+        continue writing to the resumed session's JSONL. This updates
+        session_map.json so that load_session_map() and the monitor stay
+        consistent with the overridden window_state.
+        """
+        key = f"{config.tmux_session_name}:{window_id}"
+        session_map: dict = {}
+        if config.session_map_file.exists():
+            try:
+                async with aiofiles.open(config.session_map_file, "r") as f:
+                    content = await f.read()
+                session_map = json.loads(content)
+            except (json.JSONDecodeError, OSError):
+                pass
+
+        entry = session_map.get(key, {})
+        old_sid = entry.get("session_id", "")
+        if old_sid == session_id:
+            return  # Already correct
+
+        entry["session_id"] = session_id
+        session_map[key] = entry
+        atomic_write_json(config.session_map_file, session_map)
+        logger.info(
+            "Resume override session_map: %s session_id %s -> %s",
+            key,
+            old_sid,
+            session_id,
+        )
+
     async def wait_for_session_map_entry(
         self, window_id: str, timeout: float = 5.0, interval: float = 0.5
     ) -> bool:
@@ -532,6 +566,29 @@ class SessionManager:
                 continue
             state = self.get_window_state(window_id)
             if state.session_id != new_sid or state.cwd != new_cwd:
+                # Guard: if old session's JSONL is still being actively written,
+                # don't overwrite. This prevents context compaction from hijacking
+                # the tracked session while the main session is still producing
+                # content. Once the old JSONL goes idle, the update proceeds.
+                if state.session_id and state.session_id != new_sid:
+                    old_file = self._build_session_file_path(
+                        state.session_id, state.cwd
+                    )
+                    if old_file and old_file.exists():
+                        try:
+                            age = time.time() - old_file.stat().st_mtime
+                            if age < 120:
+                                logger.debug(
+                                    "Protecting active session %s for window %s "
+                                    "(mtime %.0fs ago, map says %s)",
+                                    state.session_id,
+                                    window_id,
+                                    age,
+                                    new_sid,
+                                )
+                                continue
+                        except OSError:
+                            pass
                 logger.info(
                     "Session map: window_id %s updated sid=%s, cwd=%s",
                     window_id,

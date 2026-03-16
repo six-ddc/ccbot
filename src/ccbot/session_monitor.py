@@ -14,6 +14,7 @@ Key classes: SessionMonitor, NewMessage, SessionInfo.
 import asyncio
 import json
 import logging
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Awaitable
@@ -402,8 +403,17 @@ class SessionMonitor:
 
     async def _cleanup_all_stale_sessions(self) -> None:
         """Clean up all tracked sessions not in current session_map (used on startup)."""
+        # Deferred import to avoid circular dependency
+        from .session import session_manager
+
         current_map = await self._load_current_session_map()
         active_session_ids = set(current_map.values())
+
+        # Also include session_ids from window_states — these may differ from
+        # session_map when a session is being protected from compaction overwrites.
+        for ws in session_manager.window_states.values():
+            if ws.session_id:
+                active_session_ids.add(ws.session_id)
 
         stale_sessions = []
         for session_id in self.state.tracked_sessions.keys():
@@ -432,6 +442,25 @@ class SessionMonitor:
         for window_id, old_session_id in self._last_session_map.items():
             new_session_id = current_map.get(window_id)
             if new_session_id and new_session_id != old_session_id:
+                # Don't remove old session if its JSONL is still active.
+                # Context compaction creates new sessions while the main
+                # session keeps writing; removing it would lose messages.
+                old_tracked = self.state.get_session(old_session_id)
+                if old_tracked:
+                    try:
+                        age = time.time() - Path(old_tracked.file_path).stat().st_mtime
+                        if age < 120:
+                            logger.info(
+                                "Window '%s' session changed %s -> %s, "
+                                "but old session still active (%.0fs ago), keeping",
+                                window_id,
+                                old_session_id,
+                                new_session_id,
+                                age,
+                            )
+                            continue
+                    except OSError:
+                        pass
                 logger.info(
                     "Window '%s' session changed: %s -> %s",
                     window_id,
@@ -489,6 +518,14 @@ class SessionMonitor:
                 # Detect session_map changes and cleanup replaced/removed sessions
                 current_map = await self._detect_and_cleanup_changes()
                 active_session_ids = set(current_map.values())
+
+                # Include session_ids from window_states — these may differ from
+                # session_map when an active session is being protected from
+                # compaction overwrites. Without this, the protected session
+                # would be filtered out in check_for_updates().
+                for ws in session_manager.window_states.values():
+                    if ws.session_id:
+                        active_session_ids.add(ws.session_id)
 
                 # Check for new messages (all I/O is async)
                 new_messages = await self.check_for_updates(active_session_ids)
