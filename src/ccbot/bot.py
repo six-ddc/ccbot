@@ -933,19 +933,49 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
     w = await tmux_manager.find_window_by_id(wid)
     if not w:
         display = session_manager.get_display_name(wid)
-        logger.info(
-            "Stale binding: window %s gone, unbinding (user=%d, thread=%d)",
-            display,
-            user.id,
-            thread_id,
-        )
-        session_manager.unbind_thread(user.id, thread_id)
-        await safe_reply(
-            update.message,
-            f"❌ Window '{display}' no longer exists. Binding removed.\n"
-            "Send a message to start a new session.",
-        )
-        return
+        # Try auto-rebind: find unbound window with same name
+        all_windows = await tmux_manager.list_windows()
+        bound_wids = {
+            bw
+            for _, _, bw in session_manager.iter_thread_bindings()
+            if bw != wid
+        }
+        candidates = [
+            win
+            for win in all_windows
+            if win.window_name == display and win.window_id not in bound_wids
+        ]
+        if len(candidates) == 1:
+            replacement = candidates[0]
+            logger.info(
+                "Auto-rebinding stale window %s -> %s "
+                "(name=%s, user=%d, thread=%d)",
+                wid,
+                replacement.window_id,
+                display,
+                user.id,
+                thread_id,
+            )
+            session_manager.unbind_thread(user.id, thread_id)
+            session_manager.bind_thread(
+                user.id, thread_id, replacement.window_id, window_name=display
+            )
+            wid = replacement.window_id
+            w = replacement
+        else:
+            logger.info(
+                "Stale binding: window %s gone, unbinding (user=%d, thread=%d)",
+                display,
+                user.id,
+                thread_id,
+            )
+            session_manager.unbind_thread(user.id, thread_id)
+            await safe_reply(
+                update.message,
+                f"❌ Window '{display}' no longer exists. Binding removed.\n"
+                "Send a message to start a new session.",
+            )
+            return
 
     await update.message.chat.send_action(ChatAction.TYPING)
     await enqueue_status_update(context.bot, user.id, wid, None, thread_id=thread_id)
