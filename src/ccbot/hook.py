@@ -200,7 +200,7 @@ def hook_main() -> None:
             "-t",
             pane_id,
             "-p",
-            "#{session_name}:#{window_id}:#{window_name}",
+            "#{?session_grouped,#{session_group},#{session_name}}:#{window_id}:#{window_name}",
         ],
         capture_output=True,
         text=True,
