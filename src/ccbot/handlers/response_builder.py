@@ -23,12 +23,16 @@ def build_response_parts(
     is_complete: bool,
     content_type: str = "text",
     role: str = "assistant",
+    max_thinking_chars: int = 0,
 ) -> list[str]:
     """Build paginated response messages for Telegram.
 
     Returns a list of raw markdown strings, each within Telegram's 4096 char limit.
     Multi-part messages get a [1/N] suffix.
     Markdown-to-MarkdownV2 conversion is done by the send layer, not here.
+
+    Args:
+        max_thinking_chars: Max characters for thinking content. 0 = no truncation.
     """
     text = text.strip()
 
@@ -41,18 +45,17 @@ def build_response_parts(
             text = text[:3000] + "…"
         return [f"{prefix}{text}"]
 
-    # Truncate thinking content to keep it compact
-    if content_type == "thinking" and is_complete:
+    # Truncate thinking content to keep it compact (0 = disabled)
+    if max_thinking_chars > 0 and content_type == "thinking" and is_complete:
         start_tag = TranscriptParser.EXPANDABLE_QUOTE_START
         end_tag = TranscriptParser.EXPANDABLE_QUOTE_END
-        max_thinking = 500
         if start_tag in text and end_tag in text:
             inner = text[text.index(start_tag) + len(start_tag) : text.index(end_tag)]
-            if len(inner) > max_thinking:
-                inner = inner[:max_thinking] + "\n\n… (thinking truncated)"
+            if len(inner) > max_thinking_chars:
+                inner = inner[:max_thinking_chars] + "\n\n… (thinking truncated)"
             text = start_tag + inner + end_tag
-        elif len(text) > max_thinking:
-            text = text[:max_thinking] + "\n\n… (thinking truncated)"
+        elif len(text) > max_thinking_chars:
+            text = text[:max_thinking_chars] + "\n\n… (thinking truncated)"
 
     # Format based on content type
     if content_type == "thinking":

@@ -1776,6 +1776,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             msg.is_complete,
             msg.content_type,
             msg.role,
+            max_thinking_chars=config.max_thinking_chars,
         )
 
         if msg.is_complete:
