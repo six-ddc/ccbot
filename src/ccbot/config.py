@@ -96,6 +96,10 @@ class Config:
             os.getenv("CCBOT_SHOW_TOOL_CALLS", "true").lower() != "false"
         )
 
+        # Max characters for thinking content before truncation.
+        # 0 = no truncation (full thinking forwarded to Telegram).
+        self.max_thinking_chars = int(os.getenv("CCBOT_MAX_THINKING_CHARS", "0"))
+
         # Show hidden (dot) directories in directory browser
         self.show_hidden_dirs = (
             os.getenv("CCBOT_SHOW_HIDDEN_DIRS", "").lower() == "true"
