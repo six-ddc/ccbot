@@ -134,9 +134,11 @@ def _install_hook() -> int:
 def hook_main() -> None:
     """Process a Claude Code hook event from stdin, or install the hook."""
     # Configure logging for the hook subprocess (main.py logging doesn't apply here)
+    # Level WARNING: Claude Code treats any stderr as a hook error,
+    # so DEBUG/INFO logs would cause spurious error messages.
     logging.basicConfig(
         format="%(asctime)s [%(levelname)s] %(name)s: %(message)s",
-        level=logging.DEBUG,
+        level=logging.WARNING,
         stream=sys.stderr,
     )
 
@@ -190,7 +192,8 @@ def hook_main() -> None:
     # TMUX_PANE is set by tmux for every process inside a pane.
     pane_id = os.environ.get("TMUX_PANE", "")
     if not pane_id:
-        logger.warning("TMUX_PANE not set, cannot determine window")
+        # Running outside tmux — hook is not applicable, exit silently.
+        # Claude Code treats any stderr output as a hook error.
         return
 
     result = subprocess.run(
