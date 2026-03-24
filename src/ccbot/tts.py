@@ -163,6 +163,8 @@ async def send_voice_message(
     truncated = clean_text_for_tts(text[:4000])
     if not truncated:
         return
+    # Prefix with brief pause to prevent first-word truncation in OGG/Opus encoding
+    truncated = "... " + truncated
     try:
         await bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_VOICE)
         audio_data = await synthesize(truncated, user_id=user_id)
