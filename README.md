@@ -26,7 +26,7 @@ In fact, CCBot itself was built this way — iterating on itself through Claude 
 - **Topic-based sessions** — Each Telegram topic maps 1:1 to a tmux window and Claude session
 - **Real-time notifications** — Get Telegram messages for assistant responses, thinking content, tool use/result, and local command output
 - **Interactive UI** — Navigate AskUserQuestion, ExitPlanMode, and Permission Prompts via inline keyboard
-- **Voice messages** — Voice messages are transcribed via OpenAI and forwarded as text
+- **Voice messages** — Voice messages are transcribed locally via Whisper (faster-whisper + CUDA) and forwarded as text. OpenAI API available as fallback.
 - **Send messages** — Forward text to Claude Code via tmux keystrokes
 - **Slash command forwarding** — Send any `/command` directly to Claude Code (e.g. `/clear`, `/compact`, `/cost`)
 - **Create new sessions** — Start Claude Code sessions from Telegram via directory browser
@@ -95,8 +95,15 @@ ALLOWED_USERS=your_telegram_user_id
 | `CLAUDE_COMMAND`        | `claude`   | Command to run in new windows                    |
 | `MONITOR_POLL_INTERVAL` | `2.0`      | Polling interval in seconds                      |
 | `CCBOT_SHOW_HIDDEN_DIRS` | `false` | Show hidden (dot) directories in directory browser |
-| `OPENAI_API_KEY` | _(none)_ | OpenAI API key for voice message transcription |
+| `CCBOT_STT_ENGINE` | `whisper` | STT engine: `whisper` (local, CUDA) or `openai` (API) |
+| `CCBOT_WHISPER_MODEL` | `large-v3` | Whisper model size (`tiny`, `base`, `small`, `medium`, `large-v3`, `large-v3-turbo`) |
+| `CCBOT_WHISPER_DEVICE` | `cuda` | Compute device: `cuda` or `cpu` |
+| `CCBOT_WHISPER_COMPUTE_TYPE` | `float16` | Compute precision: `float16` (GPU), `int8` (GPU, less VRAM), `int8_float16` (balanced) |
+| `OPENAI_API_KEY` | _(none)_ | OpenAI API key (used when `CCBOT_STT_ENGINE=openai` or as whisper fallback) |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI API base URL (for proxies or compatible APIs) |
+| `CCBOT_TTS_ENABLED` | `true` | Enable TTS (text-to-speech) voice message responses |
+| `CCBOT_TTS_AUTO` | `false` | Auto-enable TTS for all users (per-user toggle via `/voice`) |
+| `CCBOT_TTS_VOICE` | `es-ES-ElviraNeural` | Edge TTS voice name (run `edge-tts --list-voices` for options) |
 
 Message formatting is always HTML via `chatgpt-md-converter` (`chatgpt_md_converter` package).
 There is no runtime formatter switch to MarkdownV2.
@@ -151,6 +158,8 @@ uv run ccbot
 | `/history`    | Message history for this topic  |
 | `/screenshot` | Capture terminal screenshot     |
 | `/esc`        | Send Escape to interrupt Claude |
+| `/voice`      | Toggle TTS voice message responses |
+| `/unbind`     | Unbind topic from session (window stays alive) |
 
 **Claude Code commands (forwarded via tmux):**
 
@@ -178,7 +187,34 @@ Any unrecognized `/command` is also forwarded to Claude Code as-is (e.g. `/revie
 
 **Sending messages:**
 
-Once a topic is bound to a session, just send text or voice messages in that topic — text gets forwarded to Claude Code via tmux keystrokes, and voice messages are automatically transcribed and forwarded as text.
+Once a topic is bound to a session, just send text or voice messages in that topic — text gets forwarded to Claude Code via tmux keystrokes, and voice messages are automatically transcribed (locally via Whisper by default) and forwarded as text.
+
+### Voice Messages (STT)
+
+CCBot uses [faster-whisper](https://github.com/Sybren/faster-whisper) with CTranslate2 for **local, GPU-accelerated** speech-to-text. No API key required.
+
+**How it works:**
+1. You send a voice message in a Telegram topic
+2. The bot downloads the OGG audio (in-memory, never written to disk permanently)
+3. faster-whisper transcribes it on the local GPU (CUDA)
+4. The transcribed text is forwarded to Claude Code via tmux
+
+**Supported models** (set via `CCBOT_WHISPER_MODEL`):
+
+| Model | Params | VRAM (float16) | Speed | Accuracy |
+|-------|--------|----------------|-------|----------|
+| `tiny` | 39M | ~1 GB | Fastest | Basic |
+| `base` | 74M | ~1 GB | Very fast | Good |
+| `small` | 244M | ~2 GB | Fast | Good |
+| `medium` | 769M | ~5 GB | Moderate | Very good |
+| `large-v3` | 1550M | ~10 GB | Moderate | Best |
+| `large-v3-turbo` | 809M | ~3 GB | Fast | Near-best |
+
+The default `large-v3` provides the best accuracy. Use `large-v3-turbo` for a good balance of speed and accuracy with less VRAM usage. The model is downloaded once from HuggingFace Hub and cached locally.
+
+**Fallback:** If local Whisper fails and `OPENAI_API_KEY` is set, CCBot automatically falls back to OpenAI's `gpt-4o-transcribe` API.
+
+**VRAM note:** The Whisper model stays loaded in GPU memory after the first voice message. This uses ~3-4 GB VRAM with `large-v3` at `float16`. If GPU memory is limited, use a smaller model or `int8` compute type.
 
 **Killing a session:**
 
@@ -261,7 +297,7 @@ src/ccbot/
 ├── terminal_parser.py     # Terminal pane parsing (interactive UI + status line)
 ├── html_converter.py      # Markdown → Telegram HTML conversion + HTML-aware splitting
 ├── screenshot.py          # Terminal text → PNG image with ANSI color support
-├── transcribe.py          # Voice-to-text transcription via OpenAI API
+├── transcribe.py          # Voice-to-text: local Whisper (CTranslate2+CUDA) + OpenAI fallback
 ├── utils.py               # Shared utilities (atomic JSON writes, JSONL helpers)
 ├── tmux_manager.py        # Tmux window management (list, create, send keys, kill)
 ├── fonts/                 # Bundled fonts for screenshot rendering

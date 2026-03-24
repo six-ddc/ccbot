@@ -12,6 +12,8 @@ dependencies = [
     "Pillow>=10.0.0",
     "aiofiles>=24.0.0",
     "telegramify-markdown>=0.5.0,<1.0.0",
+    "faster-whisper>=1.2.1",
+    "edge-tts>=7.2.8",
 ]
 
 [project.scripts]

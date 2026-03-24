@@ -2,7 +2,7 @@
 
 ccmux — Telegram bot that bridges Telegram Forum topics to Claude Code sessions via tmux windows. Each topic is bound to one tmux window running one Claude Code instance.
 
-Tech stack: Python, python-telegram-bot, tmux, uv.
+Tech stack: Python, python-telegram-bot, tmux, uv, faster-whisper (CTranslate2 + CUDA), edge-tts (TTS).
 
 ## Common Commands
 
@@ -23,6 +23,8 @@ ccbot hook --install                  # Auto-install Claude Code SessionStart ho
 - **Hook-based session tracking** — `SessionStart` hook writes `session_map.json`; monitor polls it to detect session changes.
 - **Message queue per user** — FIFO ordering, message merging (3800 char limit), tool_use/tool_result pairing.
 - **Rate limiting** — `AIORateLimiter(max_retries=5)` on the Application (30/s global). On restart, the global bucket is pre-filled to avoid burst against Telegram's server-side counter.
+- **Local STT** — Voice messages transcribed via faster-whisper (CTranslate2 + CUDA) by default. OpenAI API as fallback. Model loaded lazily on first voice message, stays resident.
+- **TTS** — Responses sent as Telegram voice messages via edge-tts (Microsoft Edge neural voices). Per-user toggle via `/voice` command. Configurable voice and auto-enable via env vars.
 
 ## Code Conventions
 

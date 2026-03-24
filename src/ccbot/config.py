@@ -101,10 +101,33 @@ class Config:
             os.getenv("CCBOT_SHOW_HIDDEN_DIRS", "").lower() == "true"
         )
 
-        # OpenAI API for voice message transcription (optional)
+        # STT engine: "whisper" (local, default) or "openai" (API)
+        self.stt_engine: str = os.getenv("CCBOT_STT_ENGINE", "whisper")
+        # Whisper config (local STT via faster-whisper + CTranslate2 + CUDA)
+        self.whisper_model: str = os.getenv("CCBOT_WHISPER_MODEL", "large-v3")
+        self.whisper_device: str = os.getenv("CCBOT_WHISPER_DEVICE", "cuda")
+        self.whisper_compute_type: str = os.getenv(
+            "CCBOT_WHISPER_COMPUTE_TYPE", "float16"
+        )
+        # OpenAI API for voice transcription (fallback when stt_engine=openai)
         self.openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
         self.openai_base_url: str = os.getenv(
             "OPENAI_BASE_URL", "https://api.openai.com/v1"
+        )
+
+        # TTS (Text-to-Speech) via edge-tts (Microsoft Edge neural voices)
+        self.tts_enabled: bool = os.getenv("CCBOT_TTS_ENABLED", "true").lower() in (
+            "true",
+            "1",
+            "yes",
+        )
+        self.tts_auto: bool = os.getenv("CCBOT_TTS_AUTO", "false").lower() in (
+            "true",
+            "1",
+            "yes",
+        )
+        self.tts_voice: str = os.getenv(
+            "CCBOT_TTS_VOICE", "es-ES-ElviraNeural"
         )
 
         # Scrub sensitive vars from os.environ so child processes never inherit them.

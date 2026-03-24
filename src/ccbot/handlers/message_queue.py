@@ -64,6 +64,8 @@ class MessageTask:
     content_type: str = "text"
     thread_id: int | None = None  # Telegram topic thread_id for targeted send
     image_data: list[tuple[str, bytes]] | None = None  # From tool_result images
+    role: str = "assistant"  # "user" or "assistant"
+    is_complete: bool = False  # True when message is final (stop_reason set)
 
 
 # Per-user message queues and worker tasks
@@ -184,6 +186,13 @@ async def _merge_content_tasks(
     if merge_count == 0:
         return first, 0
 
+    # Preserve assistant role when merging mixed-role tasks (e.g. user + assistant).
+    # TTS and other role-dependent features rely on the correct role.
+    # Only consider tasks that were actually merged, not remaining ones put back.
+    merged_tasks = [first] + items[:merge_count]
+    merged_role = "assistant" if any(t.role == "assistant" for t in merged_tasks) else first.role
+    merged_complete = any(t.is_complete for t in merged_tasks)
+
     return (
         MessageTask(
             task_type="content",
@@ -192,6 +201,8 @@ async def _merge_content_tasks(
             tool_use_id=first.tool_use_id,
             content_type=first.content_type,
             thread_id=first.thread_id,
+            role=merged_role,
+            is_complete=merged_complete,
         ),
         merge_count,
     )
@@ -381,7 +392,20 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
     # 4. Send images if present (from tool_result with base64 image blocks)
     await _send_task_images(bot, chat_id, task)
 
-    # 5. After content, check and send status
+    # 5. Send TTS voice message if enabled (only for final assistant text)
+    if (
+        task.content_type == "text"
+        and task.role == "assistant"
+        and task.is_complete
+        and task.parts
+    ):
+        from ..tts import is_tts_enabled, send_voice_message
+
+        if is_tts_enabled(user_id):
+            full_text = "\n\n".join(task.parts)
+            await send_voice_message(bot, chat_id, full_text, task.thread_id, user_id)
+
+    # 6. After content, check and send status
     await _check_and_send_status(bot, user_id, wid, task.thread_id)
 
 
@@ -601,6 +625,8 @@ async def enqueue_content_message(
     text: str | None = None,
     thread_id: int | None = None,
     image_data: list[tuple[str, bytes]] | None = None,
+    role: str = "assistant",
+    is_complete: bool = False,
 ) -> None:
     """Enqueue a content message task."""
     logger.debug(
@@ -620,6 +646,8 @@ async def enqueue_content_message(
         content_type=content_type,
         thread_id=thread_id,
         image_data=image_data,
+        role=role,
+        is_complete=is_complete,
     )
     queue.put_nowait(task)
 
