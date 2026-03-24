@@ -13,11 +13,66 @@ Dependencies: edge-tts (Microsoft Edge TTS, free, no API key)
 """
 
 import logging
+import re
 from pathlib import Path
 
 from .config import config
 
 logger = logging.getLogger(__name__)
+
+# Regex patterns to strip non-speech content before TTS
+_TTS_CLEANUP = [
+    # Emojis (common ranges)
+    re.compile(
+        "["
+        "\U0001F600-\U0001F64F"  # emoticons
+        "\U0001F300-\U0001F5FF"  # symbols & pictographs
+        "\U0001F680-\U0001F6FF"  # transport & map
+        "\U0001F700-\U0001F77F"  # alchemical symbols
+        "\U0001F780-\U0001F7FF"  # geometric shapes extended
+        "\U0001F800-\U0001F8FF"  # supplemental arrows-C
+        "\U0001F900-\U0001F9FF"  # supplemental symbols & pictographs
+        "\U0001FA00-\U0001FA6F"  # chess symbols
+        "\U0001FA70-\U0001FAFF"  # symbols & pictographs extended-A
+        "\U00002702-\U000027B0"  # dingbats
+        "\U000024C2-\U0001F251"  # enclosed characters
+        "\U0001F200-\U0001F2FF"  # enclosed ideographic supplement
+        "\U00002600-\U000026FF"  # misc symbols
+        "\U00002700-\U000027BF"  # dingbats (overlap, intentional)
+        "\U0000FE00-\U0000FE0F"  # variation selectors
+        "\U0000200D"             # zero-width joiner
+        "]+",
+        flags=re.UNICODE,
+    ),
+    # Telegram-style expandable quotes and blockquotes
+    re.compile(r"[▁-▉]+"),
+    # Markdown/code artifacts
+    re.compile(r"[*_`~#|>]+"),
+    # Arrow-like symbols
+    re.compile(r"[→←↑↓↔↕➜➤➡⇒⇐⇑⇓⇔⇕]+"),
+    # Decorative box-drawing and block elements
+    re.compile(r"[═║╔╗╚╝╠╣╦╩─│┌┐└┘├┤┬┴┼]+"),
+    # Bullet points and list markers
+    re.compile(r"[•●○◦▪▫➢➣➤◆◇★☆►◄▲▼]+"),
+    # Misc symbols that TTS reads badly
+    re.compile(r"[⚡🔥💡✅❌⚠️🔊🗣💡]+"),
+    # Multiple consecutive whitespace
+    re.compile(r"\n{3,}", re.MULTILINE),
+    # Code fences
+    re.compile(r"```[\s\S]*?```"),
+]
+
+
+def clean_text_for_tts(text: str) -> str:
+    """Strip emojis, symbols, and markdown artifacts for TTS synthesis.
+
+    Keeps normal punctuation (.,;:!?¿¡), letters, numbers, and whitespace.
+    Collapses multiple newlines to double newlines for natural pauses.
+    """
+    for pattern in _TTS_CLEANUP:
+        text = pattern.sub("", text)
+    text = text.strip()
+    return text if text else ""
 
 _per_user_tts: dict[int, bool] = {}
 _per_user_voice: dict[int, str] = {}
@@ -57,6 +112,9 @@ def get_voice(user_id: int) -> str:
 
 def set_voice(user_id: int, voice: str) -> str:
     """Set a per-user voice override. Returns the voice name set."""
+    # Basic sanity: voice names are like "es-ES-ElviraNeural", not commands
+    if "/" in voice or voice.startswith(("list", "all")):
+        raise ValueError(f"'{voice}' doesn't look like a voice name.")
     _per_user_voice[user_id] = voice
     return voice
 
@@ -102,7 +160,9 @@ async def send_voice_message(
     """
     from telegram.constants import ChatAction
 
-    truncated = text[:4000]
+    truncated = clean_text_for_tts(text[:4000])
+    if not truncated:
+        return
     try:
         await bot.send_chat_action(chat_id=chat_id, action=ChatAction.RECORD_VOICE)
         audio_data = await synthesize(truncated, user_id=user_id)

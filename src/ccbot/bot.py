@@ -300,7 +300,11 @@ async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     # /voice <name> — set voice (auto-enable TTS)
     if args:
         voice_name = args[0]
-        set_voice(user.id, voice_name)
+        try:
+            set_voice(user.id, voice_name)
+        except ValueError as e:
+            await safe_reply(update.message, f"❌ {e}\nUse /voices to see available voices.")
+            return
         if not is_tts_enabled(user.id):
             toggle_tts(user.id)
         await safe_reply(

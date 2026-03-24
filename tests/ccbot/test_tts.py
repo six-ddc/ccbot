@@ -62,3 +62,50 @@ class TestTTSGlobalDisabled:
 
             tts._per_user_tts.clear()
             assert is_tts_enabled(12345) is False
+
+
+class TestCleanTextForTTS:
+    def test_strips_emojis(self):
+        from ccbot.tts import clean_text_for_tts
+
+        result = clean_text_for_tts("Hola 👋 ¿cómo estás? 😊")
+        assert "👋" not in result
+        assert "😊" not in result
+        assert "Hola" in result
+        assert "cómo estás" in result
+
+    def test_strips_markdown(self):
+        from ccbot.tts import clean_text_for_tts
+
+        result = clean_text_for_tts("## Título **negrita** y `código`")
+        assert "##" not in result
+        assert "**" not in result
+        assert "`" not in result
+        assert "Título" in result
+        assert "negrita" in result
+
+    def test_strips_arrows_and_symbols(self):
+        from ccbot.tts import clean_text_for_tts
+
+        result = clean_text_for_tts("⚠️ Error → solución ✅")
+        assert "⚠️" not in result
+        assert "→" not in result
+        assert "✅" not in result
+        assert "Error" in result
+        assert "solución" in result
+
+    def test_keeps_normal_punctuation(self):
+        from ccbot.tts import clean_text_for_tts
+
+        result = clean_text_for_tts("¡Hola! ¿Qué tal? Bien, gracias.")
+        assert "¡" in result
+        assert "!" in result
+        assert "¿" in result
+        assert "?" in result
+        assert "." in result
+
+    def test_empty_after_clean(self):
+        from ccbot.tts import clean_text_for_tts
+
+        result = clean_text_for_tts("⚠️⚡🔥")
+        assert result == ""
