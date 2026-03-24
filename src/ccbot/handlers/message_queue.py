@@ -188,8 +188,10 @@ async def _merge_content_tasks(
 
     # Preserve assistant role when merging mixed-role tasks (e.g. user + assistant).
     # TTS and other role-dependent features rely on the correct role.
-    merged_role = "assistant" if any(t.role == "assistant" for t in items) else first.role
-    merged_complete = any(t.is_complete for t in items)
+    # Only consider tasks that were actually merged, not remaining ones put back.
+    merged_tasks = [first] + items[:merge_count]
+    merged_role = "assistant" if any(t.role == "assistant" for t in merged_tasks) else first.role
+    merged_complete = any(t.is_complete for t in merged_tasks)
 
     return (
         MessageTask(
