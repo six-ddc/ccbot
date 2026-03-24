@@ -69,7 +69,8 @@
 
 Additional modules:
   screenshot.py       ─ Terminal text → PNG rendering (ANSI color, font fallback)
-  transcribe.py       ─ Voice-to-text transcription via OpenAI API (gpt-4o-transcribe)
+  transcribe.py       ─ Voice-to-text: local Whisper (faster-whisper + CTranslate2 + CUDA) + OpenAI API fallback
+  tts.py              ─ Text-to-speech: edge-tts (Microsoft Edge neural voices) → OGG voice messages to Telegram
   main.py             ─ CLI entry point
   utils.py            ─ Shared utilities (ccbot_dir, atomic_write_json)
 
@@ -97,6 +98,8 @@ State files (~/.ccbot/ or $CCBOT_DIR/):
 - **Tool use ↔ tool result pairing** — `tool_use_id` tracked across poll cycles; tool result edits the original tool_use Telegram message in-place.
 - **MarkdownV2 with fallback** — All messages go through `safe_reply`/`safe_edit`/`safe_send` which convert via `telegramify-markdown` and fall back to plain text on parse failure.
 - **No truncation at parse layer** — Full content preserved; splitting at send layer respects Telegram's 4096 char limit with expandable quote atomicity.
+- **Local STT with API fallback** — Voice messages transcribed via faster-whisper (CTranslate2 + CUDA, model loaded lazily and resident). Falls back to OpenAI gpt-4o-transcribe API on failure if `OPENAI_API_KEY` is set. Engine selection via `CCBOT_STT_ENGINE` env var.
+- **TTS voice responses** — Final assistant messages sent as Telegram voice notes via edge-tts (Microsoft Edge neural voices). Per-user toggle via `/voice` command. Text always sent first; audio appended after. Configurable voice and global auto-enable via `CCBOT_TTS_VOICE` / `CCBOT_TTS_AUTO`.
 - Only sessions registered in `session_map.json` (via hook) are monitored.
 - Notifications delivered to users via thread bindings (topic → window_id → session).
 - **Startup re-resolution** — Window IDs reset on tmux server restart. On startup, `resolve_stale_ids()` matches persisted display names against live windows to re-map IDs. Old state.json files keyed by window name are auto-migrated.

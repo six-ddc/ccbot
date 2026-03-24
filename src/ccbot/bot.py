@@ -136,6 +136,7 @@ from .terminal_parser import extract_bash_output, is_interactive_ui
 from .tmux_manager import tmux_manager
 from .transcribe import close_client as close_transcribe_client
 from .transcribe import transcribe_voice
+from .tts import get_voice, is_tts_enabled, set_voice, toggle_tts
 from .utils import ccbot_dir
 
 logger = logging.getLogger(__name__)
@@ -275,6 +276,130 @@ async def unbind_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> 
         "The Claude session is still running in tmux.\n"
         "Send a message to bind to a new session.",
     )
+
+
+async def voice_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Toggle TTS or change voice.
+
+    Usage:
+      /voice          — Toggle TTS on/off
+      /voice <name>   — Set voice (e.g. /voice es-AR-ElenaNeural)
+    """
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    if not config.tts_enabled:
+        await safe_reply(update.message, "❌ TTS is disabled globally (CCBOT_TTS_ENABLED=false).")
+        return
+
+    args = context.args if context.args else []
+
+    # /voice <name> — set voice (auto-enable TTS)
+    if args:
+        voice_name = args[0]
+        set_voice(user.id, voice_name)
+        if not is_tts_enabled(user.id):
+            toggle_tts(user.id)
+        await safe_reply(
+            update.message,
+            f"🔊 Voice set to `{voice_name}` — TTS ON\n"
+            "Use /voices to see available options.",
+        )
+        return
+
+    # /voice — toggle
+    new_state = toggle_tts(user.id)
+    status = "ON" if new_state else "OFF"
+    voice_name = get_voice(user.id)
+    await safe_reply(
+        update.message,
+        f"🔊 TTS {status} (voice: {voice_name})\n"
+        "Use /voice <name> to change voice, /voices to list options.",
+    )
+
+
+async def voices_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """List available TTS voices.
+
+    Usage:
+      /voices          — Compact index of all locales with voice counts
+      /voices <locale> — All voices for a locale (e.g. /voices es, /voices en)
+    """
+    user = update.effective_user
+    if not user or not is_user_allowed(user.id):
+        return
+    if not update.message:
+        return
+
+    args = context.args if context.args else []
+    locale_filter = args[0].lower() if args else ""
+
+    try:
+        import edge_tts
+
+        all_voices = await edge_tts.list_voices()
+
+        if locale_filter:
+            # Detect if user used /voices instead of /voice to set a voice
+            if any(c.isupper() for c in locale_filter):
+                await safe_reply(
+                    update.message,
+                    f"💡 Did you mean `/voice {locale_filter}`?\n\n"
+                    "/voice — Set a voice (also toggles TTS on)\n"
+                    "/voices — List available voices",
+                )
+                return
+
+            filtered = [v for v in all_voices if v["Locale"].lower().startswith(locale_filter)]
+            if not filtered:
+                await safe_reply(
+                    update.message,
+                    f"❌ No voices found for '{locale_filter}'.\n"
+                    "Use /voices to see available locales.",
+                )
+                return
+            lines = []
+            current = get_voice(user.id)
+            for v in sorted(filtered, key=lambda x: (x["Locale"], x["ShortName"])):
+                gender = "♂" if v["Gender"] == "Male" else "♀"
+                tag = " ★" if v["ShortName"] == current else ""
+                lines.append(f"{gender} `{v['ShortName']}` — {v['Locale']}{tag}")
+            header = f"🗣 {locale_filter} — {len(lines)} voices\n\n"
+        else:
+            from collections import Counter
+
+            locale_counts = Counter(v["Locale"] for v in all_voices)
+            locale_flags = {
+                "ar": "🇸🇦", "bg": "🇧🇬", "cs": "🇨🇿", "da": "🇩🇰", "de": "🇩🇪",
+                "el": "🇬🇷", "en": "🇬🇧", "es": "🇪🇸", "et": "🇪🇪", "fi": "🇫🇮",
+                "fr": "🇫🇷", "he": "🇮🇱", "hi": "🇮🇳", "hr": "🇭🇷", "hu": "🇭🇺",
+                "id": "🇮🇩", "it": "🇮🇹", "ja": "🇯🇵", "ko": "🇰🇷", "lt": "🇱🇹",
+                "lv": "🇱🇻", "ms": "🇲🇾", "nl": "🇳🇱", "no": "🇳🇴", "pl": "🇵🇱",
+                "pt": "🇧🇷", "ro": "🇷🇴", "ru": "🇷🇺", "sk": "🇸🇰", "sl": "🇸🇮",
+                "sv": "🇸🇪", "th": "🇹🇭", "tr": "🇹🇷", "uk": "🇺🇦", "vi": "🇻🇳",
+                "zh": "🇨🇳",
+            }
+            lines = []
+            for locale, count in sorted(locale_counts.items()):
+                prefix = locale.split("-")[0]
+                flag = locale_flags.get(prefix, "🌐")
+                lines.append(f"{flag} `{locale}` — {count} voices")
+            header = f"🗣 Available locales ({len(locale_counts)}):\n\n"
+
+        await safe_reply(update.message, header + "\n".join(lines))
+    except Exception as e:
+        err = str(e)
+        if "503" in err or "Service Unavailable" in err:
+            await safe_reply(
+                update.message,
+                "⚠ Microsoft TTS service is temporarily unavailable (503).\n"
+                "Try again in a few seconds.",
+            )
+        else:
+            await safe_reply(update.message, f"❌ Failed to list voices: {e}")
 
 
 async def esc_command(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -642,11 +767,14 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     if not update.message or not update.message.voice:
         return
 
-    if not config.openai_api_key:
+    stt_available = (
+        config.stt_engine == "whisper" or config.openai_api_key
+    )
+    if not stt_available:
         await safe_reply(
             update.message,
-            "⚠ Voice transcription requires an OpenAI API key.\n"
-            "Set `OPENAI_API_KEY` in your `.env` file and restart the bot.",
+            "⚠ No STT backend available.\n"
+            "Set CCBOT_STT_ENGINE=whisper (local) or OPENAI_API_KEY (API) in .env.",
         )
         return
 
@@ -1792,6 +1920,8 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 text=msg.text,
                 thread_id=thread_id,
                 image_data=msg.image_data,
+                role=msg.role,
+                is_complete=msg.is_complete,
             )
 
             # Update user's read offset to current file position
@@ -1895,6 +2025,8 @@ def create_bot() -> Application:
     application.add_handler(CommandHandler("screenshot", screenshot_command))
     application.add_handler(CommandHandler("esc", esc_command))
     application.add_handler(CommandHandler("unbind", unbind_command))
+    application.add_handler(CommandHandler("voice", voice_command))
+    application.add_handler(CommandHandler("voices", voices_command))
     application.add_handler(CommandHandler("usage", usage_command))
     application.add_handler(CallbackQueryHandler(callback_handler))
     # Topic closed event — auto-kill associated window
