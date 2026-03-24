@@ -44,9 +44,11 @@ _TTS_CLEANUP = [
         "]+",
         flags=re.UNICODE,
     ),
+    # Code fences (must run BEFORE markdown cleanup strips the backticks)
+    re.compile(r"```[\s\S]*?```"),
     # Telegram-style expandable quotes and blockquotes
     re.compile(r"[▁-▉]+"),
-    # Markdown/code artifacts
+    # Markdown/code artifacts (inline only — fences handled above)
     re.compile(r"[*_`~#|>]+"),
     # Arrow-like symbols
     re.compile(r"[→←↑↓↔↕➜➤➡⇒⇐⇑⇓⇔⇕]+"),
@@ -58,8 +60,6 @@ _TTS_CLEANUP = [
     re.compile(r"[⚡🔥💡✅❌⚠️🔊🗣💡]+"),
     # Multiple consecutive whitespace
     re.compile(r"\n{3,}", re.MULTILINE),
-    # Code fences
-    re.compile(r"```[\s\S]*?```"),
 ]
 
 
