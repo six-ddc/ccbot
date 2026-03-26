@@ -146,7 +146,7 @@ session_monitor: SessionMonitor | None = None
 # Status polling task
 _status_poll_task: asyncio.Task | None = None
 
-# Claude Code commands shown in bot menu (forwarded via tmux)
+# Claude Code built-in commands shown in bot menu (forwarded via tmux)
 CC_COMMANDS: dict[str, str] = {
     "clear": "↗ Clear conversation history",
     "compact": "↗ Compact conversation context",
@@ -155,6 +155,104 @@ CC_COMMANDS: dict[str, str] = {
     "memory": "↗ Edit CLAUDE.md",
     "model": "↗ Switch AI model",
 }
+
+
+def _parse_skill_md(skill_md: Path) -> tuple[str, str] | None:
+    """Parse a SKILL.md file and return (name, description) or None."""
+    try:
+        text = skill_md.read_text(encoding="utf-8", errors="ignore")
+    except OSError:
+        return None
+
+    lines = text.split("\n")
+    if not lines or lines[0].strip() != "---":
+        return None
+
+    name = ""
+    description = ""
+    in_desc = False
+    for line in lines[1:]:
+        if line.strip() == "---":
+            break
+        if in_desc:
+            stripped = line.strip()
+            if stripped and not stripped.endswith(":"):
+                description += " " + stripped
+            else:
+                in_desc = False
+        if line.startswith("name:"):
+            name = line.split(":", 1)[1].strip()
+        elif line.startswith("description:"):
+            val = line.split(":", 1)[1].strip()
+            if val in ("|", ">"):
+                in_desc = True
+            else:
+                description = val
+
+    if not name:
+        return None
+    return name, description.strip()
+
+
+import re
+
+# Telegram bot commands: 1-32 chars, lowercase letters, digits, underscores only
+_RE_VALID_BOT_COMMAND = re.compile(r"^[a-z0-9_]{1,32}$")
+
+
+def _skill_name_to_command(name: str) -> str | None:
+    """Convert a skill name to a valid Telegram bot command.
+
+    Replaces hyphens with underscores (e.g. 'agent-browser' -> 'agent_browser').
+    Returns None if the result is still not a valid bot command.
+    """
+    cmd = name.replace("-", "_")
+    if _RE_VALID_BOT_COMMAND.match(cmd):
+        return cmd
+    return None
+
+
+def _discover_skill_commands() -> dict[str, str]:
+    """Scan Claude Code skills directory and return {command: description} for bot commands.
+
+    Reads YAML frontmatter from each skill's SKILL.md to extract the name and
+    description fields. Walks nested directories (e.g. gstack/review/SKILL.md)
+    to discover bundled skill packs. Converts hyphen-case names to underscores
+    for Telegram compatibility. Skips skills whose names collide with built-in
+    bot commands.
+    """
+    skills: dict[str, str] = {}
+    skills_path = config.claude_skills_path
+    if not skills_path or not skills_path.is_dir():
+        return skills
+
+    # Names already taken by bot handlers or CC_COMMANDS
+    reserved = {
+        "start", "history", "screenshot", "esc", "kill", "unbind", "usage",
+    } | set(CC_COMMANDS.keys())
+
+    # Walk all SKILL.md files recursively
+    seen_commands: set[str] = set()
+    for skill_md in sorted(skills_path.rglob("SKILL.md")):
+        result = _parse_skill_md(skill_md)
+        if result is None:
+            continue
+        name, description = result
+
+        cmd = _skill_name_to_command(name)
+        if cmd is None or cmd in reserved or cmd in seen_commands:
+            continue
+        seen_commands.add(cmd)
+
+        # Truncate description to fit Telegram's 256-char limit for commands
+        desc = description if description else f"{name} skill"
+        first_sentence = desc.split(". ")[0].rstrip(".")
+        if len(first_sentence) > 250:
+            first_sentence = first_sentence[:247] + "..."
+        skills[cmd] = f"↗ {first_sentence}"
+
+    logger.info("Discovered %d skill commands from %s", len(skills), skills_path)
+    return skills
 
 
 def is_user_allowed(user_id: int | None) -> bool:
@@ -505,6 +603,11 @@ async def forward_command_handler(
     cmd_text = update.message.text or ""
     # The full text is already a slash command like "/clear" or "/compact foo"
     cc_slash = cmd_text.split("@")[0]  # strip bot mention
+    # Convert underscores back to hyphens for skill commands that were renamed
+    # for Telegram compatibility (e.g. /agent_browser -> /agent-browser)
+    parts = cc_slash.split(None, 1)
+    cmd_part = parts[0].replace("_", "-")
+    cc_slash = cmd_part if len(parts) == 1 else f"{cmd_part} {parts[1]}"
     wid = session_manager.resolve_window_for_thread(user.id, thread_id)
     if not wid:
         await safe_reply(update.message, "❌ No session bound to this topic.")
@@ -1822,9 +1925,21 @@ async def post_init(application: Application) -> None:
         BotCommand("unbind", "Unbind topic from session (keeps window running)"),
         BotCommand("usage", "Show Claude Code usage remaining"),
     ]
-    # Add Claude Code slash commands
+    # Add Claude Code built-in slash commands
     for cmd_name, desc in CC_COMMANDS.items():
         bot_commands.append(BotCommand(cmd_name, desc))
+
+    # Discover and add skill commands from ~/.claude/skills/
+    skill_commands = _discover_skill_commands()
+    for cmd_name, desc in skill_commands.items():
+        bot_commands.append(BotCommand(cmd_name, desc))
+
+    # Telegram allows max 100 bot commands
+    if len(bot_commands) > 100:
+        logger.warning(
+            "Too many bot commands (%d), truncating to 100", len(bot_commands)
+        )
+        bot_commands = bot_commands[:100]
 
     await application.bot.set_my_commands(bot_commands)
 

@@ -84,6 +84,16 @@ class Config:
 
         self.monitor_poll_interval = float(os.getenv("MONITOR_POLL_INTERVAL", "2.0"))
 
+        # Claude Code skills directory for dynamic slash command discovery
+        custom_skills_path = os.getenv("CCBOT_CLAUDE_SKILLS_PATH")
+        if custom_skills_path:
+            self.claude_skills_path: Path | None = Path(custom_skills_path)
+        elif claude_config_dir:
+            self.claude_skills_path = Path(claude_config_dir) / "skills"
+        else:
+            skills_default = Path.home() / ".claude" / "skills"
+            self.claude_skills_path = skills_default if skills_default.is_dir() else None
+
         # Display user messages in history and real-time notifications
         # When True, user messages are shown with a 👤 prefix
         self.show_user_messages = (
