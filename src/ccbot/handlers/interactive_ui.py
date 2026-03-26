@@ -17,6 +17,7 @@ State dicts are keyed by (user_id, thread_id_or_0) for Telegram topic support.
 import logging
 
 from telegram import Bot, InlineKeyboardButton, InlineKeyboardMarkup
+from telegram.error import BadRequest
 
 from ..session import session_manager
 from ..terminal_parser import extract_interactive_content, is_interactive_ui
@@ -202,13 +203,24 @@ async def handle_interactive_ui(
             )
             _interactive_mode[ikey] = window_id
             return True
-        except Exception:
-            # Edit failed (message deleted, etc.) - clear stale msg_id and send new
+        except BadRequest as e:
+            if "Message is not modified" in str(e):
+                # Content unchanged — keep existing message as-is
+                _interactive_mode[ikey] = window_id
+                return True
+            # Other edit failure — fall through to send new message,
+            # but keep old message until replacement succeeds
             logger.debug(
-                "Edit failed for interactive msg %s, sending new", existing_msg_id
+                "Edit failed for interactive msg %s: %s, sending new",
+                existing_msg_id,
+                e,
             )
-            _interactive_msgs.pop(ikey, None)
-            # Fall through to send new message
+        except Exception as e:
+            logger.debug(
+                "Edit failed for interactive msg %s: %s, sending new",
+                existing_msg_id,
+                e,
+            )
 
     # Send new message (plain text — terminal content is not markdown)
     logger.info(
@@ -228,6 +240,12 @@ async def handle_interactive_ui(
     if sent:
         _interactive_msgs[ikey] = sent.message_id
         _interactive_mode[ikey] = window_id
+        # New message sent successfully — now safe to delete the old one
+        if existing_msg_id:
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=existing_msg_id)
+            except Exception:
+                pass  # Old message may already be gone
         return True
     return False
 
