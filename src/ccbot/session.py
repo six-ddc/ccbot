@@ -367,7 +367,8 @@ class SessionManager:
 
         When windows are closed externally (outside ccbot), session_map.json
         retains orphan references. This cleanup removes entries whose window_id
-        is not in the current set of live tmux windows.
+        is not in the current set of live tmux windows. Checks all session
+        name prefixes (grouped tmux sessions share windows).
         """
         if not config.session_map_file.exists():
             return
@@ -378,14 +379,14 @@ class SessionManager:
         except (json.JSONDecodeError, OSError):
             return
 
-        prefix = f"{config.tmux_session_name}:"
-        stale_keys = [
-            key
-            for key in session_map
-            if key.startswith(prefix)
-            and self._is_window_id(key[len(prefix) :])
-            and key[len(prefix) :] not in live_ids
-        ]
+        stale_keys = []
+        for key in session_map:
+            parts = key.split(":", 1)
+            if len(parts) != 2:
+                continue
+            window_id = parts[1]
+            if self._is_window_id(window_id) and window_id not in live_ids:
+                stale_keys.append(key)
         if not stale_keys:
             return
 
@@ -500,7 +501,8 @@ class SessionManager:
         """Read session_map.json and update window_states with new session associations.
 
         Keys in session_map are formatted as "tmux_session:window_id" (e.g. "ccbot:@12").
-        Only entries matching our tmux_session_name are processed.
+        Entries from ANY session name prefix are accepted because grouped tmux
+        sessions share windows, and the hook may write under any session name.
         Also cleans up window_states entries not in current session_map.
         Updates window_display_names from the "window_name" field in values.
         """
@@ -513,15 +515,15 @@ class SessionManager:
         except (json.JSONDecodeError, OSError):
             return
 
-        prefix = f"{config.tmux_session_name}:"
         valid_wids: set[str] = set()
         changed = False
 
         for key, info in session_map.items():
-            # Only process entries for our tmux session
-            if not key.startswith(prefix):
+            # Extract window_id from "session_name:window_id"
+            parts = key.split(":", 1)
+            if len(parts) != 2:
                 continue
-            window_id = key[len(prefix) :]
+            window_id = parts[1]
             if not self._is_window_id(window_id):
                 continue
             valid_wids.add(window_id)
