@@ -411,9 +411,9 @@ class SessionManager:
             if len(keys) <= 1:
                 continue
             live_cwd = live_cwds.get(window_id, "")
-            best_key = keys[0]  # fallback: first entry
 
-            # Prefer entry whose CWD matches the live window's CWD
+            # Filter to entries whose CWD matches the live window
+            cwd_matches: list[str] = []
             for key in keys:
                 entry_cwd = session_map[key].get("cwd", "")
                 try:
@@ -421,8 +421,25 @@ class SessionManager:
                 except (OSError, ValueError):
                     norm_cwd = entry_cwd
                 if norm_cwd == live_cwd:
-                    best_key = key
-                    break
+                    cwd_matches.append(key)
+
+            candidates = cwd_matches if cwd_matches else keys
+
+            # Among candidates, pick the one with the newest JSONL file
+            best_key = candidates[0]
+            best_mtime = 0.0
+            for key in candidates:
+                sid = session_map[key].get("session_id", "")
+                cwd = session_map[key].get("cwd", "")
+                fpath = self._build_session_file_path(sid, cwd)
+                if fpath and fpath.exists():
+                    try:
+                        mtime = fpath.stat().st_mtime
+                        if mtime > best_mtime:
+                            best_mtime = mtime
+                            best_key = key
+                    except OSError:
+                        pass
 
             for key in keys:
                 if key != best_key:
