@@ -708,6 +708,81 @@ class SessionManager:
         self._save_state()
         return None
 
+    def purge_window(self, window_id: str) -> None:
+        """Remove all in-memory state for a tmux window after it is killed.
+
+        Drops the window from window_states, window_display_names, and every
+        user's user_window_offsets, then persists state.json. Thread bindings
+        are left to the caller (unbind_thread is the inverse op there).
+        """
+        changed = False
+        if window_id in self.window_states:
+            del self.window_states[window_id]
+            changed = True
+        if window_id in self.window_display_names:
+            del self.window_display_names[window_id]
+            changed = True
+        for uid, offsets in list(self.user_window_offsets.items()):
+            if window_id in offsets:
+                del offsets[window_id]
+                changed = True
+                if not offsets:
+                    del self.user_window_offsets[uid]
+        if changed:
+            self._save_state()
+            logger.info("Purged window state for %s", window_id)
+
+    async def cleanup_dead_topic(self, chat_id: int, thread_id: int) -> bool:
+        """Tear down any binding whose chat_id+thread_id matches a dead topic.
+
+        Called from send-failure paths when Telegram returns "Message thread not
+        found" / "Topic_id_invalid". The 60s topic-existence probe can miss this
+        in private chats (Telegram returns ok=true for unpinAllForumTopicMessages
+        on private chats with arbitrary thread_ids). Returns True if any binding
+        was cleaned up.
+        """
+        cleaned = False
+        for user_id, t_id, wid in list(self.iter_thread_bindings()):
+            if t_id != thread_id:
+                continue
+            if self.resolve_chat_id(user_id, t_id) != chat_id:
+                continue
+            self.unbind_thread(user_id, t_id)
+            self.purge_window(wid)
+            await self.remove_session_map_entry(wid)
+            cleaned = True
+            logger.info(
+                "Auto-cleaned dead topic via send error: "
+                "user=%d thread=%d window_id=%s",
+                user_id,
+                t_id,
+                wid,
+            )
+        return cleaned
+
+    async def remove_session_map_entry(self, window_id: str) -> None:
+        """Delete the session_map.json entry for a window.
+
+        session_map.json is owned by the Claude Code SessionStart hook, but
+        the hook does not emit a "session ended" event, so killed windows
+        leave orphan entries. We rewrite the file atomically.
+        """
+        if not config.session_map_file.exists():
+            return
+        try:
+            async with aiofiles.open(config.session_map_file, "r") as f:
+                content = await f.read()
+            session_map = json.loads(content)
+        except (json.JSONDecodeError, OSError):
+            return
+
+        key = f"{config.tmux_session_name}:{window_id}"
+        if key not in session_map:
+            return
+        del session_map[key]
+        atomic_write_json(config.session_map_file, session_map)
+        logger.info("Removed session_map entry: %s", key)
+
     # --- User window offset management ---
 
     def update_user_window_offset(

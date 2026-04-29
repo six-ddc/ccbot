@@ -40,7 +40,10 @@ logger = logging.getLogger(__name__)
 STATUS_POLL_INTERVAL = 1.0  # seconds - faster response (rate limiting at send layer)
 
 # Topic existence probe interval
-TOPIC_CHECK_INTERVAL = 60.0  # seconds
+TOPIC_CHECK_INTERVAL = 5.0  # seconds
+
+# Substrings in BadRequest messages that indicate the topic is gone
+_TOPIC_GONE_MARKERS = ("Topic_id_invalid", "Message thread not found")
 
 
 async def update_status_message(
@@ -138,12 +141,14 @@ async def status_poll_loop(bot: Bot) -> None:
                             message_thread_id=thread_id,
                         )
                     except BadRequest as e:
-                        if "Topic_id_invalid" in str(e):
+                        if any(m in str(e) for m in _TOPIC_GONE_MARKERS):
                             # Topic deleted — kill window, unbind, and clean up state
                             w = await tmux_manager.find_window_by_id(wid)
                             if w:
                                 await tmux_manager.kill_window(w.window_id)
                             session_manager.unbind_thread(user_id, thread_id)
+                            session_manager.purge_window(wid)
+                            await session_manager.remove_session_map_entry(wid)
                             await clear_topic_state(user_id, thread_id, bot)
                             logger.info(
                                 "Topic deleted: killed window_id '%s' and "
@@ -171,6 +176,8 @@ async def status_poll_loop(bot: Bot) -> None:
                     w = await tmux_manager.find_window_by_id(wid)
                     if not w:
                         session_manager.unbind_thread(user_id, thread_id)
+                        session_manager.purge_window(wid)
+                        await session_manager.remove_session_map_entry(wid)
                         await clear_topic_state(user_id, thread_id, bot)
                         logger.info(
                             "Cleaned up stale binding: user=%d thread=%d window_id=%s",

@@ -51,6 +51,29 @@ PARSE_MODE = "MarkdownV2"
 NO_LINK_PREVIEW = LinkPreviewOptions(is_disabled=True)
 
 
+# Substrings in Telegram errors that mean the topic/thread is gone
+_TOPIC_GONE_MARKERS = ("Topic_id_invalid", "Message thread not found")
+
+
+async def _maybe_cleanup_dead_topic(
+    chat_id: int, kwargs: dict[str, Any], err: BaseException
+) -> None:
+    """If the error indicates a dead forum topic, tear down the binding.
+
+    Called from send fallbacks after both attempts have failed. Lazy-imports
+    session_manager to avoid a circular import at module load.
+    """
+    msg = str(err)
+    if not any(m in msg for m in _TOPIC_GONE_MARKERS):
+        return
+    thread_id = kwargs.get("message_thread_id")
+    if thread_id is None:
+        return
+    from ..session import session_manager  # lazy: avoid circular import
+
+    await session_manager.cleanup_dead_topic(int(chat_id), int(thread_id))
+
+
 async def send_with_fallback(
     bot: Bot,
     chat_id: int,
@@ -81,6 +104,7 @@ async def send_with_fallback(
             raise
         except Exception as e:
             logger.error(f"Failed to send message to {chat_id}: {e}")
+            await _maybe_cleanup_dead_topic(chat_id, kwargs, e)
             return None
 
 
@@ -196,3 +220,4 @@ async def safe_send(
             raise
         except Exception as e:
             logger.error(f"Failed to send message to {chat_id}: {e}")
+            await _maybe_cleanup_dead_topic(chat_id, kwargs, e)
