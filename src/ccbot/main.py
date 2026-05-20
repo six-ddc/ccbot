@@ -58,7 +58,27 @@ def main() -> None:
     from .bot import create_bot
 
     application = create_bot()
-    application.run_polling(allowed_updates=["message", "callback_query"])
+    # Subscribe to a broader set of update types than the original
+    # ["message", "callback_query"]. Empirically, Telegram stopped delivering
+    # forum_topic_edited service messages (which arrive as `message` updates
+    # per the docs) when only "message" and "callback_query" were subscribed —
+    # observed silently dropped renames between May 15 and May 20, 2026, even
+    # though Telegram's own docs list forum_topic_edited as a Message field.
+    # Adding the broader set below restored delivery. Suspect cause: a
+    # server-side change where Telegram now treats minimal allowed_updates as
+    # a signal to suppress peripheral service messages.
+    application.run_polling(
+        allowed_updates=[
+            "message",
+            "edited_message",
+            "channel_post",
+            "edited_channel_post",
+            "callback_query",
+            "my_chat_member",
+            "chat_member",
+            "chat_join_request",
+        ]
+    )
 
 
 if __name__ == "__main__":
