@@ -520,7 +520,10 @@ async def forward_command_handler(
     logger.info(
         "Forwarding command %s to window %s (user=%d)", cc_slash, display, user.id
     )
-    await update.message.chat.send_action(ChatAction.TYPING)
+    try:
+        await update.message.chat.send_action(ChatAction.TYPING)
+    except Exception as e:
+        logger.warning("send_action(TYPING) failed, continuing to injection: %s", e)
     success, message = await session_manager.send_to_window(wid, cc_slash)
     if success:
         await safe_reply(update.message, f"⚡ [{display}] Sent: {cc_slash}")
@@ -619,7 +622,10 @@ async def photo_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
     else:
         text_to_send = f"(image attached: {file_path})"
 
-    await update.message.chat.send_action(ChatAction.TYPING)
+    try:
+        await update.message.chat.send_action(ChatAction.TYPING)
+    except Exception as e:
+        logger.warning("send_action(TYPING) failed, continuing to injection: %s", e)
     clear_status_msg_info(user.id, thread_id)
 
     success, message = await session_manager.send_to_window(wid, text_to_send)
@@ -696,7 +702,10 @@ async def voice_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         await safe_reply(update.message, f"⚠ Transcription failed: {e}")
         return
 
-    await update.message.chat.send_action(ChatAction.TYPING)
+    try:
+        await update.message.chat.send_action(ChatAction.TYPING)
+    except Exception as e:
+        logger.warning("send_action(TYPING) failed, continuing to injection: %s", e)
     clear_status_msg_info(user.id, thread_id)
 
     success, message = await session_manager.send_to_window(wid, text)
@@ -947,25 +956,43 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         return
 
-    await update.message.chat.send_action(ChatAction.TYPING)
-    await enqueue_status_update(context.bot, user.id, wid, None, thread_id=thread_id)
+    # Cosmetic / outbound-Telegram steps below must NEVER abort the handler
+    # before the message is injected into tmux. On flaky networks the "typing…"
+    # indicator (send_action) and status enqueue time out (telegram.error.TimedOut);
+    # since the update offset has already advanced, Telegram won't redeliver, so
+    # any exception here silently drops the user's message and forces a resend.
+    try:
+        await update.message.chat.send_action(ChatAction.TYPING)
+    except Exception as e:
+        logger.warning("send_action(TYPING) failed, continuing to injection: %s", e)
+    try:
+        await enqueue_status_update(
+            context.bot, user.id, wid, None, thread_id=thread_id
+        )
+    except Exception as e:
+        logger.warning("enqueue_status_update failed, continuing to injection: %s", e)
 
     # Cancel any running bash capture — new message pushes pane content down
     _cancel_bash_capture(user.id, thread_id)
 
     # Check for pending interactive UI before sending text.
     # This catches UIs (permission prompts, etc.) that status polling might have missed.
-    pane_text = await tmux_manager.capture_pane(w.window_id)
-    if pane_text and is_interactive_ui(pane_text):
-        # UI detected — show it to user, then send text (acts as Enter)
-        logger.info(
-            "Detected pending interactive UI before sending text (user=%d, thread=%s)",
-            user.id,
-            thread_id,
-        )
-        await handle_interactive_ui(context.bot, user.id, wid, thread_id)
-        # Small delay to let UI render in Telegram before text arrives
-        await asyncio.sleep(0.3)
+    # capture_pane is a local tmux call, but handle_interactive_ui hits the network —
+    # isolate the whole block so a failure can't prevent the injection below.
+    try:
+        pane_text = await tmux_manager.capture_pane(w.window_id)
+        if pane_text and is_interactive_ui(pane_text):
+            # UI detected — show it to user, then send text (acts as Enter)
+            logger.info(
+                "Detected pending interactive UI before sending text (user=%d, thread=%s)",
+                user.id,
+                thread_id,
+            )
+            await handle_interactive_ui(context.bot, user.id, wid, thread_id)
+            # Small delay to let UI render in Telegram before text arrives
+            await asyncio.sleep(0.3)
+    except Exception as e:
+        logger.warning("interactive-UI precheck failed, continuing to injection: %s", e)
 
     success, message = await session_manager.send_to_window(wid, text)
     if not success:
