@@ -272,18 +272,34 @@ class SessionMonitor:
         Reads from last byte offset. Emits both intermediate
         (stop_reason=null) and complete messages.
 
+        For already-tracked sessions, uses stored file paths (fast path).
+        Only runs the expensive scan_projects() when there are new
+        session IDs not yet tracked.
+
         Args:
             active_session_ids: Set of session IDs currently in session_map
         """
         new_messages = []
 
-        # Scan projects to get available session files
-        sessions = await self.scan_projects()
+        # Fast path: build session list from already-tracked sessions
+        tracked_ids = set(self.state.tracked_sessions.keys())
+        sessions: list[SessionInfo] = []
+        for sid in active_session_ids & tracked_ids:
+            tracked = self.state.get_session(sid)
+            if tracked and tracked.file_path:
+                fp = Path(tracked.file_path)
+                if fp.exists():
+                    sessions.append(SessionInfo(session_id=sid, file_path=fp))
 
-        # Only process sessions that are in session_map
+        # Only scan projects if there are untracked active sessions
+        untracked = active_session_ids - tracked_ids
+        if untracked:
+            scanned = await self.scan_projects()
+            for si in scanned:
+                if si.session_id in untracked:
+                    sessions.append(si)
+
         for session_info in sessions:
-            if session_info.session_id not in active_session_ids:
-                continue
             try:
                 tracked = self.state.get_session(session_info.session_id)
 
