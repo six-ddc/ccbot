@@ -261,6 +261,23 @@ def hook_main() -> None:
                     del session_map[old_key]
                     logger.info("Removed old-format session_map key: %s", old_key)
 
+                # Clean up entries for the same window_id under different
+                # session name prefixes. Grouped tmux sessions (created via
+                # `tmux new-session -t`) share windows, so the hook can fire
+                # under any session name, leaving stale entries under other
+                # prefixes that the monitor may read.
+                for key in list(session_map.keys()):
+                    if key != session_window_key:
+                        parts = key.split(":", 1)
+                        if len(parts) == 2 and parts[1] == window_id:
+                            del session_map[key]
+                            logger.info(
+                                "Removed duplicate session_map entry: %s "
+                                "(same window_id %s)",
+                                key,
+                                window_id,
+                            )
+
                 from .utils import atomic_write_json
 
                 atomic_write_json(map_file, session_map)

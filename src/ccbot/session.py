@@ -363,11 +363,14 @@ class SessionManager:
         )
 
     async def _cleanup_stale_session_map_entries(self, live_ids: set[str]) -> None:
-        """Remove entries for tmux windows that no longer exist.
+        """Remove stale and duplicate entries from session_map.json.
 
-        When windows are closed externally (outside ccbot), session_map.json
-        retains orphan references. This cleanup removes entries whose window_id
-        is not in the current set of live tmux windows.
+        Handles two cases:
+        1. Stale windows: entries whose window_id no longer exists in tmux.
+        2. Duplicate window_ids: grouped tmux sessions can cause multiple entries
+           for the same window_id under different session name prefixes. For each
+           window_id with duplicates, keep the entry whose CWD matches the live
+           tmux window's CWD (falling back to the most recently modified JSONL).
         """
         if not config.session_map_file.exists():
             return
@@ -378,25 +381,91 @@ class SessionManager:
         except (json.JSONDecodeError, OSError):
             return
 
-        prefix = f"{config.tmux_session_name}:"
-        stale_keys = [
-            key
-            for key in session_map
-            if key.startswith(prefix)
-            and self._is_window_id(key[len(prefix) :])
-            and key[len(prefix) :] not in live_ids
-        ]
-        if not stale_keys:
+        # Build live window CWD lookup
+        windows = await tmux_manager.list_windows()
+        live_cwds: dict[str, str] = {}  # window_id -> resolved cwd
+        for w in windows:
+            try:
+                live_cwds[w.window_id] = str(Path(w.cwd).resolve())
+            except (OSError, ValueError):
+                live_cwds[w.window_id] = w.cwd
+
+        # Collect entries per window_id
+        per_window: dict[str, list[str]] = {}  # window_id -> [keys]
+        keys_to_remove: list[str] = []
+
+        for key in session_map:
+            parts = key.split(":", 1)
+            if len(parts) != 2:
+                continue
+            window_id = parts[1]
+            if not self._is_window_id(window_id):
+                continue
+            if window_id not in live_ids:
+                keys_to_remove.append(key)
+            else:
+                per_window.setdefault(window_id, []).append(key)
+
+        # Deduplicate: for window_ids with multiple entries, keep the best one
+        for window_id, keys in per_window.items():
+            if len(keys) <= 1:
+                continue
+            live_cwd = live_cwds.get(window_id, "")
+
+            # Filter to entries whose CWD matches the live window
+            cwd_matches: list[str] = []
+            for key in keys:
+                entry_cwd = session_map[key].get("cwd", "")
+                try:
+                    norm_cwd = str(Path(entry_cwd).resolve())
+                except (OSError, ValueError):
+                    norm_cwd = entry_cwd
+                if norm_cwd == live_cwd:
+                    cwd_matches.append(key)
+
+            candidates = cwd_matches if cwd_matches else keys
+
+            # Among candidates, pick the one with the newest JSONL file
+            best_key = candidates[0]
+            best_mtime = 0.0
+            for key in candidates:
+                sid = session_map[key].get("session_id", "")
+                cwd = session_map[key].get("cwd", "")
+                fpath = self._build_session_file_path(sid, cwd)
+                if fpath and fpath.exists():
+                    try:
+                        mtime = fpath.stat().st_mtime
+                        if mtime > best_mtime:
+                            best_mtime = mtime
+                            best_key = key
+                    except OSError:
+                        pass
+
+            for key in keys:
+                if key != best_key:
+                    keys_to_remove.append(key)
+                    logger.info(
+                        "Removing duplicate session_map entry: %s "
+                        "(keeping %s for window %s)",
+                        key,
+                        best_key,
+                        window_id,
+                    )
+
+        if not keys_to_remove:
             return
 
-        for key in stale_keys:
+        for key in keys_to_remove:
             del session_map[key]
-            logger.info("Removed stale session_map entry: %s", key)
+            if key not in per_window.get("", []):
+                # Only log stale entries not already logged above
+                if not any(key in keys for keys in per_window.values()):
+                    logger.info("Removed stale session_map entry: %s", key)
 
         atomic_write_json(config.session_map_file, session_map)
         logger.info(
-            "Cleaned up %d stale session_map entries (windows no longer in tmux)",
-            len(stale_keys),
+            "Cleaned up %d session_map entries (stale + duplicates)",
+            len(keys_to_remove),
         )
 
     # --- Display name management ---
@@ -500,7 +569,8 @@ class SessionManager:
         """Read session_map.json and update window_states with new session associations.
 
         Keys in session_map are formatted as "tmux_session:window_id" (e.g. "ccbot:@12").
-        Only entries matching our tmux_session_name are processed.
+        Entries from ANY session name prefix are accepted because grouped tmux
+        sessions share windows, and the hook may write under any session name.
         Also cleans up window_states entries not in current session_map.
         Updates window_display_names from the "window_name" field in values.
         """
@@ -513,15 +583,15 @@ class SessionManager:
         except (json.JSONDecodeError, OSError):
             return
 
-        prefix = f"{config.tmux_session_name}:"
         valid_wids: set[str] = set()
         changed = False
 
         for key, info in session_map.items():
-            # Only process entries for our tmux session
-            if not key.startswith(prefix):
+            # Extract window_id from "session_name:window_id"
+            parts = key.split(":", 1)
+            if len(parts) != 2:
                 continue
-            window_id = key[len(prefix) :]
+            window_id = parts[1]
             if not self._is_window_id(window_id):
                 continue
             valid_wids.add(window_id)

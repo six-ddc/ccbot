@@ -373,13 +373,14 @@ class SessionMonitor:
         return new_messages
 
     async def _load_current_session_map(self) -> dict[str, str]:
-        """Load current session_map and return window_key -> session_id mapping.
+        """Load current session_map and return window_id -> session_id mapping.
 
         Keys in session_map are formatted as "tmux_session:window_id"
-        (e.g. "ccbot:@12"). Old-format keys ("ccbot:window_name") are also
-        accepted so that sessions running before a code upgrade continue
-        to be monitored until the hook re-fires with new format.
-        Only entries matching our tmux_session_name are processed.
+        (e.g. "ccbot:@12"). Entries from ANY session name prefix are
+        accepted because grouped tmux sessions (created via
+        `tmux new-session -t`) share windows, and the hook may write
+        entries under any of the group's session names.
+        Window IDs are globally unique in tmux, so there is no ambiguity.
         """
         window_to_session: dict[str, str] = {}
         if config.session_map_file.exists():
@@ -387,14 +388,20 @@ class SessionMonitor:
                 async with aiofiles.open(config.session_map_file, "r") as f:
                     content = await f.read()
                 session_map = json.loads(content)
-                prefix = f"{config.tmux_session_name}:"
                 for key, info in session_map.items():
-                    # Only process entries for our tmux session
-                    if not key.startswith(prefix):
+                    parts = key.split(":", 1)
+                    if len(parts) != 2:
                         continue
-                    window_key = key[len(prefix) :]
+                    window_key = parts[1]
+                    if not (
+                        window_key.startswith("@")
+                        and len(window_key) > 1
+                        and window_key[1:].isdigit()
+                    ):
+                        continue
                     session_id = info.get("session_id", "")
                     if session_id:
+                        # Last entry per window_id wins (newest hook write)
                         window_to_session[window_key] = session_id
             except (json.JSONDecodeError, OSError):
                 pass
