@@ -8,21 +8,25 @@ Provides background polling of terminal status lines for all active users:
   - Periodically probes topic existence via unpin_all_forum_topic_messages
     (silent no-op when no pins); cleans up deleted topics (kills tmux window
     + unbinds thread)
+  - Adaptive throttle for timer-based status lines to avoid Telegram rate limits
 
 Key components:
   - STATUS_POLL_INTERVAL: Polling frequency (1 second)
   - TOPIC_CHECK_INTERVAL: Topic existence probe frequency (60 seconds)
   - status_poll_loop: Background polling task
   - update_status_message: Poll and enqueue status updates
+  - _should_send_status: Adaptive throttle for timer status updates
 """
 
 import asyncio
 import logging
+import re
 import time
 
 from telegram import Bot
 from telegram.error import BadRequest
 
+from ..config import config
 from ..session import session_manager
 from ..terminal_parser import is_interactive_ui, parse_status_line
 from ..tmux_manager import tmux_manager
@@ -36,11 +40,93 @@ from .message_queue import enqueue_status_update, get_message_queue
 
 logger = logging.getLogger(__name__)
 
-# Status polling interval
-STATUS_POLL_INTERVAL = 1.0  # seconds - faster response (rate limiting at send layer)
+# Status polling interval — kept at 1s for fast interactive UI detection.
+# Timer-based status updates are throttled adaptively by _should_send_status().
+STATUS_POLL_INTERVAL = 1.0  # seconds
 
 # Topic existence probe interval
 TOPIC_CHECK_INTERVAL = 60.0  # seconds
+
+# ── Adaptive throttle for timer status lines ─────────────────────────────
+#
+# Claude Code shows a running timer in the status line (e.g. "Thinking… 5s",
+# "Bash echo hello 1m 30s").  Without throttling, every tick produces a
+# Telegram edit_message_text call (~60/min), which quickly hits Telegram's
+# rate limit and causes the bot to go silent for extended periods.
+#
+# Strategy: detect timer suffixes, then increase the update interval the
+# longer the same status persists.  Default tiers (configurable via
+# STATUS_THROTTLE_INTERVALS env var, comma-separated):
+#   0–10 s  →  every 1 s   (real-time, meaningful for short tasks)
+#   10–60 s →  every 5 s
+#   60 s+   →  every 30 s
+#
+# Non-timer status changes (e.g. "Reading file" → "Writing file") always
+# send immediately.  The poll interval itself stays at 1 s so interactive
+# UI detection is never delayed.
+
+# Matches a timer in the status line.  Claude Code uses two formats:
+#   1. Bare suffix:        "Thinking… 5s"  or  "Bash echo hello 1m 30s"
+#   2. Inside parentheses: "Drizzling… (54s · ↓ 776 tokens)"
+#                          "Coalescing… (25m 8s · ↓ 5.8k tokens · thought for 6s)"
+# Both may include optional trailing text (parenthetical or · metadata).
+_TIMER_RE = re.compile(
+    r"\s+(?:"
+    r"\((?:\d+m\s*)?\d+s\b[^)]*\)"   # (54s · …) or (1m 30s · …)
+    r"|"
+    r"(?:(?:\d+m\s*)?\d+s|\d+m)"      # bare 5s / 1m 30s / 2m
+    r"(?:\s+\(.*\))?"                  # optional trailing (Esc to interrupt)
+    r")\s*$"
+)
+
+# (user_id, thread_id_or_0) → (base_text, first_seen, last_sent)
+_timer_throttle: dict[tuple[int, int], tuple[str, float, float]] = {}
+
+
+def _should_send_status(
+    user_id: int, thread_id: int | None, status_text: str
+) -> bool:
+    """Decide whether a status update should be enqueued.
+
+    For non-timer status lines, always returns True.
+    For timer status lines, applies adaptive interval based on elapsed time.
+    """
+    key = (user_id, thread_id or 0)
+    now = time.monotonic()
+
+    m = _TIMER_RE.search(status_text)
+    if not m:
+        # Not a timer — always send, clear any tracked state
+        _timer_throttle.pop(key, None)
+        return True
+
+    # Extract base text (everything before the timer suffix)
+    base = status_text[: m.start()].rstrip()
+
+    prev = _timer_throttle.get(key)
+    if prev is None or prev[0] != base:
+        # New status or base text changed — reset and send immediately
+        _timer_throttle[key] = (base, now, now)
+        return True
+
+    _, first_seen, last_sent = prev
+    elapsed = now - first_seen
+    since_sent = now - last_sent
+
+    # Adaptive interval: widen as the timer runs longer
+    t1, t2, t3 = config.status_throttle_intervals
+    if elapsed <= 10:
+        min_interval = t1    # real-time for the first 10 seconds
+    elif elapsed <= 60:
+        min_interval = t2    # every few seconds up to 1 minute
+    else:
+        min_interval = t3    # reduced frequency for long-running tasks
+
+    if since_sent >= min_interval:
+        _timer_throttle[key] = (base, first_seen, now)
+        return True
+
+    return False
 
 
 async def update_status_message(
@@ -109,6 +195,8 @@ async def update_status_message(
     status_line = parse_status_line(pane_text)
 
     if status_line:
+        if not _should_send_status(user_id, thread_id, status_line):
+            return
         await enqueue_status_update(
             bot,
             user_id,
