@@ -14,6 +14,8 @@ Core responsibilities:
     to Claude Code as file paths (photo_handler).
   - Voice handling: voice messages are transcribed via OpenAI API and
     forwarded as text (voice_handler).
+  - Document handling: files (PDF, etc.) are downloaded and forwarded
+    to Claude Code as file paths (document_handler in handlers.document).
   - Automatic cleanup: closing a topic kills the associated window
     (topic_closed_handler). Unsupported content (stickers, etc.)
     is rejected with a warning (unsupported_content_handler).
@@ -102,6 +104,7 @@ from .handlers.directory_browser import (
     clear_window_picker_state,
 )
 from .handlers.cleanup import clear_topic_state
+from .handlers.document import document_handler
 from .handlers.history import send_history
 from .handlers.interactive_ui import (
     INTERACTIVE_TOOL_NAMES,
@@ -554,7 +557,7 @@ async def unsupported_content_handler(
     logger.debug("Unsupported content from user %d", user.id)
     await safe_reply(
         update.message,
-        "⚠ Only text, photo, and voice messages are supported. Stickers, video, and other media cannot be forwarded to Claude Code.",
+        "⚠ Only text, photo, voice, and document (file) messages are supported. Stickers, video, and other media cannot be forwarded to Claude Code.",
     )
 
 
@@ -1940,6 +1943,8 @@ def create_bot() -> Application:
     application.add_handler(MessageHandler(filters.PHOTO, photo_handler))
     # Voice: transcribe via OpenAI and forward text to Claude Code
     application.add_handler(MessageHandler(filters.VOICE, voice_handler))
+    # Documents (PDF, etc.): download and forward file path to Claude Code
+    application.add_handler(MessageHandler(filters.Document.ALL, document_handler))
     # Catch-all: non-text content (stickers, video, etc.)
     application.add_handler(
         MessageHandler(
