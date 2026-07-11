@@ -106,6 +106,12 @@ class Config:
         self.openai_base_url: str = os.getenv(
             "OPENAI_BASE_URL", "https://api.openai.com/v1"
         )
+        # Transcription model — override when pointing OPENAI_BASE_URL at an
+        # OpenAI-compatible backend that serves different model names (e.g. a
+        # local Whisper server such as Speaches). Default: OpenAI's hosted model.
+        self.transcribe_model: str = os.getenv(
+            "CCBOT_TRANSCRIBE_MODEL", "gpt-4o-transcribe"
+        )
 
         # Scrub sensitive vars from os.environ so child processes never inherit them.
         # Values are already captured in Config attributes above.

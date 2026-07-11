@@ -1,7 +1,9 @@
 """Voice-to-text transcription via OpenAI's audio API.
 
-Provides a single async function to transcribe voice messages using
-the gpt-4o-transcribe model. Uses httpx directly (no OpenAI SDK needed).
+Provides a single async function to transcribe voice messages using a
+configurable model (default: gpt-4o-transcribe). Works with any
+OpenAI-compatible /audio/transcriptions endpoint. Uses httpx directly
+(no OpenAI SDK needed).
 
 Key function: transcribe_voice(ogg_data) -> str
 """
@@ -38,7 +40,7 @@ async def transcribe_voice(ogg_data: bytes) -> str:
         url,
         headers={"Authorization": f"Bearer {config.openai_api_key}"},
         files={"file": ("voice.ogg", ogg_data, "audio/ogg")},
-        data={"model": "gpt-4o-transcribe"},
+        data={"model": config.transcribe_model},
     )
     response.raise_for_status()
 
