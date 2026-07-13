@@ -57,6 +57,29 @@ else
     echo "No ccbot process running in $TARGET"
 fi
 
+# Sweep any orphan ccbot processes elsewhere on the host (e.g. another tmux
+# server). Multiple instances polling the same bot token compete for updates
+# and silently break command routing.
+ORPHAN_PIDS=$(pgrep -f '\.venv/bin/ccbot' | grep -vxF "$$" || true)
+# Exclude pids inside our target pane's process tree (already handled above)
+if [ -n "$ORPHAN_PIDS" ]; then
+    OWN_TREE=$(pstree -p "$PANE_PID" 2>/dev/null | grep -oE '\([0-9]+\)' | tr -d '()' || true)
+    for pid in $ORPHAN_PIDS; do
+        if ! echo "$OWN_TREE" | grep -qx "$pid"; then
+            echo "Killing orphan ccbot process $pid (outside $TARGET)..."
+            kill "$pid" 2>/dev/null || true
+        fi
+    done
+    sleep 1
+    # Anything still alive — SIGKILL
+    for pid in $ORPHAN_PIDS; do
+        if kill -0 "$pid" 2>/dev/null; then
+            echo "Orphan $pid still alive, SIGKILL..."
+            kill -9 "$pid" 2>/dev/null || true
+        fi
+    done
+fi
+
 # Brief pause to let the shell settle
 sleep 1
 
