@@ -215,7 +215,16 @@ def hook_main() -> None:
             raw_output,
         )
         return
-    tmux_session_name, window_id, window_name = parts
+    _raw_session_name, window_id, window_name = parts
+    # Force canonical tmux session name from config (TMUX_SESSION_NAME env).
+    # When hook runs in a pane attached via a grouped session (e.g.
+    # `tmux new -t ccbot -s view-A`), tmux reports the grouped name
+    # ("view-A") instead of the canonical one ("ccbot"). That breaks
+    # session_monitor's `startswith("ccbot:")` filter, and recv-direction
+    # forwarding (JSONL -> Telegram) silently stops working.
+    # Grouped sessions share the same window set, so window_id is the same
+    # across all views; always writing the canonical prefix is unambiguous.
+    tmux_session_name = os.environ.get("TMUX_SESSION_NAME", "ccbot")
     # Key uses window_id for uniqueness
     session_window_key = f"{tmux_session_name}:{window_id}"
 
