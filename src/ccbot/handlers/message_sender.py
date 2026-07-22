@@ -1,7 +1,10 @@
 """Safe message sending helpers with MarkdownV2 fallback.
 
 Provides utility functions for sending Telegram messages with automatic
-format conversion and fallback to plain text on failure.
+format conversion, falling back to plain text only when Telegram rejects the
+formatting (BadRequest) — never on an ambiguous transient error such as
+TimedOut, which may already have been delivered and would otherwise produce a
+duplicate message.
 
 Uses telegramify-markdown for MarkdownV2 formatting.
 
@@ -21,7 +24,7 @@ import logging
 from typing import Any
 
 from telegram import Bot, InputMediaPhoto, LinkPreviewOptions, Message
-from telegram.error import RetryAfter
+from telegram.error import BadRequest, RetryAfter
 
 from ..markdown_v2 import convert_markdown
 from ..transcript_parser import TranscriptParser
@@ -72,7 +75,9 @@ async def send_with_fallback(
         )
     except RetryAfter:
         raise
-    except Exception:
+    except BadRequest:
+        # Telegram rejected the formatted message (e.g. invalid MarkdownV2), so
+        # it was NOT delivered — retry once as plain text.
         try:
             return await bot.send_message(
                 chat_id=chat_id, text=strip_sentinels(text), **kwargs
@@ -82,6 +87,16 @@ async def send_with_fallback(
         except Exception as e:
             logger.error(f"Failed to send message to {chat_id}: {e}")
             return None
+    except Exception as e:
+        # Any other error (TimedOut, NetworkError, ...) is ambiguous: on a slow
+        # or flaky connection the formatted send may already have reached
+        # Telegram before the client raised. Retrying would deliver a duplicate
+        # (one formatted copy + one plain), so log and give up instead.
+        logger.warning(
+            f"Send to {chat_id} raised {type(e).__name__}; not retrying to "
+            f"avoid a possible duplicate: {e}"
+        )
+        return None
 
 
 async def send_photo(
@@ -137,7 +152,8 @@ async def safe_reply(message: Message, text: str, **kwargs: Any) -> Message:
         )
     except RetryAfter:
         raise
-    except Exception:
+    except BadRequest:
+        # Formatting rejected → not delivered; retry once as plain text.
         try:
             return await message.reply_text(strip_sentinels(text), **kwargs)
         except RetryAfter:
@@ -145,6 +161,14 @@ async def safe_reply(message: Message, text: str, **kwargs: Any) -> Message:
         except Exception as e:
             logger.error(f"Failed to reply: {e}")
             raise
+    except Exception as e:
+        # Ambiguous error (e.g. TimedOut): the formatted reply may already have
+        # been delivered. Don't retry (avoids a duplicate); propagate instead.
+        logger.warning(
+            f"Reply raised {type(e).__name__}; not retrying to avoid a "
+            f"possible duplicate: {e}"
+        )
+        raise
 
 
 async def safe_edit(target: Any, text: str, **kwargs: Any) -> None:
@@ -158,13 +182,22 @@ async def safe_edit(target: Any, text: str, **kwargs: Any) -> None:
         )
     except RetryAfter:
         raise
-    except Exception:
+    except BadRequest:
+        # Formatting rejected → the edit was not applied; retry as plain text.
         try:
             await target.edit_message_text(strip_sentinels(text), **kwargs)
         except RetryAfter:
             raise
         except Exception as e:
             logger.error("Failed to edit message: %s", e)
+    except Exception as e:
+        # Ambiguous error (e.g. TimedOut): the edit may already have applied.
+        # Don't retry — a plain-text retry would drop the formatting.
+        logger.warning(
+            "Edit raised %s; not retrying to avoid clobbering formatting: %s",
+            type(e).__name__,
+            e,
+        )
 
 
 async def safe_send(
@@ -187,7 +220,8 @@ async def safe_send(
         )
     except RetryAfter:
         raise
-    except Exception:
+    except BadRequest:
+        # Formatting rejected → not delivered; retry once as plain text.
         try:
             await bot.send_message(
                 chat_id=chat_id, text=strip_sentinels(text), **kwargs
@@ -196,3 +230,10 @@ async def safe_send(
             raise
         except Exception as e:
             logger.error(f"Failed to send message to {chat_id}: {e}")
+    except Exception as e:
+        # Ambiguous error (e.g. TimedOut): the formatted send may already have
+        # reached Telegram. Retrying would deliver a duplicate, so don't.
+        logger.warning(
+            f"Send to {chat_id} raised {type(e).__name__}; not retrying to "
+            f"avoid a possible duplicate: {e}"
+        )
