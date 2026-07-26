@@ -43,34 +43,72 @@ In fact, CCBot itself was built this way — iterating on itself through Claude 
 
 ## Installation
 
-### Option 1: Install from GitHub (Recommended)
+### Option 1: Install from PyPI (Recommended)
 
 ```bash
-# Using uv (recommended)
-uv tool install git+https://github.com/six-ddc/ccmux.git
+# Using pip
+pip install ccbot
 
 # Or using pipx
-pipx install git+https://github.com/six-ddc/ccmux.git
+pipx install ccbot
 ```
 
-### Option 2: Install from source
+### Option 2: Install from source (your fork)
 
 ```bash
-git clone https://github.com/six-ddc/ccmux.git
-cd ccmux
-uv sync
+# Clone your fork
+git clone https://github.com/fayizfareed/agent-telegram.git
+cd agent-telegram
+
+# Create conda environment
+conda create -n ccbot python=3.12 -y
+conda activate ccbot
+
+# Install in development mode
+pip install -e .
 ```
+
+### Prerequisites
+
+- **tmux** — must be installed (`brew install tmux` or `conda install -c conda-forge tmux`)
+- **Claude Code** — the CLI tool (`claude`) must be installed
 
 ## Configuration
 
-**1. Create a Telegram bot and enable Threaded Mode:**
+**1. Create a Telegram bot:**
 
-1. Chat with [@BotFather](https://t.me/BotFather) to create a new bot and get your bot token
-2. Open @BotFather's profile page, tap **Open App** to launch the mini app
-3. Select your bot, then go to **Settings** > **Bot Settings**
-4. Enable **Threaded Mode**
+1. Chat with [@BotFather](https://t.me/BotFather) to create a new bot
+2. Send `/newbot` and follow the prompts
+3. Copy the bot token (looks like: `123456789:AAH...`)
 
-**2. Configure environment variables:**
+**2. Create a Telegram Forum Group:**
+
+1. Open Telegram → New Group
+2. Add yourself (or another account)
+3. Give it a name (e.g., "Claude Code Workspace")
+4. Open the group → Edit (pencil icon) → Topics → Enable Topics
+5. The group is now a forum with threads/topics
+
+**3. Add bot to the group:**
+
+1. Inside the group: Group Info → Add Members → Search your bot
+2. Add your bot to the group
+
+**4. Make bot an admin:**
+
+1. Group Info → Administrators → Add Administrator
+2. Enable:
+   - ✅ Manage Topics
+   - ✅ Send Messages
+   - ✅ Read Messages
+
+**5. Disable Bot Privacy (CRITICAL):**
+
+1. Open @BotFather
+2. Send `/mybots` → Select your bot
+3. Bot Settings → Group Privacy → Turn OFF
+
+**6. Configure environment variables:**
 
 Create `~/.ccbot/.env`:
 
