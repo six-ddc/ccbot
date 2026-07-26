@@ -322,3 +322,37 @@ Thanks to all the people who contribute! We encourage using Claude Code to colla
 <a href="https://github.com/six-ddc/ccmux/graphs/contributors">
   <img src="https://contrib.rocks/image?repo=six-ddc/ccmux" />
 </a>
+
+## Custom Launch Command for New Sessions
+
+When creating a new topic/session in Telegram, you can customize the Claude Code launch command by setting environment variables. This is useful when you need to:
+
+- Use a specific model
+- Pass custom environment variables (like ANTHROPIC_BASE_URL for litellm)
+- Enable sandbox mode for automated environments
+
+### Setting via Environment Variable
+
+Add to your `~/.ccbot/.env` file:
+
+```bash
+CLAUDE_COMMAND="ANTHROPIC_BASE_URL='http://localhost:4000' ANTHROPIC_API_KEY='test' claude"
+
+Setting via Shell Environment
+
+Or set it in your shell before starting ccbot:
+
+export CLAUDE_COMMAND="claude --model claude-3-opus-20240229"
+
+Examples
+
+Using litellm proxy:
+CLAUDE_COMMAND="ANTHROPIC_BASE_URL='http://localhost:4000' ANTHROPIC_API_KEY='test' claude"
+
+With specific model:
+CLAUDE_COMMAND="claude --model claude-3-opus-20240229"
+
+For automated environments:
+CLAUDE_COMMAND="IS_SANDBOX=1 claude --dangerously-skip-permissions"
+
+After setting the environment variable, restart ccbot for changes to take effect.
