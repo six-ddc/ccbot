@@ -46,13 +46,34 @@ class TestConvertMarkdown:
         result = convert_markdown(text)
         assert EXP_START not in result
         assert EXP_END not in result
-        assert ">quoted content||" in result
+        # Telegram requires "**>" (not plain ">") to open an *expandable*
+        # blockquote — otherwise the trailing "||" is an unmatched spoiler
+        # entity and Telegram rejects the whole message.
+        assert "**>quoted content||" in result
 
     def test_mixed_text_and_expandable_quote(self) -> None:
         text = f"before {EXP_START}inside quote{EXP_END} after"
         result = convert_markdown(text)
         assert EXP_START not in result
         assert EXP_END not in result
-        assert ">inside quote||" in result
+        assert "**>inside quote||" in result
         assert "before" in result
         assert "after" in result
+
+    def test_multiline_expandable_quote_only_first_line_marked(self) -> None:
+        text = f"{EXP_START}line one\nline two\nline three{EXP_END}"
+        result = convert_markdown(text)
+        assert "**>line one" in result
+        assert "\n>line two" in result
+        assert "\n>line three||" in result
+        # Only the first line carries the "**" expandability marker.
+        assert result.count("**>") == 1
+
+    def test_expandable_quote_truncation_keeps_expandable_marker(self) -> None:
+        text = f"{EXP_START}{'x' * 10000}{EXP_END}"
+        result = convert_markdown(text)
+        assert "**>" in result
+        assert result.index("**>") < 10
+        assert "\\(truncated\\)||" in result
+        # Rendered quote block must still fit Telegram's message limit.
+        assert len(result) < 4096
