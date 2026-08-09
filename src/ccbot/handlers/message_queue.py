@@ -405,14 +405,24 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
     #    (non-final) message was left over from the previous one. Applies
     #    whether this new task is itself secondary or the final answer: either
     #    way the old one is now superseded and safe to remove.
+    #
+    #    Left in place (not popped) until the delete actually succeeds or is
+    #    given up on: on RetryAfter we re-raise so _process_content_with_retry
+    #    retries this whole task, and the retry must still find the same
+    #    tracked message to delete — popping eagerly here would silently
+    #    orphan it (never deleted, never retried) under flood control.
     skey = (user_id, tid)
-    old_secondary = _secondary_msg_info.pop(skey, None)
+    old_secondary = _secondary_msg_info.get(skey)
     if old_secondary:
         old_msg_id, _old_wid = old_secondary
         try:
             await bot.delete_message(chat_id=chat_id, message_id=old_msg_id)
-        except Exception:
-            pass
+            _secondary_msg_info.pop(skey, None)
+        except RetryAfter:
+            raise
+        except Exception as e:
+            logger.debug("Failed to delete secondary message %d: %s", old_msg_id, e)
+            _secondary_msg_info.pop(skey, None)
 
     # 3. Send content messages, converting status message to first content part
     first_part = True

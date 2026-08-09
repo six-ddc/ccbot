@@ -9,6 +9,7 @@ being left untouched by that deletion, and clear_secondary_msg_info.
 from unittest.mock import AsyncMock, MagicMock, patch
 
 import pytest
+from telegram.error import RetryAfter
 
 from ccbot.handlers.message_queue import (
     MessageTask,
@@ -149,6 +150,55 @@ class TestSecondaryMessageRollingDelete:
         mock_bot.edit_message_text.assert_called_once()
         # Same message_id throughout — edited in place, tracking stays valid.
         assert _secondary_msg_info[(USER_ID, THREAD_ID)] == (100, "@1")
+
+    async def test_retry_after_on_delete_keeps_tracking_for_retry(
+        self, mock_bot: AsyncMock
+    ) -> None:
+        """A flood-controlled delete must not orphan the tracked message.
+
+        Regression test: popping _secondary_msg_info before the delete call
+        succeeded meant a RetryAfter (bare `except Exception: pass`) silently
+        dropped the delete and forgot the message — it was never cleaned up
+        by a later retry. The entry must survive so a retried call can still
+        find and delete it.
+        """
+        with (
+            patch("ccbot.handlers.message_queue.session_manager") as mock_sm,
+            patch("ccbot.handlers.message_queue.tmux_manager") as mock_tmux,
+        ):
+            mock_sm.resolve_chat_id.return_value = CHAT_ID
+            mock_tmux.find_window_by_id = AsyncMock(return_value=None)
+
+            await _process_content_task(mock_bot, USER_ID, _task("thinking", True))
+            assert _secondary_msg_info[(USER_ID, THREAD_ID)] == (100, "@1")
+
+            mock_bot.delete_message.side_effect = RetryAfter(5)
+            with pytest.raises(RetryAfter):
+                await _process_content_task(mock_bot, USER_ID, _task("tool_result", True))
+
+        # Still tracked (not silently dropped) so a retry can delete it.
+        assert _secondary_msg_info[(USER_ID, THREAD_ID)] == (100, "@1")
+
+    async def test_non_retryable_delete_failure_still_clears_tracking(
+        self, mock_bot: AsyncMock
+    ) -> None:
+        with (
+            patch("ccbot.handlers.message_queue.session_manager") as mock_sm,
+            patch("ccbot.handlers.message_queue.tmux_manager") as mock_tmux,
+        ):
+            mock_sm.resolve_chat_id.return_value = CHAT_ID
+            mock_tmux.find_window_by_id = AsyncMock(return_value=None)
+
+            await _process_content_task(mock_bot, USER_ID, _task("thinking", True))
+
+            mock_bot.delete_message.side_effect = Exception("message to delete not found")
+            second_sent = MagicMock()
+            second_sent.message_id = 101
+            mock_bot.send_message.return_value = second_sent
+            await _process_content_task(mock_bot, USER_ID, _task("tool_result", True))
+
+        # Gives up cleanly rather than retrying forever, and still tracks the new message.
+        assert _secondary_msg_info[(USER_ID, THREAD_ID)] == (101, "@1")
 
 
 class TestClearSecondaryMsgInfo:
