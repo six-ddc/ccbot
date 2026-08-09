@@ -101,6 +101,38 @@ class Config:
             os.getenv("CCBOT_SHOW_HIDDEN_DIRS", "").lower() == "true"
         )
 
+        # Topic allowlist: if non-empty, only these thread_ids are processed
+        # (everything else is dropped before any handler runs). Empty/unset
+        # means no restriction — lets several ccbot instances (e.g. on
+        # different servers) share one Telegram group, each owning a subset
+        # of topics, without fighting over topics that belong to another one.
+        topic_allowlist_str = os.getenv("CCBOT_TOPIC_ALLOWLIST", "")
+        try:
+            self.topic_allowlist: set[int] = {
+                int(t.strip()) for t in topic_allowlist_str.split(",") if t.strip()
+            }
+        except ValueError as e:
+            raise ValueError(
+                f"CCBOT_TOPIC_ALLOWLIST contains non-numeric value: {e}. "
+                "Expected comma-separated topic (thread) IDs."
+            ) from e
+
+        # Topics where Permission Prompt / Bash-approval UIs are auto-confirmed
+        # (Enter sent automatically, as if the default "Yes" were tapped)
+        # instead of being posted to the user. Scoped to just these two UI
+        # types — AskUserQuestion/ExitPlanMode/RestoreCheckpoint/Settings have
+        # no safe universal default and are always shown normally.
+        topic_auto_confirm_str = os.getenv("CCBOT_TOPIC_AUTO_CONFIRM", "")
+        try:
+            self.topic_auto_confirm: set[int] = {
+                int(t.strip()) for t in topic_auto_confirm_str.split(",") if t.strip()
+            }
+        except ValueError as e:
+            raise ValueError(
+                f"CCBOT_TOPIC_AUTO_CONFIRM contains non-numeric value: {e}. "
+                "Expected comma-separated topic (thread) IDs."
+            ) from e
+
         # OpenAI API for voice message transcription (optional)
         self.openai_api_key: str = os.getenv("OPENAI_API_KEY", "")
         self.openai_base_url: str = os.getenv(
@@ -125,6 +157,14 @@ class Config:
     def is_user_allowed(self, user_id: int) -> bool:
         """Check if a user is in the allowed list."""
         return user_id in self.allowed_users
+
+    def is_topic_allowed(self, thread_id: int) -> bool:
+        """Check if a topic is allowed. An empty allowlist allows all topics."""
+        return not self.topic_allowlist or thread_id in self.topic_allowlist
+
+    def is_topic_auto_confirm(self, thread_id: int) -> bool:
+        """Check if a topic has Permission Prompt / Bash-approval auto-confirm enabled."""
+        return thread_id in self.topic_auto_confirm
 
 
 config = Config()

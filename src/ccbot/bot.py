@@ -50,10 +50,12 @@ from telegram.constants import ChatAction
 from telegram.ext import (
     AIORateLimiter,
     Application,
+    ApplicationHandlerStop,
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
+    TypeHandler,
     filters,
 )
 
@@ -172,6 +174,30 @@ def _get_thread_id(update: Update) -> int | None:
     if tid is None or tid == 1:
         return None
     return tid
+
+
+def _topic_id_banner(thread_id: int) -> str:
+    """First-message banner showing this topic's thread_id.
+
+    Shown once, on the very first bot message in a newly-unbound topic —
+    needed to fill in CCBOT_TOPIC_ALLOWLIST / CCBOT_TOPIC_AUTO_CONFIRM
+    without digging through state.json or logs.
+    """
+    return f"📌 Topic ID: `{thread_id}` _(for CCBOT_TOPIC_ALLOWLIST)_\n\n"
+
+
+async def _topic_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Drop updates for topics not in CCBOT_TOPIC_ALLOWLIST before any other
+    handler sees them.
+
+    Registered in an earlier handler group (see create_bot) so it always runs
+    first; raising ApplicationHandlerStop stops PTB from dispatching this
+    update any further. No-op (allows everything) when the allowlist is
+    empty — the default, unrestricted behavior.
+    """
+    thread_id = _get_thread_id(update)
+    if thread_id is not None and not config.is_topic_allowed(thread_id):
+        raise ApplicationHandlerStop
 
 
 # --- Command handlers ---
@@ -912,6 +938,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 thread_id,
             )
             msg_text, keyboard, win_ids = build_window_picker(unbound)
+            msg_text = _topic_id_banner(thread_id) + msg_text
             if context.user_data is not None:
                 context.user_data[STATE_KEY] = STATE_SELECTING_WINDOW
                 context.user_data[UNBOUND_WINDOWS_KEY] = win_ids
@@ -928,6 +955,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         start_path = str(Path.cwd())
         msg_text, keyboard, subdirs = build_directory_browser(start_path)
+        msg_text = _topic_id_banner(thread_id) + msg_text
         if context.user_data is not None:
             context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
             context.user_data[BROWSE_PATH_KEY] = start_path
@@ -1253,6 +1281,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data[BROWSE_PAGE_KEY] = 0
 
         msg_text, keyboard, subdirs = build_directory_browser(new_path_str)
+        if pending_tid is not None:
+            msg_text = _topic_id_banner(pending_tid) + msg_text
         if context.user_data is not None:
             context.user_data[BROWSE_DIRS_KEY] = subdirs
         await safe_edit(query, msg_text, reply_markup=keyboard)
@@ -1281,6 +1311,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data[BROWSE_PAGE_KEY] = 0
 
         msg_text, keyboard, subdirs = build_directory_browser(parent_path)
+        if pending_tid is not None:
+            msg_text = _topic_id_banner(pending_tid) + msg_text
         if context.user_data is not None:
             context.user_data[BROWSE_DIRS_KEY] = subdirs
         await safe_edit(query, msg_text, reply_markup=keyboard)
@@ -1308,6 +1340,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data[BROWSE_PAGE_KEY] = pg
 
         msg_text, keyboard, subdirs = build_directory_browser(current_path, pg)
+        if pending_tid is not None:
+            msg_text = _topic_id_banner(pending_tid) + msg_text
         if context.user_data is not None:
             context.user_data[BROWSE_DIRS_KEY] = subdirs
         await safe_edit(query, msg_text, reply_markup=keyboard)
@@ -1527,6 +1561,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         clear_window_picker_state(context.user_data)
         start_path = str(Path.cwd())
         msg_text, keyboard, subdirs = build_directory_browser(start_path)
+        if pending_tid is not None:
+            # Edits the window-picker message in place — re-add the banner
+            # it originally carried, or it would disappear from the edit.
+            msg_text = _topic_id_banner(pending_tid) + msg_text
         if context.user_data is not None:
             context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
             context.user_data[BROWSE_PATH_KEY] = start_path
@@ -1802,6 +1840,12 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             # Enqueue content message task
             # Note: tool_result editing is handled inside _process_content_task
             # to ensure sequential processing with tool_use message sending
+            #
+            # Everything except the final assistant text answer (thinking,
+            # tool_use, tool_result, local_command, user-message echo) is
+            # "secondary" — it gets deleted once the next message for this
+            # topic arrives, so only the actual answer is left behind.
+            is_secondary = not (msg.role == "assistant" and msg.content_type == "text")
             await enqueue_content_message(
                 bot=bot,
                 user_id=user_id,
@@ -1812,6 +1856,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 text=msg.text,
                 thread_id=thread_id,
                 image_data=msg.image_data,
+                is_secondary=is_secondary,
             )
 
             # Update user's read offset to current file position
@@ -1909,6 +1954,10 @@ def create_bot() -> Application:
         .post_shutdown(post_shutdown)
         .build()
     )
+
+    # Topic allowlist gate — runs before everything else (earlier group), so
+    # a disallowed topic never reaches any other handler below.
+    application.add_handler(TypeHandler(Update, _topic_gate), group=-1)
 
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("history", history_command))

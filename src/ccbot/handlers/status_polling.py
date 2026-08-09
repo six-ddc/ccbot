@@ -23,8 +23,9 @@ import time
 from telegram import Bot
 from telegram.error import BadRequest
 
+from ..config import config
 from ..session import session_manager
-from ..terminal_parser import is_interactive_ui, parse_status_line
+from ..terminal_parser import extract_interactive_content, is_interactive_ui, parse_status_line
 from ..tmux_manager import tmux_manager
 from .interactive_ui import (
     clear_interactive_msg,
@@ -41,6 +42,12 @@ STATUS_POLL_INTERVAL = 1.0  # seconds - faster response (rate limiting at send l
 
 # Topic existence probe interval
 TOPIC_CHECK_INTERVAL = 60.0  # seconds
+
+# UI types with an unambiguous "approve" default (option 1 is pre-selected,
+# so sending Enter is exactly what tapping the card's Enter button would do).
+# AskUserQuestion/ExitPlanMode/RestoreCheckpoint/Settings are never
+# auto-confirmed — none of them has a universally safe default answer.
+AUTO_CONFIRM_UI_NAMES = frozenset({"PermissionPrompt", "BashApproval"})
 
 
 async def update_status_message(
@@ -92,15 +99,33 @@ async def update_status_message(
 
     # Check for permission prompt (interactive UI not triggered via JSONL)
     # ALWAYS check UI, regardless of skip_status
-    if should_check_new_ui and is_interactive_ui(pane_text):
-        logger.debug(
-            "Interactive UI detected in polling (user=%d, window=%s, thread=%s)",
-            user_id,
-            window_id,
-            thread_id,
-        )
-        await handle_interactive_ui(bot, user_id, window_id, thread_id)
-        return
+    if should_check_new_ui:
+        content = extract_interactive_content(pane_text)
+        if content:
+            if (
+                content.name in AUTO_CONFIRM_UI_NAMES
+                and thread_id is not None
+                and config.is_topic_auto_confirm(thread_id)
+            ):
+                logger.info(
+                    "Auto-confirming %s (user=%d, window=%s, thread=%s)",
+                    content.name,
+                    user_id,
+                    window_id,
+                    thread_id,
+                )
+                await tmux_manager.send_keys(
+                    w.window_id, "Enter", enter=False, literal=False
+                )
+                return
+            logger.debug(
+                "Interactive UI detected in polling (user=%d, window=%s, thread=%s)",
+                user_id,
+                window_id,
+                thread_id,
+            )
+            await handle_interactive_ui(bot, user_id, window_id, thread_id)
+            return
 
     # Normal status line check — skip if queue is non-empty
     if skip_status:

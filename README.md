@@ -97,6 +97,8 @@ ALLOWED_USERS=your_telegram_user_id
 | `CCBOT_SHOW_HIDDEN_DIRS` | `false` | Show hidden (dot) directories in directory browser |
 | `OPENAI_API_KEY` | _(none)_ | OpenAI API key for voice message transcription |
 | `OPENAI_BASE_URL` | `https://api.openai.com/v1` | OpenAI API base URL (for proxies or compatible APIs) |
+| `CCBOT_TOPIC_ALLOWLIST` | _(none, all allowed)_ | Comma-separated topic (thread) IDs this instance handles; other topics are ignored entirely. Lets several ccbot instances (e.g. on different servers) share one Telegram group, each owning a subset of topics |
+| `CCBOT_TOPIC_AUTO_CONFIRM` | _(none)_ | Comma-separated topic (thread) IDs where Permission Prompt / Bash-approval UIs are auto-confirmed (Enter sent automatically) instead of shown to the user. Does not apply to AskUserQuestion, ExitPlanMode, RestoreCheckpoint, or Settings |
 
 Message formatting is always HTML via `chatgpt-md-converter` (`chatgpt_md_converter` package).
 There is no runtime formatter switch to MarkdownV2.

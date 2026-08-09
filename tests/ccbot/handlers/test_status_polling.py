@@ -139,3 +139,95 @@ class TestStatusPollerSettingsDetection:
             assert keyboard is not None
             # Verify the message text contains model picker content
             assert "Select model" in call_kwargs["text"]
+
+
+@pytest.mark.usefixtures("_clear_interactive_state")
+class TestStatusPollerAutoConfirm:
+    """CCBOT_TOPIC_AUTO_CONFIRM: Permission Prompt / Bash-approval UIs get
+    Enter sent directly instead of being posted to Telegram."""
+
+    @pytest.mark.asyncio
+    async def test_permission_prompt_auto_confirmed_sends_enter_no_card(
+        self, mock_bot: AsyncMock, sample_pane_permission: str
+    ):
+        window_id = "@5"
+        mock_window = MagicMock()
+        mock_window.window_id = window_id
+
+        with (
+            patch("ccbot.handlers.status_polling.tmux_manager") as mock_tmux,
+            patch("ccbot.handlers.status_polling.config") as mock_config,
+            patch(
+                "ccbot.handlers.status_polling.handle_interactive_ui",
+                new_callable=AsyncMock,
+            ) as mock_handle_ui,
+        ):
+            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tmux.capture_pane = AsyncMock(return_value=sample_pane_permission)
+            mock_tmux.send_keys = AsyncMock()
+            mock_config.is_topic_auto_confirm.return_value = True
+
+            await update_status_message(
+                mock_bot, user_id=1, window_id=window_id, thread_id=42
+            )
+
+        mock_tmux.send_keys.assert_called_once_with(
+            window_id, "Enter", enter=False, literal=False
+        )
+        mock_handle_ui.assert_not_called()
+        mock_bot.send_message.assert_not_called()
+
+    @pytest.mark.asyncio
+    async def test_permission_prompt_not_auto_confirmed_shows_card(
+        self, mock_bot: AsyncMock, sample_pane_permission: str
+    ):
+        """Default (topic not in CCBOT_TOPIC_AUTO_CONFIRM) — normal card flow."""
+        window_id = "@5"
+        mock_window = MagicMock()
+        mock_window.window_id = window_id
+
+        with (
+            patch("ccbot.handlers.status_polling.tmux_manager") as mock_tmux,
+            patch(
+                "ccbot.handlers.status_polling.handle_interactive_ui",
+                new_callable=AsyncMock,
+            ) as mock_handle_ui,
+        ):
+            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tmux.capture_pane = AsyncMock(return_value=sample_pane_permission)
+            mock_handle_ui.return_value = True
+
+            await update_status_message(
+                mock_bot, user_id=1, window_id=window_id, thread_id=42
+            )
+
+        mock_handle_ui.assert_called_once_with(mock_bot, 1, window_id, 42)
+
+    @pytest.mark.asyncio
+    async def test_auto_confirm_does_not_apply_to_settings_ui(
+        self, mock_bot: AsyncMock, sample_pane_settings: str
+    ):
+        """AUTO_CONFIRM_UI_NAMES excludes Settings — always shown, never auto-sent."""
+        window_id = "@5"
+        mock_window = MagicMock()
+        mock_window.window_id = window_id
+
+        with (
+            patch("ccbot.handlers.status_polling.tmux_manager") as mock_tmux,
+            patch("ccbot.handlers.status_polling.config") as mock_config,
+            patch(
+                "ccbot.handlers.status_polling.handle_interactive_ui",
+                new_callable=AsyncMock,
+            ) as mock_handle_ui,
+        ):
+            mock_tmux.find_window_by_id = AsyncMock(return_value=mock_window)
+            mock_tmux.capture_pane = AsyncMock(return_value=sample_pane_settings)
+            mock_tmux.send_keys = AsyncMock()
+            mock_config.is_topic_auto_confirm.return_value = True
+
+            await update_status_message(
+                mock_bot, user_id=1, window_id=window_id, thread_id=42
+            )
+
+        mock_tmux.send_keys.assert_not_called()
+        mock_handle_ui.assert_called_once_with(mock_bot, 1, window_id, 42)
