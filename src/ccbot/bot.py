@@ -176,6 +176,16 @@ def _get_thread_id(update: Update) -> int | None:
     return tid
 
 
+def _topic_id_banner(thread_id: int) -> str:
+    """First-message banner showing this topic's thread_id.
+
+    Shown once, on the very first bot message in a newly-unbound topic —
+    needed to fill in CCBOT_TOPIC_ALLOWLIST / CCBOT_TOPIC_AUTO_CONFIRM
+    without digging through state.json or logs.
+    """
+    return f"📌 Topic ID: `{thread_id}` _(for CCBOT_TOPIC_ALLOWLIST)_\n\n"
+
+
 async def _topic_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     """Drop updates for topics not in CCBOT_TOPIC_ALLOWLIST before any other
     handler sees them.
@@ -928,6 +938,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
                 thread_id,
             )
             msg_text, keyboard, win_ids = build_window_picker(unbound)
+            msg_text = _topic_id_banner(thread_id) + msg_text
             if context.user_data is not None:
                 context.user_data[STATE_KEY] = STATE_SELECTING_WINDOW
                 context.user_data[UNBOUND_WINDOWS_KEY] = win_ids
@@ -944,6 +955,7 @@ async def text_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -> No
         )
         start_path = str(Path.cwd())
         msg_text, keyboard, subdirs = build_directory_browser(start_path)
+        msg_text = _topic_id_banner(thread_id) + msg_text
         if context.user_data is not None:
             context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
             context.user_data[BROWSE_PATH_KEY] = start_path
@@ -1269,6 +1281,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data[BROWSE_PAGE_KEY] = 0
 
         msg_text, keyboard, subdirs = build_directory_browser(new_path_str)
+        if pending_tid is not None:
+            msg_text = _topic_id_banner(pending_tid) + msg_text
         if context.user_data is not None:
             context.user_data[BROWSE_DIRS_KEY] = subdirs
         await safe_edit(query, msg_text, reply_markup=keyboard)
@@ -1297,6 +1311,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data[BROWSE_PAGE_KEY] = 0
 
         msg_text, keyboard, subdirs = build_directory_browser(parent_path)
+        if pending_tid is not None:
+            msg_text = _topic_id_banner(pending_tid) + msg_text
         if context.user_data is not None:
             context.user_data[BROWSE_DIRS_KEY] = subdirs
         await safe_edit(query, msg_text, reply_markup=keyboard)
@@ -1324,6 +1340,8 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
             context.user_data[BROWSE_PAGE_KEY] = pg
 
         msg_text, keyboard, subdirs = build_directory_browser(current_path, pg)
+        if pending_tid is not None:
+            msg_text = _topic_id_banner(pending_tid) + msg_text
         if context.user_data is not None:
             context.user_data[BROWSE_DIRS_KEY] = subdirs
         await safe_edit(query, msg_text, reply_markup=keyboard)
@@ -1543,6 +1561,10 @@ async def callback_handler(update: Update, context: ContextTypes.DEFAULT_TYPE) -
         clear_window_picker_state(context.user_data)
         start_path = str(Path.cwd())
         msg_text, keyboard, subdirs = build_directory_browser(start_path)
+        if pending_tid is not None:
+            # Edits the window-picker message in place — re-add the banner
+            # it originally carried, or it would disappear from the edit.
+            msg_text = _topic_id_banner(pending_tid) + msg_text
         if context.user_data is not None:
             context.user_data[STATE_KEY] = STATE_BROWSING_DIRECTORY
             context.user_data[BROWSE_PATH_KEY] = start_path
