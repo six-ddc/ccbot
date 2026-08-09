@@ -117,3 +117,46 @@ class TestConfigOpenAI:
         monkeypatch.setenv("OPENAI_API_KEY", "sk-secret")
         Config()
         assert os.environ.get("OPENAI_API_KEY") is None
+
+
+@pytest.mark.usefixtures("_base_env")
+class TestConfigTopicAllowlist:
+    def test_default_allows_all_topics(self, monkeypatch):
+        monkeypatch.delenv("CCBOT_TOPIC_ALLOWLIST", raising=False)
+        cfg = Config()
+        assert cfg.topic_allowlist == set()
+        assert cfg.is_topic_allowed(299) is True
+        assert cfg.is_topic_allowed(1) is True
+
+    def test_allowlist_restricts_to_listed_topics(self, monkeypatch):
+        monkeypatch.setenv("CCBOT_TOPIC_ALLOWLIST", "299, 305")
+        cfg = Config()
+        assert cfg.topic_allowlist == {299, 305}
+        assert cfg.is_topic_allowed(299) is True
+        assert cfg.is_topic_allowed(305) is True
+        assert cfg.is_topic_allowed(1) is False
+
+    def test_non_numeric_allowlist(self, monkeypatch):
+        monkeypatch.setenv("CCBOT_TOPIC_ALLOWLIST", "abc")
+        with pytest.raises(ValueError, match="CCBOT_TOPIC_ALLOWLIST"):
+            Config()
+
+
+@pytest.mark.usefixtures("_base_env")
+class TestConfigTopicAutoConfirm:
+    def test_default_disabled(self, monkeypatch):
+        monkeypatch.delenv("CCBOT_TOPIC_AUTO_CONFIRM", raising=False)
+        cfg = Config()
+        assert cfg.topic_auto_confirm == set()
+        assert cfg.is_topic_auto_confirm(299) is False
+
+    def test_auto_confirm_for_listed_topics(self, monkeypatch):
+        monkeypatch.setenv("CCBOT_TOPIC_AUTO_CONFIRM", "299")
+        cfg = Config()
+        assert cfg.is_topic_auto_confirm(299) is True
+        assert cfg.is_topic_auto_confirm(305) is False
+
+    def test_non_numeric_auto_confirm(self, monkeypatch):
+        monkeypatch.setenv("CCBOT_TOPIC_AUTO_CONFIRM", "xyz")
+        with pytest.raises(ValueError, match="CCBOT_TOPIC_AUTO_CONFIRM"):
+            Config()

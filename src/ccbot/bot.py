@@ -50,10 +50,12 @@ from telegram.constants import ChatAction
 from telegram.ext import (
     AIORateLimiter,
     Application,
+    ApplicationHandlerStop,
     CallbackQueryHandler,
     CommandHandler,
     ContextTypes,
     MessageHandler,
+    TypeHandler,
     filters,
 )
 
@@ -172,6 +174,20 @@ def _get_thread_id(update: Update) -> int | None:
     if tid is None or tid == 1:
         return None
     return tid
+
+
+async def _topic_gate(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Drop updates for topics not in CCBOT_TOPIC_ALLOWLIST before any other
+    handler sees them.
+
+    Registered in an earlier handler group (see create_bot) so it always runs
+    first; raising ApplicationHandlerStop stops PTB from dispatching this
+    update any further. No-op (allows everything) when the allowlist is
+    empty — the default, unrestricted behavior.
+    """
+    thread_id = _get_thread_id(update)
+    if thread_id is not None and not config.is_topic_allowed(thread_id):
+        raise ApplicationHandlerStop
 
 
 # --- Command handlers ---
@@ -1916,6 +1932,10 @@ def create_bot() -> Application:
         .post_shutdown(post_shutdown)
         .build()
     )
+
+    # Topic allowlist gate — runs before everything else (earlier group), so
+    # a disallowed topic never reaches any other handler below.
+    application.add_handler(TypeHandler(Update, _topic_gate), group=-1)
 
     application.add_handler(CommandHandler("start", start_command))
     application.add_handler(CommandHandler("history", history_command))
