@@ -86,9 +86,12 @@ _tool_msg_ids: dict[tuple[str, int, int], int] = {}
 # Status message tracking: (user_id, thread_id_or_0) -> (message_id, window_id, last_text)
 _status_msg_info: dict[tuple[int, int], tuple[int, str, str]] = {}
 
-# Last secondary (non-final) content message per topic, deleted once the
-# next message arrives: (user_id, thread_id_or_0) -> (message_id, window_id)
-_secondary_msg_info: dict[tuple[int, int], tuple[int, str]] = {}
+# Last secondary (non-final) content message(s) per topic, deleted once the
+# next message arrives: (user_id, thread_id_or_0) -> (message_ids, window_id).
+# A list because merged tasks (several secondary entries queued together get
+# folded into one MessageTask by _merge_content_tasks) or a paginated
+# local_command can produce more than one Telegram message per task.
+_secondary_msg_info: dict[tuple[int, int], tuple[list[int], str]] = {}
 
 # Flood control: user_id -> monotonic time when ban expires
 _flood_until: dict[int, float] = {}
@@ -406,27 +409,33 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
     #    whether this new task is itself secondary or the final answer: either
     #    way the old one is now superseded and safe to remove.
     #
-    #    Left in place (not popped) until the delete actually succeeds or is
-    #    given up on: on RetryAfter we re-raise so _process_content_with_retry
-    #    retries this whole task, and the retry must still find the same
-    #    tracked message to delete — popping eagerly here would silently
-    #    orphan it (never deleted, never retried) under flood control.
+    #    Remaining (not-yet-deleted) ids are written back before re-raising
+    #    RetryAfter, so _process_content_with_retry's retry of this whole
+    #    task resumes deleting exactly where it left off instead of losing
+    #    track of ids already popped — same reasoning as for a single id,
+    #    just extended to a list (see the flood-control regression test).
     skey = (user_id, tid)
     old_secondary = _secondary_msg_info.get(skey)
     if old_secondary:
-        old_msg_id, _old_wid = old_secondary
-        try:
-            await bot.delete_message(chat_id=chat_id, message_id=old_msg_id)
-            _secondary_msg_info.pop(skey, None)
-        except RetryAfter:
-            raise
-        except Exception as e:
-            logger.debug("Failed to delete secondary message %d: %s", old_msg_id, e)
-            _secondary_msg_info.pop(skey, None)
+        old_msg_ids, old_wid = old_secondary
+        remaining_ids = list(old_msg_ids)
+        while remaining_ids:
+            old_msg_id = remaining_ids[0]
+            try:
+                await bot.delete_message(chat_id=chat_id, message_id=old_msg_id)
+                remaining_ids.pop(0)
+            except RetryAfter:
+                _secondary_msg_info[skey] = (remaining_ids, old_wid)
+                raise
+            except Exception as e:
+                logger.debug("Failed to delete secondary message %d: %s", old_msg_id, e)
+                remaining_ids.pop(0)
+        _secondary_msg_info.pop(skey, None)
 
     # 3. Send content messages, converting status message to first content part
     first_part = True
     last_msg_id: int | None = None
+    sent_msg_ids: list[int] = []
     for part in task.parts:
         sent = None
 
@@ -442,6 +451,7 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
             )
             if converted_msg_id is not None:
                 last_msg_id = converted_msg_id
+                sent_msg_ids.append(converted_msg_id)
                 continue
 
         sent = await send_with_fallback(
@@ -453,15 +463,20 @@ async def _process_content_task(bot: Bot, user_id: int, task: MessageTask) -> No
 
         if sent:
             last_msg_id = sent.message_id
+            sent_msg_ids.append(sent.message_id)
 
     # 4. Record tool_use message ID for later editing
     if last_msg_id and task.tool_use_id and task.content_type == "tool_use":
         _tool_msg_ids[(task.tool_use_id, user_id, tid)] = last_msg_id
 
-    # 5. Track this message as the topic's current secondary message, so it
-    #    gets deleted once the next message (of any kind) arrives.
-    if last_msg_id and task.is_secondary:
-        _secondary_msg_info[skey] = (last_msg_id, wid)
+    # 5. Track every message sent for this task as the topic's current
+    #    secondary message(s), so all of them get deleted once the next
+    #    message (of any kind) arrives — not just the last one. A merged
+    #    task (several secondary entries queued together, folded into one
+    #    MessageTask by _merge_content_tasks) or a paginated local_command
+    #    can produce more than one Telegram message here.
+    if sent_msg_ids and task.is_secondary:
+        _secondary_msg_info[skey] = (sent_msg_ids, wid)
 
     # 6. Send images if present (from tool_result with base64 image blocks)
     await _send_task_images(bot, chat_id, task)
