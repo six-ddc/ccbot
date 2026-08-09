@@ -124,6 +124,12 @@ _EXPQUOTE_MAX_RENDERED = 3800
 def _render_expandable_quote(m: re.Match[str]) -> str:
     """Render an expandable blockquote block in raw MarkdownV2.
 
+    Telegram's expandable-quote grammar requires the first quoted line to
+    start with "**>" (not plain ">"); otherwise the trailing "||" is an
+    unmatched spoiler entity and the whole sendMessage call is rejected
+    with "Can't parse entities", silently degrading the message to
+    unformatted plain text via the caller's fallback path.
+
     Truncates the rendered output to _EXPQUOTE_MAX_RENDERED chars
     to ensure the final message fits within Telegram's 4096 limit.
     """
@@ -148,9 +154,10 @@ def _render_expandable_quote(m: re.Match[str]) -> str:
             break
         built.append(f">{line}")
         total_len += line_cost
-    if truncated:
-        return "\n".join(built) + suffix
-    return "\n".join(built) + "||"
+    body = "\n".join(built) + (suffix if truncated else "||")
+    # Mark the block as expandable by promoting the first ">" to "**>".
+    idx = body.index(">")
+    return body[:idx] + "**" + body[idx:]
 
 
 def _markdownify(text: str) -> str:

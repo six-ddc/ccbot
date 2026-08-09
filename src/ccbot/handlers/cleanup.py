@@ -12,7 +12,11 @@ from typing import Any
 from telegram import Bot
 
 from .interactive_ui import clear_interactive_msg
-from .message_queue import clear_status_msg_info, clear_tool_msg_ids_for_topic
+from .message_queue import (
+    clear_secondary_msg_info,
+    clear_status_msg_info,
+    clear_tool_msg_ids_for_topic,
+)
 
 
 async def clear_topic_state(
@@ -30,6 +34,7 @@ async def clear_topic_state(
     Cleans up:
       - _status_msg_info (status message tracking)
       - _tool_msg_ids (tool_use → message_id mapping)
+      - _secondary_msg_info (last deletable secondary message per topic)
       - _interactive_msgs and _interactive_mode (interactive UI state)
       - user_data pending state (_pending_thread_id, _pending_thread_text)
     """
@@ -38,6 +43,9 @@ async def clear_topic_state(
 
     # Clear tool message ID tracking
     clear_tool_msg_ids_for_topic(user_id, thread_id)
+
+    # Clear secondary-message tracking
+    clear_secondary_msg_info(user_id, thread_id)
 
     # Clear interactive UI state (also deletes message from chat)
     await clear_interactive_msg(user_id, bot, thread_id)

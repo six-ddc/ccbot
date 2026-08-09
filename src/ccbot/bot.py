@@ -1802,6 +1802,12 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
             # Enqueue content message task
             # Note: tool_result editing is handled inside _process_content_task
             # to ensure sequential processing with tool_use message sending
+            #
+            # Everything except the final assistant text answer (thinking,
+            # tool_use, tool_result, local_command, user-message echo) is
+            # "secondary" — it gets deleted once the next message for this
+            # topic arrives, so only the actual answer is left behind.
+            is_secondary = not (msg.role == "assistant" and msg.content_type == "text")
             await enqueue_content_message(
                 bot=bot,
                 user_id=user_id,
@@ -1812,6 +1818,7 @@ async def handle_new_message(msg: NewMessage, bot: Bot) -> None:
                 text=msg.text,
                 thread_id=thread_id,
                 image_data=msg.image_data,
+                is_secondary=is_secondary,
             )
 
             # Update user's read offset to current file position
