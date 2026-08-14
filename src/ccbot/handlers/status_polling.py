@@ -32,7 +32,7 @@ from .interactive_ui import (
     handle_interactive_ui,
 )
 from .cleanup import clear_topic_state
-from .message_queue import enqueue_status_update, get_message_queue
+from .message_queue import enqueue_status_update, get_message_queue, set_typing
 
 logger = logging.getLogger(__name__)
 
@@ -107,6 +107,9 @@ async def update_status_message(
         return
 
     status_line = parse_status_line(pane_text)
+
+    # A parsed status line means Claude is mid-turn — the one place that knows.
+    set_typing(bot, user_id, thread_id, bool(status_line))
 
     if status_line:
         await enqueue_status_update(
