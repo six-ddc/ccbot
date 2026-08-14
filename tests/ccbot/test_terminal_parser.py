@@ -59,6 +59,23 @@ class TestParseStatusLine:
         pane = f"· bullet point one\n· bullet point two\nsome result\n{chrome}"
         assert parse_status_line(pane) is None
 
+    def test_tip_block_between_status_and_chrome(self, chrome: str):
+        """Claude Code renders a tip block under the status line."""
+        pane = (
+            "some output\n"
+            "✳ Gitifying… (2m 1s · ↓ 6.5k tokens)\n"
+            "  ⎿ Tip: Use /btw to ask a quick side question without interrupting\n"
+            "     current work\n"
+            "\n"
+            f"{chrome}"
+        )
+        assert parse_status_line(pane) == "Gitifying… (2m 1s · ↓ 6.5k tokens)"
+
+    def test_finished_marker_is_not_status(self, chrome: str):
+        """The completed marker carries no ellipsis and must not count."""
+        pane = f"some output\n✻ Sautéed for 7s\nsome result\n{chrome}"
+        assert parse_status_line(pane) is None
+
     def test_uses_fixture(self, sample_pane_status_line: str):
         assert parse_status_line(sample_pane_status_line) == "Reading file src/main.py"
 

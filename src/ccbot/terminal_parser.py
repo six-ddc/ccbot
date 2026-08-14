@@ -226,15 +226,19 @@ def parse_status_line(pane_text: str) -> str | None:
     if chrome_idx is None:
         return None  # No chrome visible — can't determine status
 
-    # Check lines just above the separator (skip blanks, up to 4 lines)
-    for i in range(chrome_idx - 1, max(chrome_idx - 5, -1), -1):
+    # Scan upward for the spinner line. Claude Code can render a tip block
+    # between the status line and the chrome, so keep looking past non-spinner
+    # lines — but once we're past the line directly above the separator, only a
+    # live status line counts. The ellipsis is what marks one, and it keeps
+    # prose bullets and the finished marker ("✻ Sautéed for 7s") out.
+    adjacent = True
+    for i in range(chrome_idx - 1, max(chrome_idx - 9, -1), -1):
         line = lines[i].strip()
         if not line:
             continue
-        if line[0] in STATUS_SPINNERS:
+        if line[0] in STATUS_SPINNERS and (adjacent or "…" in line):
             return line[1:].strip()
-        # First non-empty line above separator isn't a spinner → no status
-        return None
+        adjacent = False
     return None
 
 
