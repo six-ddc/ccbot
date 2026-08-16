@@ -148,12 +148,17 @@ _status_poll_task: asyncio.Task | None = None
 
 # Claude Code commands shown in bot menu (forwarded via tmux)
 CC_COMMANDS: dict[str, str] = {
+    "agents": "↗ Manage subagents",
     "clear": "↗ Clear conversation history",
     "compact": "↗ Compact conversation context",
+    "context": "↗ Show context window usage",
     "cost": "↗ Show token/cost usage",
     "help": "↗ Show Claude Code help",
     "memory": "↗ Edit CLAUDE.md",
     "model": "↗ Switch AI model",
+    "recap": "↗ Summarize this session",
+    "status": "↗ Show session status",
+    "tasks": "↗ List background tasks and subagents",
 }
 
 
