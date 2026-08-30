@@ -3,7 +3,6 @@
 [中文文档](README_CN.md)
 [Русская документация](README_RU.md)
 
-NOTE: This is Customized Repo
 Control Claude Code sessions remotely via Telegram — monitor, interact, and manage AI coding sessions running in tmux.
 
 https://github.com/user-attachments/assets/15ffb38e-5eb9-4720-93b9-412e4961dc93
