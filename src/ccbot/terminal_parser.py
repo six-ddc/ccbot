@@ -48,6 +48,17 @@ class UIPattern:
 
 UI_PATTERNS: list[UIPattern] = [
     UIPattern(
+        # Workspace trust dialog shown on first launch in a directory.
+        # Since ~2.1.260 the options are unnumbered and "No, exit" is the
+        # default, so an unanswered or blindly-confirmed dialog ends the session.
+        name="TrustDialog",
+        top=(
+            re.compile(r"^\s*Quick safety check"),
+            re.compile(r"^\s*Do you trust the files in this folder"),
+        ),
+        bottom=(re.compile(r"Enter to confirm"),),
+    ),
+    UIPattern(
         name="ExitPlanMode",
         top=(
             re.compile(r"^\s*Would you like to proceed\?"),
@@ -116,6 +127,14 @@ UI_PATTERNS: list[UIPattern] = [
         ),
     ),
 ]
+
+
+# Dialogs the bot answers itself: name -> text of the option to select.
+AUTO_ANSWER_DIALOGS: dict[str, str] = {
+    "TrustDialog": "Yes, I trust",
+}
+
+_RE_MENU_CURSOR = re.compile(r"^\s*❯\s*\S")
 
 
 # ── Post-processing ──────────────────────────────────────────────────────
@@ -191,6 +210,65 @@ def extract_interactive_content(pane_text: str) -> InteractiveUIContent | None:
 def is_interactive_ui(pane_text: str) -> bool:
     """Check if terminal currently shows an interactive UI."""
     return extract_interactive_content(pane_text) is not None
+
+
+def find_menu_option(pane_text: str, needle: str) -> tuple[int, int] | None:
+    """Locate the highlighted (``❯``) line and the option containing ``needle``.
+
+    Returns ``(cursor_idx, option_idx)`` line indices; pressing Down
+    ``option_idx - cursor_idx`` times moves the cursor onto the option.
+    The option is searched from the bottom (dialogs render at the end of the
+    pane) and the cursor is the ``❯`` nearest to it, so an earlier shell
+    prompt such as ``❯ claude`` is never mistaken for the menu cursor.
+    """
+    lines = pane_text.split("\n")
+    option_idx = next(
+        (i for i in range(len(lines) - 1, -1, -1) if needle in lines[i]), None
+    )
+    if option_idx is None:
+        return None
+    lo, hi = max(0, option_idx - 10), min(len(lines), option_idx + 11)
+    cursor_idx = min(
+        (i for i in range(lo, hi) if _RE_MENU_CURSOR.match(lines[i])),
+        key=lambda i: abs(i - option_idx),
+        default=None,
+    )
+    if cursor_idx is None:
+        return None
+    return cursor_idx, option_idx
+
+
+def _is_separator(line: str) -> bool:
+    """A chrome border line.
+
+    Named sessions (--resume <name>, --name, /rename) put the name in the
+    input box's top border: "──────── my-session ─" (one trailing dash).
+    """
+    stripped = line.strip()
+    if len(stripped) < 20 or not stripped.startswith("────"):
+        return False
+    return stripped.endswith("─") and stripped.count("─") / len(stripped) >= 0.6
+
+
+def is_prompt_ready(pane_text: str) -> bool:
+    """True when Claude Code shows its idle input box.
+
+    Layout at the bottom of the pane::
+
+        ────────────────  (separator)
+        ❯ …               (input line)
+        ────────────────  (separator)
+          ⏵⏵ … (footer)
+    """
+    if not pane_text:
+        return False
+    tail = pane_text.rstrip().split("\n")[-8:]
+    for i in range(len(tail) - 2):
+        if not _is_separator(tail[i]) or not tail[i + 1].lstrip().startswith("❯"):
+            continue
+        if any(_is_separator(tail[j]) for j in range(i + 2, min(i + 5, len(tail)))):
+            return True
+    return False
 
 
 # ── Status line parsing ─────────────────────────────────────────────────

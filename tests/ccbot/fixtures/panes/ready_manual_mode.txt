@@ -1,0 +1,24 @@
+
+
+  Ran 1 shell command
+
+⏺ Darwin host.local 25.3.0 Darwin Kernel Version 25.3.0: Wed Jan 28 20:53:14
+  PST 2026; root:xnu-12377.81.4~5/RELEASE_X86_64 x86_64
+
+✻ Worked for 5s · done 1:49 PM
+
+❯ Create a file /tmp/ccbot-test-perm.txt containing the single word hello,
+  using the Write tool.
+
+⏺ Write(/tmp/ccbot-test-perm.txt)
+  ⎿  Wrote 1 line to ../../tmp/ccbot-test-perm.txt
+      1 hello
+
+⏺ Created /tmp/ccbot-test-perm.txt containing hello.
+
+✻ Churned for 4s · done 1:50 PM
+
+────────────────────────────────────────────────────────────────────────────────
+❯ Read the file back with the Read tool
+────────────────────────────────────────────────────────────────────────────────
+  ⏸ manual mode on · ? for shortcuts · ← for agents

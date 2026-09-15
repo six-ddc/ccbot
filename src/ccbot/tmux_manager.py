@@ -16,12 +16,19 @@ from __future__ import annotations
 import asyncio
 import logging
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 
 import libtmux
 
 from .config import SENSITIVE_ENV_VARS, config
+from .terminal_parser import (
+    AUTO_ANSWER_DIALOGS,
+    extract_interactive_content,
+    find_menu_option,
+    is_prompt_ready,
+)
 
 logger = logging.getLogger(__name__)
 
@@ -228,6 +235,65 @@ class TmuxManager:
                 return None
 
         return await asyncio.to_thread(_sync_capture)
+
+    async def auto_answer_dialog(self, window_id: str, pane_text: str) -> str | None:
+        """Answer a startup dialog the bot handles itself (workspace trust).
+
+        Moves the ``❯`` cursor onto the wanted option with Up/Down, re-captures
+        to verify it landed there, then presses Enter. Never types a digit —
+        the option order has changed between Claude Code versions.
+
+        Returns the dialog name when answered, else None.
+        """
+        ui = extract_interactive_content(pane_text)
+        if ui is None or ui.name not in AUTO_ANSWER_DIALOGS:
+            return None
+        needle = AUTO_ANSWER_DIALOGS[ui.name]
+        offsets = find_menu_option(pane_text, needle)
+        if offsets is None:
+            logger.warning("%s in %s: option %r not found", ui.name, window_id, needle)
+            return None
+        cursor, target = offsets
+        steps = target - cursor
+        key = "Down" if steps > 0 else "Up"
+        for _ in range(abs(steps)):
+            await self.send_keys(window_id, key, enter=False, literal=False)
+            await asyncio.sleep(0.15)
+        if steps:
+            await asyncio.sleep(0.3)
+            check = find_menu_option(await self.capture_pane(window_id) or "", needle)
+            if check is None or check[0] != check[1]:
+                logger.warning(
+                    "%s in %s: cursor did not reach %r, not confirming",
+                    ui.name,
+                    window_id,
+                    needle,
+                )
+                return None
+        await self.send_keys(window_id, "Enter", enter=False, literal=False)
+        logger.info("Answered %s in %s with %r", ui.name, window_id, needle)
+        return ui.name
+
+    async def wait_for_claude_ready(
+        self, window_id: str, timeout: float = 30.0
+    ) -> bool:
+        """Wait until Claude Code shows its input box, answering startup dialogs.
+
+        Returns False on timeout (the caller still proceeds; this only avoids
+        typing the first message into a dialog or a half-started TUI).
+        """
+        deadline = time.monotonic() + timeout
+        while time.monotonic() < deadline:
+            pane = await self.capture_pane(window_id)
+            if pane:
+                if is_prompt_ready(pane):
+                    return True
+                if await self.auto_answer_dialog(window_id, pane):
+                    await asyncio.sleep(1.0)
+                    continue
+            await asyncio.sleep(0.5)
+        logger.warning("Claude Code not ready in %s after %.0fs", window_id, timeout)
+        return False
 
     async def send_keys(
         self, window_id: str, text: str, enter: bool = True, literal: bool = True

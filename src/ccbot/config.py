@@ -96,6 +96,12 @@ class Config:
             os.getenv("CCBOT_SHOW_TOOL_CALLS", "true").lower() != "false"
         )
 
+        # Pre-trust directories in ~/.claude.json before launching claude,
+        # so Claude Code's workspace trust dialog doesn't block new sessions
+        self.auto_trust_dirs = (
+            os.getenv("CCBOT_AUTO_TRUST_DIRS", "true").lower() != "false"
+        )
+
         # Show hidden (dot) directories in directory browser
         self.show_hidden_dirs = (
             os.getenv("CCBOT_SHOW_HIDDEN_DIRS", "").lower() == "true"

@@ -1,0 +1,51 @@
+
+                                                                                                                                                                                           ✕
+● Everything I need is done except committing the docs. Two things remain, both depending only on the
+  edit that just landed: a structural sanity check on the file, and the commit/push. I'll chain them so
+  the commit only runs if the file still parses as expected.
+
+  Thought for 7s, committed 11d9edc, pushed to main
+
+● Nothing further needed — the work is complete and verified end to end. Both commits are pushed.
+
+  Done: TON sweep floor 0.2 → 0.05
+
+  The change — MIN_TRANSFER_THRESHOLD: "0.05" on the x-ton-shkeeper-env anchor in
+  deploy/shkeeper/docker-compose.yml. It wasn't in any of our files before: the image reads it from the
+  environment with the default baked in (config.py:45), which is why grepping the repo and .env found
+  nothing. Synced to /root/shkeeper/shkeeper/ with matching checksums, YAML validated, and confirmed to
+  render into both ton-shkeeper and ton-shkeeper-worker — the worker matters, it's what runs the drain.
+
+  It worked on the real stranded payment. Invoice 17 swept on the first triggered run:
+
+  - 197172600 → 0 nanotons, txid 1c7b1261…, task status: 'success'
+  - forwarded on to the payout wallet, payout #10 → SUCCESS
+  - invoice 11 (0.00342317) correctly left alone — worth less than the gas to move
+
+  Two things I checked that could have gone wrong quietly:                                                                             No changes this session
+
+  The fee-deposit wallet barely moved (+41 nanotons), which looks like a failed sweep. It isn't —
+  wallet.ppolicy=LIMIT with pcond=0.1 auto-forwards anything over 0.1 TON straight to wallet.pdest. I
+  confirmed that destination against the wallet table rather than inferring it from history, since money
+  was moving to an address I hadn't verified.
+
+  The scanner kept its place across the restart: gap 10 blocks, zero 404/500/429.
+
+  One decision left with you: jettons use a separate floor, MIN_TOKEN_TRANSFER_THRESHOLD, still at its
+  default 0.5 — and that's USDT, not TON. I deliberately didn't touch it, since "0.05" in a different
+  unit is a different call. Say the word if you want TON-USDT lowered too.
+
+  Commits: 74a4e0a (config), 11d9edc (lessons).
+
+  Two corrections worth recording about my own work here. I claimed a scanner gap of -92,846,348
+  mid-session — that was my parse bug, not a fault: getMasterchainInfo returns an init block with
+  "seqno":0 after the real one and my tail -1 grabbed the zero. And I'd believed that trap was already
+  in agent-lessons.md from earlier this session; it never actually got written, which is exactly why I
+  repeated it. Both are now entries in the file.
+
+✻ Baked for 12m 20s · done 12:41 PM
+
+──────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────── royal-vpn-main ─
+❯ 
+─────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────────
+  ⏵⏵ accept edits on (shift+tab to cycle) · ← for agents

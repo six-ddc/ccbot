@@ -57,6 +57,7 @@ from telegram.ext import (
     filters,
 )
 
+from .claude_config import ensure_trusted_directory
 from .config import config
 from .handlers.callback_data import (
     CB_ASK_DOWN,
@@ -1034,6 +1035,9 @@ async def _create_and_bind_window(
     assert isinstance(query, CallbackQuery)
     assert isinstance(user, User)
 
+    if config.auto_trust_dirs:
+        await asyncio.to_thread(ensure_trusted_directory, selected_path)
+
     success, message, created_wname, created_wid = await tmux_manager.create_window(
         selected_path, resume_session_id=resume_session_id
     )
@@ -1047,6 +1051,12 @@ async def _create_and_bind_window(
             pending_thread_id,
             resume_session_id,
         )
+        # Wait for Claude Code's input box first. This answers the workspace
+        # trust dialog if it still appears; the SessionStart hook only fires
+        # once Claude is past it, and a pending message must not be typed
+        # into the dialog (Enter on the default option exits Claude).
+        await tmux_manager.wait_for_claude_ready(created_wid, timeout=30.0)
+
         # Wait for Claude Code's SessionStart hook to register in session_map.
         # Resume sessions take longer to start (loading session state), so use
         # a longer timeout to avoid silently dropping messages.
